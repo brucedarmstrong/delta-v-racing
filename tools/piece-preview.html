@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Track Piece Preview</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d0d1a; color: #aaa; font-family: monospace; padding: 20px; }
+    h1 { color: #ccccff; margin-bottom: 6px; font-size: 16px; }
+    .subtitle { color: #555; font-size: 11px; margin-bottom: 20px; }
+
+    /* ── Control bar ─────────────────────────────────────────────────────── */
+    .controls { display: flex; flex-direction: column; gap: 10px; margin-bottom: 28px; }
+    .param { display: flex; align-items: center; gap: 12px; }
+    .param span { font-size: 12px; color: #778; width: 82px; flex-shrink: 0; }
+    .param value { font-size: 12px; color: #aaaaff; width: 32px; text-align: right; display: inline-block; }
+
+    /* Standard sliders */
+    input[type=range] { width: 200px; cursor: pointer; }
+
+    /* Hue slider — rainbow track, round thumb */
+    #hue {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 240px;
+      height: 14px;
+      border-radius: 7px;
+      outline: none;
+      background: linear-gradient(to right,
+        hsl(0,100%,60%), hsl(30,100%,60%), hsl(60,100%,60%),
+        hsl(90,100%,60%), hsl(120,100%,60%), hsl(150,100%,60%),
+        hsl(180,100%,60%), hsl(210,100%,60%), hsl(240,100%,60%),
+        hsl(270,100%,60%), hsl(300,100%,60%), hsl(330,100%,60%),
+        hsl(360,100%,60%));
+    }
+    #hue::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.8);
+      background: var(--thumb, #66ff66);
+      cursor: pointer;
+      box-shadow: 0 0 6px var(--thumb, #66ff66);
+    }
+    #hue::-moz-range-thumb {
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.8);
+      background: var(--thumb, #66ff66);
+      cursor: pointer;
+    }
+
+    .swatch {
+      width: 18px; height: 18px; border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: var(--thumb, #66ff66);
+      box-shadow: 0 0 8px var(--thumb, #66ff66);
+      flex-shrink: 0;
+    }
+
+    /* ── Piece grid ──────────────────────────────────────────────────────── */
+    .section { margin-bottom: 28px; }
+    .section-title {
+      color: #6666cc; font-size: 13px; margin-bottom: 10px;
+      border-bottom: 1px solid #222244; padding-bottom: 4px;
+    }
+    .subsection { margin-bottom: 14px; }
+    .sub-title { color: #445; font-size: 11px; margin-bottom: 6px; }
+    .piece-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+    .piece { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .piece label { font-size: 9px; color: #445; }
+    canvas { display: block; border: 1px solid #1a1a2e; background: #0a0a16; }
+  </style>
+</head>
+<body>
+  <h1>Track Piece Preview — delta-v-racing</h1>
+  <p class="subtitle">Neon skin · programmatic walls · geometry from calcAnchorPoints.gml</p>
+
+  <div class="controls">
+    <div class="param">
+      <span>color</span>
+      <input type="range" id="hue" min="0" max="360" step="1" value="120">
+      <div class="swatch" id="swatch"></div>
+    </div>
+    <div class="param">
+      <span>wallWidth</span>
+      <input type="range" id="wallWidth" min="1" max="8" step="0.5" value="2">
+      <value id="wallWidthVal">2</value>
+    </div>
+    <div class="param">
+      <span>glowBlur</span>
+      <input type="range" id="glowBlur" min="0" max="40" step="1" value="14">
+      <value id="glowBlurVal">14</value>
+    </div>
+  </div>
+
+  <div id="preview"></div>
+
+  <script>
+    // ── Geometry (mirrors TrackGeometry.ts) ──────────────────────────────────
+    const HALF_TRACK    = 53;
+    const STRAIGHT_LEN  = { 25: 30, 50: 60, 75: 90, 100: 120 };
+    const TIGHT         = { outerR: 113, innerR: 7 };
+    const BIG           = { outerR: 233, innerR: 127 };
+    const CORNER_ANGLES = [15, 30, 45, 60, 75, 90];
+    const STRAIGHT_SIZES= [25, 50, 75, 100];
+    const WALL_VARIANTS = ['both', 'outer', 'inner'];
+    const PAD           = 24;
+
+    // ── Color helpers (mirrors TrackSkin.ts) ─────────────────────────────────
+    function hslToCss(h, s, l) {
+      return `hsl(${h},${s}%,${l}%)`;
+    }
+
+    function skinFromHue(hue, wallWidth, glowBlur) {
+      return {
+        wallColor: hslToCss(hue, 100, 60),  // bright neon line
+        glowColor: hslToCss(hue, 100, 12),  // dark bloom
+        wallWidth,
+        glowBlur,
+      };
+    }
+
+    function currentSkin() {
+      return skinFromHue(
+        parseInt(document.getElementById('hue').value),
+        parseFloat(document.getElementById('wallWidth').value),
+        parseFloat(document.getElementById('glowBlur').value),
+      );
+    }
+
+    // ── Update thumb + swatch to reflect current hue ─────────────────────────
+    function syncHueUI() {
+      const hue   = document.getElementById('hue').value;
+      const color = hslToCss(hue, 100, 60);
+      document.getElementById('hue').style.setProperty('--thumb', color);
+      document.getElementById('swatch').style.setProperty('--thumb', color);
+      document.getElementById('swatch').style.background = color;
+      document.getElementById('swatch').style.boxShadow  = `0 0 8px ${color}`;
+    }
+
+    // ── Drawing (mirrors PieceTextureFactory.ts) ─────────────────────────────
+    function strokeNeon(ctx, path, skin) {
+      ctx.save();
+      ctx.shadowColor = skin.glowColor;
+      ctx.shadowBlur  = skin.glowBlur;
+      ctx.strokeStyle = skin.glowColor;
+      ctx.lineWidth   = skin.wallWidth * 4;
+      ctx.lineCap     = 'round';
+      path(); ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.shadowColor = skin.wallColor;
+      ctx.shadowBlur  = skin.glowBlur * 0.5;
+      ctx.strokeStyle = skin.wallColor;
+      ctx.lineWidth   = skin.wallWidth;
+      ctx.lineCap     = 'round';
+      path(); ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.70)';
+      ctx.lineWidth   = Math.max(1, skin.wallWidth - 1);
+      ctx.lineCap     = 'round';
+      path(); ctx.stroke();
+      ctx.restore();
+    }
+
+    function makeCornerCanvas(outerR, innerR, angleDeg, walls, skin, scale = 1) {
+      const theta = angleDeg * Math.PI / 180;
+      const cW = outerR, cH = Math.ceil(outerR * Math.sin(theta));
+      const w  = Math.round((cW + PAD * 2) * scale);
+      const h  = Math.round((cH + PAD * 2) * scale);
+      const ox = (cW + PAD) * scale, oy = (cH + PAD) * scale;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, w, h);
+      ctx.scale(scale, scale);
+
+      const start = Math.PI, end = Math.PI + theta;
+      const lox = ox / scale, loy = oy / scale;
+
+      if (walls === 'both' || walls === 'outer')
+        strokeNeon(ctx, () => { ctx.beginPath(); ctx.arc(lox, loy, outerR, start, end, false); }, skin);
+      if (walls === 'both' || walls === 'inner')
+        strokeNeon(ctx, () => { ctx.beginPath(); ctx.arc(lox, loy, innerR, start, end, false); }, skin);
+
+      ctx.fillStyle = 'rgba(255,238,0,0.45)';
+      ctx.beginPath(); ctx.arc(lox, loy, 2.5, 0, Math.PI * 2); ctx.fill();
+
+      return canvas;
+    }
+
+    function makeStraightCanvas(size, walls, skin) {
+      const len = STRAIGHT_LEN[size];
+      const w   = HALF_TRACK * 2 + PAD * 2, h = len + PAD * 2;
+      const cx  = w / 2, top = PAD, bot = PAD + len;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, w, h);
+
+      if (walls === 'both' || walls === 'outer')
+        strokeNeon(ctx, () => { ctx.beginPath(); ctx.moveTo(cx - HALF_TRACK, top); ctx.lineTo(cx - HALF_TRACK, bot); }, skin);
+      if (walls === 'both' || walls === 'inner')
+        strokeNeon(ctx, () => { ctx.beginPath(); ctx.moveTo(cx + HALF_TRACK, top); ctx.lineTo(cx + HALF_TRACK, bot); }, skin);
+
+      ctx.fillStyle = 'rgba(255,238,0,0.4)';
+      ctx.beginPath(); ctx.arc(cx, h / 2, 2, 0, Math.PI * 2); ctx.fill();
+
+      return canvas;
+    }
+
+    // ── Render ───────────────────────────────────────────────────────────────
+    function piece(canvas, label) {
+      const div = document.createElement('div');
+      div.className = 'piece';
+      div.appendChild(canvas);
+      const lbl = document.createElement('label');
+      lbl.textContent = label;
+      div.appendChild(lbl);
+      return div;
+    }
+
+    function render() {
+      const container = document.getElementById('preview');
+      container.innerHTML = '';
+      const skin = currentSkin();
+
+      for (const walls of WALL_VARIANTS) {
+        const section = document.createElement('div');
+        section.className = 'section';
+
+        const title = document.createElement('div');
+        title.className = 'section-title';
+        title.textContent = `walls: ${walls}`;
+        section.appendChild(title);
+
+        // Straights
+        const stRow = document.createElement('div'); stRow.className = 'piece-row';
+        for (const sz of STRAIGHT_SIZES)
+          stRow.appendChild(piece(makeStraightCanvas(sz, walls, skin), `straight_${sz}`));
+        const stSub = document.createElement('div'); stSub.className = 'subsection';
+        const stTitle = document.createElement('div'); stTitle.className = 'sub-title';
+        stTitle.textContent = 'Straights';
+        stSub.appendChild(stTitle); stSub.appendChild(stRow);
+        section.appendChild(stSub);
+
+        // Tight corners (2×)
+        const tRow = document.createElement('div'); tRow.className = 'piece-row';
+        for (const a of CORNER_ANGLES)
+          tRow.appendChild(piece(makeCornerCanvas(TIGHT.outerR, TIGHT.innerR, a, walls, skin, 2), `corner_${a}°`));
+        const tSub = document.createElement('div'); tSub.className = 'subsection';
+        const tTitle = document.createElement('div'); tTitle.className = 'sub-title';
+        tTitle.textContent = 'Tight corners — 2× scale (sprite 130×130)';
+        tSub.appendChild(tTitle); tSub.appendChild(tRow);
+        section.appendChild(tSub);
+
+        // Big corners (1×)
+        const bRow = document.createElement('div'); bRow.className = 'piece-row';
+        for (const a of CORNER_ANGLES)
+          bRow.appendChild(piece(makeCornerCanvas(BIG.outerR, BIG.innerR, a, walls, skin, 1), `big_corner_${a}°`));
+        const bSub = document.createElement('div'); bSub.className = 'subsection';
+        const bTitle = document.createElement('div'); bTitle.className = 'sub-title';
+        bTitle.textContent = 'Big corners — 1× scale (sprite 250×250)';
+        bSub.appendChild(bTitle); bSub.appendChild(bRow);
+        section.appendChild(bSub);
+
+        container.appendChild(section);
+      }
+    }
+
+    // ── Event wiring ──────────────────────────────────────────────────────────
+    document.getElementById('hue').addEventListener('input', () => { syncHueUI(); render(); });
+
+    document.getElementById('wallWidth').addEventListener('input', e => {
+      document.getElementById('wallWidthVal').textContent = e.target.value;
+      render();
+    });
+    document.getElementById('glowBlur').addEventListener('input', e => {
+      document.getElementById('glowBlurVal').textContent = e.target.value;
+      render();
+    });
+
+    syncHueUI();
+    render();
+  </script>
+</body>
+</html>

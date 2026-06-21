@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 650" width="1100" height="650">
+  <rect width="1100" height="650" fill="#111122"/>
+
+  <defs>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       PANEL 1 — tile_straight_100  (120×140px, shown 2×)
+       Origin: (60,70) → (120,140) at 2×
+       Left wall bbox x=7 → 14 at 2×
+       Right wall bbox x=112 → 224 at 2×
+       Corridor = 106px at 1× = 212px at 2×
+       ═══════════════════════════════════════════════════════════════ -->
+  <g transform="translate(20, 80)">
+    <text x="120" y="-42" fill="#cccccc" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">tile_straight_100</text>
+    <text x="120" y="-26" fill="#666" font-family="monospace" font-size="10" text-anchor="middle">120×140px · origin(60,70) · 2× scale</text>
+
+    <rect x="0" y="0" width="240" height="280" fill="#0a0a18" stroke="#2a2a44" stroke-width="1"/>
+
+    <!-- Corridor fill -->
+    <rect x="14" y="20" width="196" height="240" fill="#00ffff" opacity="0.05"/>
+
+    <!-- Sprite approx: left neon wall  (bbox x=7 → 14 at 2×) -->
+    <line x1="14" y1="20" x2="14" y2="260" stroke="#00bb00" stroke-width="8" opacity="0.25" filter="url(#glow)"/>
+    <line x1="14" y1="20" x2="14" y2="260" stroke="#66ff66" stroke-width="2"/>
+
+    <!-- Sprite approx: right neon wall (bbox x=112 → 224 at 2×) -->
+    <line x1="224" y1="20" x2="224" y2="260" stroke="#00bb00" stroke-width="8" opacity="0.25" filter="url(#glow)"/>
+    <line x1="224" y1="20" x2="224" y2="260" stroke="#66ff66" stroke-width="2"/>
+
+    <!-- Physics bodies -->
+    <rect x="7"   y="20" width="14" height="240" fill="#ff3377" opacity="0.35" stroke="#ff3377" stroke-width="1.5"/>
+    <rect x="217" y="20" width="14" height="240" fill="#ff3377" opacity="0.35" stroke="#ff3377" stroke-width="1.5"/>
+
+    <!-- Origin -->
+    <circle cx="120" cy="140" r="4" fill="#ffee00"/>
+    <text x="125" y="136" fill="#ffee00" font-family="monospace" font-size="8">origin(60,70)</text>
+
+    <!-- Centreline -->
+    <line x1="14" y1="148" x2="224" y2="148" stroke="#00ffff" stroke-width="1" stroke-dasharray="5,3" opacity="0.5"/>
+    <text x="119" y="145" fill="#00ffff" font-family="monospace" font-size="9" text-anchor="middle">106px corridor</text>
+
+    <text x="14"  y="275" fill="#ff3377" font-family="monospace" font-size="9" text-anchor="middle">x=7</text>
+    <text x="224" y="275" fill="#ff3377" font-family="monospace" font-size="9" text-anchor="middle">x=112</text>
+  </g>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       PANEL 2 — tile_corner_90  (130×130px, shown 2×)
+       Origin = arc center: (120,120) → (240,240) at 2×
+       Centreline r = 60px → 120 at 2×
+       Outer wall r = 113px → 226 at 2×
+         Arc from (240-226,240)=(14,240) to (240,14)
+       Inner wall r = 7px → 14 at 2×
+         Arc from (240-14,240)=(226,240) to (240,226)
+       Entry corridor = 212px at 2× = 106px at 1× ✓
+       ═══════════════════════════════════════════════════════════════ -->
+  <g transform="translate(290, 80)">
+    <text x="130" y="-42" fill="#cccccc" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">tile_corner_90</text>
+    <text x="130" y="-26" fill="#666" font-family="monospace" font-size="10" text-anchor="middle">130×130px · origin(120,120) · 2× scale</text>
+
+    <rect x="0" y="0" width="260" height="260" fill="#0a0a18" stroke="#2a2a44" stroke-width="1"/>
+
+    <!-- Corridor fill -->
+    <path d="M 14 240 A 226 226 0 0 1 240 14 L 240 226 A 14 14 0 0 0 226 240 Z"
+          fill="#00ffff" opacity="0.07"/>
+
+    <!-- Sprite approx: outer wall arc (r=226 from 240,240) -->
+    <path d="M 14 240 A 226 226 0 0 1 240 14"
+          fill="none" stroke="#00bb00" stroke-width="7" opacity="0.25" filter="url(#glow)"/>
+    <path d="M 14 240 A 226 226 0 0 1 240 14"
+          fill="none" stroke="#66ff66" stroke-width="2"/>
+
+    <!-- Sprite approx: inner wall arc (r=14 from 240,240) -->
+    <path d="M 226 240 A 14 14 0 0 1 240 226"
+          fill="none" stroke="#00bb00" stroke-width="6" opacity="0.3" filter="url(#glow)"/>
+    <path d="M 226 240 A 14 14 0 0 1 240 226"
+          fill="none" stroke="#66ff66" stroke-width="2"/>
+
+    <!-- Physics bodies -->
+    <path d="M 14 240 A 226 226 0 0 1 240 14"
+          fill="none" stroke="#ff3377" stroke-width="10" opacity="0.4"/>
+    <path d="M 226 240 A 14 14 0 0 1 240 226"
+          fill="none" stroke="#ff3377" stroke-width="10" opacity="0.4"/>
+
+    <!-- Centreline arc (r=120) -->
+    <path d="M 120 240 A 120 120 0 0 1 240 120"
+          fill="none" stroke="#ffffff" stroke-width="1" stroke-dasharray="6,4" opacity="0.2"/>
+
+    <!-- Arc center / origin -->
+    <circle cx="240" cy="240" r="5" fill="#ffee00"/>
+    <text x="188" y="258" fill="#ffee00" font-family="monospace" font-size="8">arc center / origin(120,120)</text>
+
+    <!-- Outer radius annotation (at 225°: (240+226·cos225°, 240+226·sin225°) = (80,80)) -->
+    <line x1="240" y1="240" x2="80" y2="80" stroke="#00ffff" stroke-width="1" stroke-dasharray="5,3" opacity="0.5"/>
+    <text x="128" y="124" fill="#00ffff" font-family="monospace" font-size="9">outer r=113</text>
+
+    <!-- Centreline radius (at 225°: (155,155)) -->
+    <line x1="240" y1="240" x2="155" y2="155" stroke="#ffffff" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+    <text x="155" y="165" fill="#888" font-family="monospace" font-size="8">cl r=60</text>
+
+    <!-- Inner radius (at 225°: (230,230)) -->
+    <line x1="240" y1="240" x2="230" y2="230" stroke="#aaddff" stroke-width="1" opacity="0.5"/>
+    <text x="196" y="230" fill="#aaddff" font-family="monospace" font-size="8">inner r=7</text>
+
+    <!-- Entry/exit connection points -->
+    <circle cx="14"  cy="240" r="4" fill="#ffffff" opacity="0.7"/>
+    <text x="18"  y="235" fill="#aaa" font-family="monospace" font-size="8">outer entry (x=7 at 1×)</text>
+    <circle cx="226" cy="240" r="4" fill="#ffffff" opacity="0.7"/>
+    <text x="168" y="254" fill="#aaa" font-family="monospace" font-size="8">inner entry (x=112 at 1×)</text>
+    <circle cx="240" cy="14"  r="4" fill="#ffffff" opacity="0.7"/>
+    <text x="218" y="12"  fill="#aaa" font-family="monospace" font-size="8">outer exit</text>
+    <circle cx="240" cy="226" r="4" fill="#ffffff" opacity="0.7"/>
+    <text x="218" y="237" fill="#aaa" font-family="monospace" font-size="8">inner exit</text>
+  </g>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       PANEL 3 — tile_big_corner_90  (250×250px, shown 2×)
+       Origin = arc center: (240,240) → (480,480) at 2×
+       Centreline r = 180px → 360 at 2×
+       Outer wall r = 233px → 466 at 2×
+         Arc from (480-466,480)=(14,480) to (480,14)
+       Inner wall r = 127px → 254 at 2×
+         Arc from (480-254,480)=(226,480) to (480,226)
+       Entry corridor = 212px at 2× = 106px at 1× ✓
+       ═══════════════════════════════════════════════════════════════ -->
+  <g transform="translate(580, 80)">
+    <text x="250" y="-42" fill="#cccccc" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">tile_big_corner_90</text>
+    <text x="250" y="-26" fill="#666" font-family="monospace" font-size="10" text-anchor="middle">250×250px · origin(240,240) · 2× scale</text>
+
+    <rect x="0" y="0" width="500" height="500" fill="#0a0a18" stroke="#2a2a44" stroke-width="1"/>
+
+    <!-- Corridor fill -->
+    <path d="M 14 480 A 466 466 0 0 1 480 14 L 480 226 A 254 254 0 0 0 226 480 Z"
+          fill="#00ffff" opacity="0.07"/>
+
+    <!-- Sprite approx: outer wall (r=466 from 480,480) -->
+    <path d="M 14 480 A 466 466 0 0 1 480 14"
+          fill="none" stroke="#00bb00" stroke-width="6" opacity="0.25" filter="url(#glow)"/>
+    <path d="M 14 480 A 466 466 0 0 1 480 14"
+          fill="none" stroke="#66ff66" stroke-width="2"/>
+
+    <!-- Sprite approx: inner wall (r=254 from 480,480) -->
+    <path d="M 226 480 A 254 254 0 0 1 480 226"
+          fill="none" stroke="#00bb00" stroke-width="6" opacity="0.25" filter="url(#glow)"/>
+    <path d="M 226 480 A 254 254 0 0 1 480 226"
+          fill="none" stroke="#66ff66" stroke-width="2"/>
+
+    <!-- Physics bodies -->
+    <path d="M 14 480 A 466 466 0 0 1 480 14"
+          fill="none" stroke="#ff3377" stroke-width="8" opacity="0.4"/>
+    <path d="M 226 480 A 254 254 0 0 1 480 226"
+          fill="none" stroke="#ff3377" stroke-width="8" opacity="0.4"/>
+
+    <!-- Centreline arc (r=360) -->
+    <path d="M 120 480 A 360 360 0 0 1 480 120"
+          fill="none" stroke="#ffffff" stroke-width="1" stroke-dasharray="6,4" opacity="0.2"/>
+
+    <!-- Arc center / origin -->
+    <circle cx="480" cy="480" r="5" fill="#ffee00"/>
+    <text x="380" y="498" fill="#ffee00" font-family="monospace" font-size="8">arc center / origin(240,240)</text>
+
+    <!-- Outer radius annotation (at 225°: (480+466·cos225°, 480+466·sin225°) = (150,150)) -->
+    <line x1="480" y1="480" x2="150" y2="150" stroke="#00ffff" stroke-width="1" stroke-dasharray="5,3" opacity="0.5"/>
+    <text x="238" y="242" fill="#00ffff" font-family="monospace" font-size="9">outer r=233</text>
+
+    <!-- Centreline radius (at 225°: (480-254.6,480-254.6)=(225,225)) -->
+    <line x1="480" y1="480" x2="225" y2="225" stroke="#ffffff" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+    <text x="300" y="310" fill="#888" font-family="monospace" font-size="8">cl r=180</text>
+
+    <!-- Inner radius annotation (at 225°: (480+254·cos225°, 480+254·sin225°) = (300,300)) -->
+    <line x1="480" y1="480" x2="300" y2="300" stroke="#aaddff" stroke-width="1" stroke-dasharray="3,2" opacity="0.5"/>
+    <text x="356" y="366" fill="#aaddff" font-family="monospace" font-size="9">inner r=127</text>
+
+    <!-- Connection points -->
+    <circle cx="14"  cy="480" r="4" fill="#ffffff" opacity="0.7"/>
+    <text x="18"  y="475" fill="#aaa" font-family="monospace" font-size="8">outer entry (x=7)</text>
+    <circle cx="226" cy="480" r="4" fill="#ffffff" opacity="0.7"/>
+    <text x="230" y="495" fill="#aaa" font-family="monospace" font-size="8">inner entry (x=113)</text>
+    <circle cx="480" cy="14"  r="4" fill="#ffffff" opacity="0.7"/>
+    <text x="432" y="12"  fill="#aaa" font-family="monospace" font-size="8">outer exit</text>
+    <circle cx="480" cy="226" r="4" fill="#ffffff" opacity="0.7"/>
+    <text x="432" y="237" fill="#aaa" font-family="monospace" font-size="8">inner exit</text>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(20, 612)">
+    <line x1="0" y1="8" x2="28" y2="8" stroke="#66ff66" stroke-width="2"/>
+    <text x="34" y="12" fill="#66ff66" font-family="monospace" font-size="11">sprite visual (approx)</text>
+
+    <rect x="200" y="2" width="28" height="12" fill="#ff3377" opacity="0.4" stroke="#ff3377" stroke-width="1.5"/>
+    <text x="234" y="12" fill="#ff3377" font-family="monospace" font-size="11">physics body</text>
+
+    <circle cx="420" cy="8" r="4" fill="#ffee00"/>
+    <text x="430" y="12" fill="#ffee00" font-family="monospace" font-size="11">arc center = origin</text>
+
+    <line x1="620" y1="8" x2="648" y2="8" stroke="#ffffff" stroke-width="1" stroke-dasharray="5,3" opacity="0.4"/>
+    <text x="654" y="12" fill="#888" font-family="monospace" font-size="11">centreline (calcAnchorPoints)</text>
+  </g>
+
+  <!-- Title -->
+  <text x="550" y="30" fill="#aaaaaa" font-family="monospace" font-size="14" text-anchor="middle" font-weight="bold">Physics Body Overlay — radii from calcAnchorPoints.gml</text>
+  <text x="550" y="48" fill="#555" font-family="monospace" font-size="10" text-anchor="middle">Tight corner: outer r=113, inner r=7, cl r=60 · Big corner: outer r=233, inner r=127, cl r=180 · All at 2× scale</text>
+  <text x="550" y="62" fill="#555" font-family="monospace" font-size="10" text-anchor="middle">Entry corridor = 106px at 1× on all pieces · corner_90 is ≈¼ the area of big_corner_90</text>
+</svg>
