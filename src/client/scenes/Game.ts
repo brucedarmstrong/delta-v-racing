@@ -1,9 +1,10 @@
 import { Scene, GameObjects } from 'phaser';
 import { buildTrackTexture } from '../track/TrackCanvasRenderer';
 import { NEON_GREEN } from '../track/TrackSkin';
-import { OVAL_SMALL } from '../tracks/oval_small';
+import { OVAL_SMALL, OVAL_SMALL_MARKERS } from '../tracks/oval_small';
 import { trackBounds } from '../track/TrackLayout';
 import { isOnSurface } from '../track/TrackCollision';
+import { CORRIDOR } from '../track/TrackGeometry';
 
 // ── Grid / camera constants ────────────────────────────────────────────────────
 // gridPx is mutable so the debug slider can adjust it at runtime.
@@ -54,6 +55,14 @@ export class Game extends Scene {
   private dotGfx!:   GameObjects.Graphics;
   private hudText!:  GameObjects.Text;
 
+  // Checkpoint / finish state
+  private markerImgList:     GameObjects.Image[]    = [];
+  private checkpointIndices: number[]               = [];
+  private checkpointTouched: boolean[]              = [];
+  private finishIndex        = -1;
+  private finishActive       = false;
+  private won                = false;
+
   // Minimap — plain DOM <canvas> fixed to the viewport, immune to Phaser camera effects
   private minimapCanvas:   HTMLCanvasElement        | null = null;
   private minimapCtx:      CanvasRenderingContext2D | null = null;
@@ -66,6 +75,19 @@ export class Game extends Scene {
   private mmWH = 0;
 
   constructor() { super('Game'); }
+
+  preload() {
+    const keys = [
+      'tile_finish_0', 'tile_finish_1',
+      'tile_checkpoint_0', 'tile_checkpoint_1',
+      'tile_checkpoint_circle_0', 'tile_checkpoint_circle_1',
+    ];
+    for (const key of keys) {
+      if (!this.textures.exists(key)) {
+        this.load.image(key, `assets/markers/${key}.png`);
+      }
+    }
+  }
 
   create() {
     try {
@@ -96,6 +118,8 @@ export class Game extends Scene {
 
     this.dotGfx = this.add.graphics().setDepth(1);
     this.drawDotGrid();
+
+    this.addTrackMarkers();
 
     this.makeSpark();
     this.makeCarTexture();
@@ -209,6 +233,7 @@ export class Game extends Scene {
     });
 
     this.addMinimap();
+    this.addShiftSlow();
     this.addGridSlider();
 
     // Short delay so the tap that launched this scene isn't treated as a pick.
@@ -274,16 +299,51 @@ export class Game extends Scene {
     let rafId = 0;
     const tick = () => {
       if (this.minimapCtx && this.minimapTrackImg && this.carImg && this.mmW > 0) {
-        this.minimapCtx.putImageData(this.minimapTrackImg, 0, 0);
+        const ctx = this.minimapCtx;
+        ctx.putImageData(this.minimapTrackImg, 0, 0);
+
+        // Checkpoint dots
+        for (let i = 0; i < this.checkpointIndices.length; i++) {
+          const mi = this.checkpointIndices[i];
+          const m  = OVAL_SMALL_MARKERS[mi];
+          const mx = (m.x - this.mmWL) / this.mmWW * this.mmW;
+          const my = (m.y - this.mmWT) / this.mmWH * this.mmH;
+          const touched = this.checkpointTouched[i];
+          ctx.beginPath();
+          ctx.arc(mx, my, 4, 0, Math.PI * 2);
+          ctx.fillStyle = touched ? '#ffee00' : '#554400';
+          ctx.fill();
+          if (touched) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth   = 1;
+            ctx.stroke();
+          }
+        }
+
+        // Finish line square
+        if (this.finishIndex >= 0) {
+          const fm = OVAL_SMALL_MARKERS[this.finishIndex];
+          const fx = (fm.x - this.mmWL) / this.mmWW * this.mmW;
+          const fy = (fm.y - this.mmWT) / this.mmWH * this.mmH;
+          ctx.fillStyle = this.finishActive ? '#ffffff' : '#444444';
+          ctx.fillRect(fx - 3, fy - 3, 6, 6);
+          if (this.finishActive) {
+            ctx.strokeStyle = '#ffee00';
+            ctx.lineWidth   = 1;
+            ctx.strokeRect(fx - 3, fy - 3, 6, 6);
+          }
+        }
+
+        // Car dot
         const dotX = (this.carImg.x - this.mmWL) / this.mmWW * this.mmW;
         const dotY = (this.carImg.y - this.mmWT) / this.mmWH * this.mmH;
-        this.minimapCtx.beginPath();
-        this.minimapCtx.arc(dotX, dotY, 6, 0, Math.PI * 2);
-        this.minimapCtx.fillStyle   = '#ff2222';
-        this.minimapCtx.fill();
-        this.minimapCtx.strokeStyle = '#ffffff';
-        this.minimapCtx.lineWidth   = 1.5;
-        this.minimapCtx.stroke();
+        ctx.beginPath();
+        ctx.arc(dotX, dotY, 6, 0, Math.PI * 2);
+        ctx.fillStyle   = '#ff2222';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
       }
       rafId = requestAnimationFrame(tick);
     };
@@ -341,6 +401,7 @@ export class Game extends Scene {
       y:        newGY * gridPx,
       duration: 180,
       ease:     'Quad.easeInOut',
+      onUpdate:   () => this.checkMarkerCrossing(),
       onComplete: () => {
         this.gx   = newGX;
         this.gy   = newGY;
@@ -348,6 +409,9 @@ export class Game extends Scene {
         this.velY = newVY;
         this.turn++;
         this.hudText.setText(this.hudString());
+
+        this.checkMarkerCrossing();
+        if (this.won) return;
 
         if (this.anyValidMove()) {
           this.framePicker();
@@ -485,7 +549,8 @@ export class Game extends Scene {
               this.velY = 0;
               this.carImg.setAlpha(1);
               this.crashing = false;
-              this.framePicker();
+              this.checkMarkerCrossing();
+              if (!this.won) this.framePicker();
             },
           });
         });
@@ -602,6 +667,117 @@ export class Game extends Scene {
         onComplete: () => gfx.destroy(),
       });
     }
+  }
+
+  // ── Track markers (checkpoints + finish line) ─────────────────────────────────
+
+  private addTrackMarkers(): void {
+    this.markerImgList     = [];
+    this.checkpointIndices = [];
+    this.checkpointTouched = [];
+    this.finishIndex       = -1;
+    this.finishActive      = false;
+    this.won               = false;
+
+    for (let i = 0; i < OVAL_SMALL_MARKERS.length; i++) {
+      const m   = OVAL_SMALL_MARKERS[i];
+      const key = m.kind === 'finish'        ? 'tile_finish_0'
+                : m.shape === 'circle'       ? 'tile_checkpoint_circle_0'
+                :                              'tile_checkpoint_0';
+      const img = this.add.image(m.x, m.y, key)
+        .setAngle(m.rotation)
+        .setOrigin(0.5)
+        .setDepth(3);
+
+      if (m.kind === 'checkpoint') {
+        this.checkpointIndices.push(i);
+        this.checkpointTouched.push(false);
+      } else {
+        this.finishIndex = i;
+      }
+      this.markerImgList.push(img);
+    }
+  }
+
+  private checkMarkerCrossing(carWX = this.carImg.x, carWY = this.carImg.y): void {
+    if (this.won) return;
+
+    let anyNewlyTouched = false;
+    for (let i = 0; i < this.checkpointIndices.length; i++) {
+      if (this.checkpointTouched[i]) continue;
+      const mi = this.checkpointIndices[i];
+      const m  = OVAL_SMALL_MARKERS[mi];
+      if (this.crossesMarker(m, carWX, carWY)) {
+        this.checkpointTouched[i] = true;
+        this.markerImgList[mi].setTexture(
+          m.shape === 'circle' ? 'tile_checkpoint_circle_1' : 'tile_checkpoint_1',
+        );
+        anyNewlyTouched = true;
+      }
+    }
+
+    const allCheckpointsDone =
+      this.checkpointIndices.length === 0 ||
+      this.checkpointTouched.every(Boolean);
+
+    if (anyNewlyTouched && allCheckpointsDone && !this.finishActive && this.finishIndex >= 0) {
+      this.finishActive = true;
+      this.markerImgList[this.finishIndex].setTexture('tile_finish_1');
+    }
+
+    if (allCheckpointsDone && this.finishIndex >= 0) {
+      const fm = OVAL_SMALL_MARKERS[this.finishIndex];
+      if (this.crossesMarker(fm, carWX, carWY)) {
+        this.triggerWin();
+      }
+    }
+  }
+
+  private crossesMarker(
+    m: { x: number; y: number; rotation: number; shape: 'gate' | 'circle' },
+    carWX: number, carWY: number,
+  ): boolean {
+    const dx = carWX - m.x;
+    const dy = carWY - m.y;
+
+    if (m.shape === 'circle') {
+      // Simple radius test — circle waypoints aren't orientation-dependent.
+      return Math.hypot(dx, dy) <= gridPx + 10;
+    }
+
+    // Gate: project into marker's local space.
+    //   localX = along the stripe (must be within half the corridor width)
+    //   localY = crossing the line (must be within one grid step)
+    const angle  = m.rotation * Math.PI / 180;
+    const localX =  dx * Math.cos(angle) + dy * Math.sin(angle);
+    const localY = -dx * Math.sin(angle) + dy * Math.cos(angle);
+    return Math.abs(localX) <= CORRIDOR / 2 && Math.abs(localY) <= gridPx;
+  }
+
+  private triggerWin(): void {
+    if (this.won) return;
+    this.won     = true;
+    this.picking = false;
+    this.velGfx.clear();
+    this.pickGfx.clear();
+
+    const { width, height } = this.scale;
+    const crashStr = this.crashes > 0 ? `\n${this.crashes} crash${this.crashes > 1 ? 'es' : ''}` : '';
+    this.add.text(
+      width / 2, height / 2,
+      `FINISH!\nTurn ${this.turn}${crashStr}`,
+      {
+        fontFamily: 'Arial Black',
+        fontSize:   '42px',
+        color:      '#ffee00',
+        stroke:     '#000000',
+        strokeThickness: 8,
+        align:      'center',
+      },
+    )
+    .setScrollFactor(0)
+    .setOrigin(0.5)
+    .setDepth(30);
   }
 
   private playCrashSound() {
@@ -803,6 +979,23 @@ export class Game extends Scene {
     ctx.fill();
 
     ct.refresh();
+  }
+
+  // ── Debug: shift-key slow-motion (temporary) ─────────────────────────────────
+
+  private addShiftSlow(): void {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') { this.tweens.timeScale = 0.1; this.time.timeScale = 0.1; }
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') { this.tweens.timeScale = 1; this.time.timeScale = 1; }
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup',   up);
+    this.events.once('shutdown', () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup',   up);
+    });
   }
 
   // ── Debug grid-size slider (temporary tuning aid) ─────────────────────────────

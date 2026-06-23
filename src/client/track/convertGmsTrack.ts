@@ -1,6 +1,14 @@
 import type { PlacedPiece } from './TrackLayout';
 import type { StraightSize, CornerAngle } from './TrackGeometry';
 
+export type TrackMarker = {
+  kind: 'checkpoint' | 'finish';
+  shape: 'gate' | 'circle'; // gate = full-width stripe; circle = small waypoint dot
+  x: number;
+  y: number;
+  rotation: number; // degrees CW from north, same convention as PlacedPiece
+};
+
 type GmsPoint = {
   sprite: string;
   name: string;
@@ -53,4 +61,19 @@ export function convertGmsTrack(json: GmsTrack): PlacedPiece[] {
   }
 
   return pieces;
+}
+
+export function convertGmsMarkers(json: GmsTrack): TrackMarker[] {
+  const markers: TrackMarker[] = [];
+  for (const pt of Object.values(json.points)) {
+    if (pt.name !== 'obj_checkpoint' && pt.name !== 'obj_finish') continue;
+    const rotation = ((-pt.angle) % 360 + 360) % 360;
+    if (pt.name === 'obj_checkpoint') {
+      const shape: 'gate' | 'circle' = pt.sprite === 'tile_checkpoint_circle' ? 'circle' : 'gate';
+      markers.push({ kind: 'checkpoint', shape, x: pt.x, y: pt.y, rotation });
+    } else {
+      markers.push({ kind: 'finish', shape: 'gate', x: pt.x, y: pt.y, rotation });
+    }
+  }
+  return markers;
 }
