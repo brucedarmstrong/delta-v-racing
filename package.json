@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "preview": "npx serve dist/client -p 3000",
     "deploy": "npm run type-check && npm run lint && devvit upload",
     "dev": "devvit playtest",
     "launch": "npm run deploy && devvit publish",

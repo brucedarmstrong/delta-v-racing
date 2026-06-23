@@ -15,3 +15,12 @@ body {
   width: 100%;
   height: 100%;
 }
+
+/* Prevent the browser from consuming touch events for scrolling/zooming.
+   Without this, touches inside a webview (Reddit) are swallowed as scroll
+   gestures before Phaser's input system ever sees them. */
+#game-container canvas {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}

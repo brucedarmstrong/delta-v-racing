@@ -250,13 +250,13 @@
         stSub.appendChild(stTitle); stSub.appendChild(stRow);
         section.appendChild(stSub);
 
-        // Tight corners (2×)
+        // Tight corners (1×)
         const tRow = document.createElement('div'); tRow.className = 'piece-row';
         for (const a of CORNER_ANGLES)
-          tRow.appendChild(piece(makeCornerCanvas(TIGHT.outerR, TIGHT.innerR, a, walls, skin, 2), `corner_${a}°`));
+          tRow.appendChild(piece(makeCornerCanvas(TIGHT.outerR, TIGHT.innerR, a, walls, skin, 1), `corner_${a}°`));
         const tSub = document.createElement('div'); tSub.className = 'subsection';
         const tTitle = document.createElement('div'); tTitle.className = 'sub-title';
-        tTitle.textContent = 'Tight corners — 2× scale (sprite 130×130)';
+        tTitle.textContent = 'Tight corners — 1× scale (sprite 130×130)';
         tSub.appendChild(tTitle); tSub.appendChild(tRow);
         section.appendChild(tSub);
 

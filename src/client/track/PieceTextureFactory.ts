@@ -102,7 +102,7 @@ function makeCornerTexture(
   const oy = contentH + PAD; // bottom of content + top padding
 
   const key = cornerKey(family, angleDeg, walls);
-  const ct = scene.textures.createCanvas(key, texW, texH);
+  const ct = scene.textures.createCanvas(key, texW, texH)!;
   const ctx = ct.getContext();
   ctx.clearRect(0, 0, texW, texH);
 
@@ -155,7 +155,7 @@ function makeStraightTexture(
   const rightX = cx + HALF_TRACK;
 
   const key = straightKey(size, walls);
-  const ct = scene.textures.createCanvas(key, texW, texH);
+  const ct = scene.textures.createCanvas(key, texW, texH)!;
   const ctx = ct.getContext();
   ctx.clearRect(0, 0, texW, texH);
 

@@ -32,9 +32,7 @@ export class Preloader extends Scene {
   }
 
   create() {
-    // Generate all track piece textures (neon walls, all angles/variants) into the texture cache.
-    generateTrackTextures(this, NEON_GREEN);
-
-    this.scene.start('MainMenu');
+    const pieceInfos = generateTrackTextures(this, NEON_GREEN);
+    this.scene.start('MainMenu', { pieceInfos });
   }
 }

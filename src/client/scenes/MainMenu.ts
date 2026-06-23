@@ -1,75 +1,75 @@
 import { Scene, GameObjects } from 'phaser';
 
+declare const __BUILD__: string;
+import { trackBounds, type PlacedPiece } from '../track/TrackLayout';
+import { buildTrackTexture } from '../track/TrackCanvasRenderer';
+import { NEON_GREEN } from '../track/TrackSkin';
+import { OVAL_SMALL } from '../tracks/oval_small';
+
 export class MainMenu extends Scene {
-  background: GameObjects.Image | null = null;
-  logo: GameObjects.Image | null = null;
-  title: GameObjects.Text | null = null;
+  private placed: PlacedPiece[] = [];
+  private title: GameObjects.Text | null = null;
 
   constructor() {
     super('MainMenu');
   }
 
-  /**
-   * Reset cached GameObject references every time the scene starts.
-   * The same Scene instance is reused by Phaser, so we must ensure
-   * stale (destroyed) objects are cleared out when the scene restarts.
-   */
   init(): void {
-    this.background = null;
-    this.logo = null;
+    this.placed = [];
     this.title = null;
   }
 
   create() {
-    this.refreshLayout();
+    this.cameras.main.setBackgroundColor(0x0a0a16);
 
-    // Re-calculate positions whenever the game canvas is resized (e.g. orientation change).
-    this.scale.on('resize', () => this.refreshLayout());
+    this.placed = OVAL_SMALL;
+    buildTrackTexture(this, this.placed, NEON_GREEN);
 
-    this.input.once('pointerdown', () => {
-      this.scene.start('Game');
+    this.title = this.add
+      .text(0, 0, `delta-v racing\ntap to play\n${__BUILD__}`, {
+        fontFamily: 'Arial Black',
+        fontSize: '28px',
+        color: '#ccccff',
+        stroke: '#000000',
+        strokeThickness: 6,
+        align: 'center',
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(20);
+
+    this.fitCamera();
+    this.scale.on('resize', () => this.fitCamera());
+
+    // Scene-level pointer listener — fires for any tap/click anywhere on the canvas.
+    // On each pointer event, update the title so we can see if input is reaching Phaser.
+    this.input.on('pointerdown', () => {
+      console.log('[MainMenu] pointerdown received');
+      if (this.title) this.title.setText('starting...');
+      this.time.delayedCall(50, () => {
+        console.log('[MainMenu] calling scene.start(Game)');
+        this.scene.start('Game');
+      });
     });
+
+    console.log('[MainMenu] create() done, waiting for pointer');
   }
 
-  /**
-   * Positions and (lightly) scales all UI elements based on the current game size.
-   * Call this from create() and from any resize events.
-   */
-  private refreshLayout(): void {
+  private fitCamera(): void {
     const { width, height } = this.scale;
+    this.cameras.main.setSize(width, height);
 
-    // Resize camera to new viewport to prevent black bars
-    this.cameras.resize(width, height);
+    const b = trackBounds(this.placed);
+    const margin = 30;
+    const zoom = Math.min(
+      width  / (b.width  + margin * 2),
+      height / (b.height + margin * 2),
+    );
+    this.cameras.main.setZoom(zoom);
+    this.cameras.main.centerOn(b.cx, b.cy);
 
-    // Background – stretch to fill the whole canvas
-    if (!this.background) {
-      this.background = this.add.image(0, 0, 'background').setOrigin(0);
+    if (this.title) {
+      this.title.setPosition(width / 2, height * 0.90);
     }
-    this.background!.setDisplaySize(width, height);
-
-    // Logo – keep aspect but scale down for very small screens
-    const scaleFactor = Math.min(width / 1024, height / 768);
-
-    if (!this.logo) {
-      this.logo = this.add.image(0, 0, 'logo');
-    }
-    this.logo!.setPosition(width / 2, height * 0.38).setScale(scaleFactor);
-
-    // Title text – create once, then scale on resize
-    const baseFontSize = 38;
-    if (!this.title) {
-      this.title = this.add
-        .text(0, 0, 'Main Menu', {
-          fontFamily: 'Arial Black',
-          fontSize: `${baseFontSize}px`,
-          color: '#ffffff',
-          stroke: '#000000',
-          strokeThickness: 8,
-          align: 'center',
-        })
-        .setOrigin(0.5);
-    }
-    this.title!.setPosition(width / 2, height * 0.6);
-    this.title!.setScale(scaleFactor);
   }
 }
