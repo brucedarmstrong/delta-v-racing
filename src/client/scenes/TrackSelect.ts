@@ -36,7 +36,9 @@ export class TrackSelect extends Scene {
   private chromeHits:  HitZone[]         = [];
 
   // DOM list — native scroll, no Phaser zoom/coordinate issues
-  private listEl: HTMLElement | null = null;
+  private listEl:         HTMLElement | null = null;
+  private contextMenuEl:  HTMLElement | null = null;
+  private dismissFn:      ((e: PointerEvent) => void) | null = null;
 
   constructor() { super('TrackSelect'); }
 
@@ -86,6 +88,7 @@ export class TrackSelect extends Scene {
       window.removeEventListener('keydown', onEsc);
       this.listEl?.remove();
       this.listEl = null;
+      this.closeContextMenu();
     });
   }
 
@@ -180,6 +183,7 @@ export class TrackSelect extends Scene {
       'background:#12122a', 'border:1px solid #3a3a6a', 'border-radius:6px',
       'padding:10px', 'margin-bottom:10px', 'cursor:pointer',
       '-webkit-tap-highlight-color:rgba(100,100,200,0.2)',
+      'user-select:none', '-webkit-user-select:none',
     ].join(';');
 
     // Thumbnail
@@ -213,9 +217,123 @@ export class TrackSelect extends Scene {
     card.appendChild(info);
     card.appendChild(arrow);
 
-    card.addEventListener('click', () => this.scene.start('Game', { trackId: track.id }));
+    // Long-press detection (500ms) → context menu; short tap → start game
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let startX = 0, startY = 0, didLongPress = false;
+
+    const cancelTimer = () => { if (timer !== null) { clearTimeout(timer); timer = null; } };
+
+    card.addEventListener('pointerdown', (e) => {
+      didLongPress = false;
+      startX = e.clientX; startY = e.clientY;
+      timer = setTimeout(() => {
+        timer = null;
+        didLongPress = true;
+        this.showContextMenu(track, e.clientX, e.clientY);
+      }, 500);
+    });
+    card.addEventListener('pointermove', (e) => {
+      if (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10) cancelTimer();
+    });
+    card.addEventListener('pointerup',     () => cancelTimer());
+    card.addEventListener('pointercancel', () => cancelTimer());
+    card.addEventListener('contextmenu',   (e) => {
+      e.preventDefault();
+      cancelTimer();
+      didLongPress = true;
+      this.showContextMenu(track, e.clientX, e.clientY);
+    });
+    card.addEventListener('click', () => {
+      if (!didLongPress) this.scene.start('Game', { trackId: track.id });
+      didLongPress = false;
+    });
 
     return card;
+  }
+
+  private showContextMenu(track: TrackEntry, cx: number, cy: number): void {
+    this.closeContextMenu();
+
+    // Block list clicks while the menu is open so nothing falls through.
+    if (this.listEl) this.listEl.style.pointerEvents = 'none';
+
+    const menuW = 160, menuH = 100;
+    const left  = (cx + menuW > window.innerWidth)  ? cx - menuW : cx;
+    const top   = (cy + menuH > window.innerHeight) ? cy - menuH : cy;
+
+    const menu = document.createElement('div');
+    menu.style.cssText = [
+      'position:fixed',
+      `left:${left}px`, `top:${top}px`,
+      'background:#1a1a36', 'border:1px solid #5555aa', 'border-radius:6px',
+      'overflow:hidden', 'z-index:200', `min-width:${menuW}px`,
+      'box-shadow:0 4px 16px rgba(0,0,0,0.7)',
+    ].join(';');
+
+    const makeBtn = (label: string, color: string, action: () => void) => {
+      const btn = document.createElement('button');
+      btn.textContent = label;
+      btn.style.cssText = [
+        'display:block', 'width:100%', 'padding:14px 16px',
+        `color:${color}`, 'background:transparent', 'border:none',
+        'text-align:left', 'font:14px Arial,sans-serif', 'cursor:pointer',
+      ].join(';');
+      btn.addEventListener('mouseover', () => { btn.style.background = '#2a2a4a'; });
+      btn.addEventListener('mouseout',  () => { btn.style.background = 'transparent'; });
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        this.closeContextMenu();
+        action();
+      });
+      return btn;
+    };
+
+    menu.appendChild(makeBtn('Delete',  '#ff7777', () => this.deleteTrack(track)));
+    menu.appendChild(makeBtn('Upload',  '#88aaff', () => this.uploadTrack(track)));
+
+    document.body.appendChild(menu);
+    this.contextMenuEl = menu;
+
+    const dismiss = (e: PointerEvent) => {
+      if (!menu.contains(e.target as Node)) this.closeContextMenu();
+    };
+    this.dismissFn = dismiss;
+    setTimeout(() => {
+      if (this.dismissFn === dismiss) document.addEventListener('pointerdown', dismiss);
+    }, 50);
+  }
+
+  private closeContextMenu(): void {
+    if (this.dismissFn) {
+      document.removeEventListener('pointerdown', this.dismissFn);
+      this.dismissFn = null;
+    }
+    this.contextMenuEl?.remove();
+    this.contextMenuEl = null;
+    // Restore list interaction after a brief delay to absorb any in-flight events.
+    const el = this.listEl;
+    if (el) setTimeout(() => { el.style.pointerEvents = ''; }, 150);
+  }
+
+  private deleteTrack(track: TrackEntry): void {
+    const idx = STANDARD_TRACKS.findIndex(t => t.id === track.id);
+    if (idx !== -1) STANDARD_TRACKS.splice(idx, 1);
+    this.buildList();
+  }
+
+  private uploadTrack(_track: TrackEntry): void {
+    // TODO: connect to Devvit/Redis backend
+    const toast = document.createElement('div');
+    toast.textContent = 'Upload coming soon';
+    toast.style.cssText = [
+      'position:fixed', 'bottom:32px', 'left:50%', 'transform:translateX(-50%)',
+      'background:#2a2a50', 'border:1px solid #5555aa', 'border-radius:6px',
+      'padding:10px 20px', 'color:#ccccff', 'font:14px Arial,sans-serif',
+      'z-index:300', 'pointer-events:none',
+    ].join(';');
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 2000);
   }
 
   private drawThumbnail(canvas: HTMLCanvasElement, track: TrackEntry): void {

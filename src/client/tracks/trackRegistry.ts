@@ -16,6 +16,11 @@ import crissCrossJson   from './gms/criss_cross.json';
 import rustyspringsJson from './gms/rusty_springs.json';
 import spiralJson       from './gms/spiral.json';
 import bigoneJson       from './gms/bigone.json';
+import goGetterJson     from './gms/2026_go_getter.json';
+import mickeyJson       from './gms/2026_mickey.json';
+import squareJson       from './gms/2026_square.json';
+import testJson         from './gms/2026_test.json';
+import shortyJson       from './gms/2026_shorty.json';
 
 export type TrackEntry = {
   id:      string;
@@ -52,6 +57,11 @@ export const STANDARD_TRACKS: TrackEntry[] = [
   fromGms(rustyspringsJson, 'rusty_springs', 'Rusty Springs', 'Boomsmith',  696, 120),
   fromGms(spiralJson,       'spiral',        'Spiral',        'Boomsmith', 1008,  96),
   fromGms(bigoneJson,       'bigone',        'Big One',       'Boomsmith',  240, 240),
+  fromGms(goGetterJson,     '2026_go_getter', '2026 Go Getter', 'Custom',   336, 576),
+  fromGms(mickeyJson,       '2026_mickey',   '2026 Mickey',   'Custom',    336, 504),
+  fromGms(squareJson,       '2026_square',   '2026 Square',   'Custom',    600, 528),
+  fromGms(testJson,         '2026_test',     '2026 Test',     'Custom',    336, 288),
+  fromGms(shortyJson,       '2026_shorty',   '2026 Shorty',   'Custom',    336, 432),
   fromGms(tutorialJson,     'tutorial',      'Tutorial',      'Player',     384, 312),
   fromGms(track3Json,       'track3',        'Track 3',       'Player',     408, 168),
 ];
