@@ -33,6 +33,6 @@ export class Preloader extends Scene {
 
   create() {
     const pieceInfos = generateTrackTextures(this, NEON_GREEN);
-    this.scene.start('MainMenu', { pieceInfos });
+    this.scene.start('ModeSelect');
   }
 }

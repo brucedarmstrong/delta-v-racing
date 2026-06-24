@@ -1,5 +1,6 @@
 import type { PlacedPiece } from './TrackLayout';
 import type { StraightSize, CornerAngle } from './TrackGeometry';
+import { WALL_VARIANTS } from './TrackGeometry';
 
 export type TrackMarker = {
   kind: 'checkpoint' | 'finish';
@@ -47,16 +48,17 @@ export function convertGmsTrack(json: GmsTrack): PlacedPiece[] {
 
     const { x, y, angle, sprite } = pt;
     const rotation = ((-angle) % 360 + 360) % 360;
+    const walls = WALL_VARIANTS[Math.round(pt.variant ?? 0)] ?? 'both';
 
     if (sprite.startsWith('tile_big_corner_')) {
       const cornerAngle = parseInt(sprite.slice('tile_big_corner_'.length), 10) as CornerAngle;
-      pieces.push({ type: 'big_corner', angle: cornerAngle, walls: 'both', flip: false, x, y, rotation });
+      pieces.push({ type: 'big_corner', angle: cornerAngle, walls, flip: false, x, y, rotation });
     } else if (sprite.startsWith('tile_corner_')) {
       const cornerAngle = parseInt(sprite.slice('tile_corner_'.length), 10) as CornerAngle;
-      pieces.push({ type: 'corner', angle: cornerAngle, walls: 'both', flip: false, x, y, rotation });
+      pieces.push({ type: 'corner', angle: cornerAngle, walls, flip: false, x, y, rotation });
     } else if (sprite.startsWith('tile_straight_')) {
       const size = parseInt(sprite.slice('tile_straight_'.length), 10) as StraightSize;
-      pieces.push({ type: 'straight', size, walls: 'both', x, y, rotation });
+      pieces.push({ type: 'straight', size, walls, x, y, rotation });
     }
   }
 

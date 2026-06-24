@@ -48,7 +48,7 @@ export class MainMenu extends Scene {
       if (this.title) this.title.setText('starting...');
       this.time.delayedCall(50, () => {
         console.log('[MainMenu] calling scene.start(Game)');
-        this.scene.start('Game');
+        this.scene.start('ModeSelect');
       });
     });
 

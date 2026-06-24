@@ -1,10 +1,11 @@
 import { Scene, GameObjects } from 'phaser';
 import { buildTrackTexture } from '../track/TrackCanvasRenderer';
 import { NEON_GREEN } from '../track/TrackSkin';
-import { OVAL_SMALL, OVAL_SMALL_MARKERS } from '../tracks/oval_small';
-import { trackBounds } from '../track/TrackLayout';
+import { TRACK_REGISTRY, type TrackEntry } from '../tracks/trackRegistry';
+import { type PlacedPiece, trackBounds } from '../track/TrackLayout';
 import { isOnSurface } from '../track/TrackCollision';
 import { CORRIDOR } from '../track/TrackGeometry';
+import type { TrackMarker } from '../track/convertGmsTrack';
 
 // ── Grid / camera constants ────────────────────────────────────────────────────
 // gridPx is mutable so the debug slider can adjust it at runtime.
@@ -18,15 +19,21 @@ const MAX_ZOOM = 5.0;
 // Set to 1 to disable once the animation is tuned.
 const CRASH_SLO = 0.2;
 
-// Anchor: world-pixel coordinates of the starting point (centre of top straight).
-const START_WX = 588;
-const START_WY = 156;
+// Last-used track ID persists across grid-slider scene restarts.
+let lastTrackId = 'oval_small';
 
 // Persistent reference to the Phaser game so the slider can restart the scene
 // without capturing a scene-instance `this` that becomes stale after restart.
 let phaserGame: Phaser.Game | null = null;
 
 export class Game extends Scene {
+  // Track data set from init()
+  private trackEntry!:  TrackEntry;
+  private trackPieces!: PlacedPiece[];
+  private trackMarkers!: TrackMarker[];
+  private startWX = 0;
+  private startWY = 0;
+
   // Turn-based state
   private gx                 = 0;
   private gy                 = 0;
@@ -53,7 +60,10 @@ export class Game extends Scene {
   private velGfx!:   GameObjects.Graphics;
   private pickGfx!:  GameObjects.Graphics;
   private dotGfx!:   GameObjects.Graphics;
-  private hudText!:  GameObjects.Text;
+
+  // DOM HUD — immune to Phaser camera zoom/scroll (setScrollFactor(0) only prevents scroll, not zoom)
+  private hudDiv:      HTMLElement | null = null;
+  private pauseBtnEl:  HTMLElement | null = null;
 
   // Checkpoint / finish state
   private markerImgList:     GameObjects.Image[]    = [];
@@ -62,6 +72,12 @@ export class Game extends Scene {
   private finishIndex        = -1;
   private finishActive       = false;
   private won                = false;
+
+  // Pause menu
+  private paused           = false;
+  private savedTweenScale  = 1;
+  private savedTimeScale   = 1;
+  private pauseOverlayEl:  HTMLElement | null = null;
 
   // Minimap — plain DOM <canvas> fixed to the viewport, immune to Phaser camera effects
   private minimapCanvas:   HTMLCanvasElement        | null = null;
@@ -75,6 +91,17 @@ export class Game extends Scene {
   private mmWH = 0;
 
   constructor() { super('Game'); }
+
+  init(data?: { trackId?: string }) {
+    const id = data?.trackId ?? lastTrackId;
+    lastTrackId = id;
+    const entry = TRACK_REGISTRY.get(id) ?? TRACK_REGISTRY.values().next().value!;
+    this.trackEntry   = entry;
+    this.trackPieces  = entry.pieces;
+    this.trackMarkers = entry.markers;
+    this.startWX      = entry.startX;
+    this.startWY      = entry.startY;
+  }
 
   preload() {
     const keys = [
@@ -105,11 +132,11 @@ export class Game extends Scene {
 
     this.cameras.main.setBackgroundColor(0x0a0a16);
 
-    buildTrackTexture(this, OVAL_SMALL, NEON_GREEN);
+    buildTrackTexture(this, this.trackPieces, NEON_GREEN);
 
     // Snap starting position to nearest grid intersection.
-    this.gx   = Math.round(START_WX / gridPx);
-    this.gy   = Math.round(START_WY / gridPx);
+    this.gx   = Math.round(this.startWX / gridPx);
+    this.gy   = Math.round(this.startWY / gridPx);
     this.velX = 0;
     this.velY = 0;
     this.turn = 0;
@@ -131,10 +158,17 @@ export class Game extends Scene {
     this.velGfx  = this.add.graphics().setDepth(8);
     this.pickGfx = this.add.graphics().setDepth(9);
 
-    this.hudText = this.add.text(8, 8, this.hudString(), {
-      fontFamily: 'monospace', fontSize: '14px', color: '#ccccff',
-      stroke: '#000000', strokeThickness: 3,
-    }).setScrollFactor(0).setDepth(20);
+    // HUD counter — DOM element so camera zoom can't affect it.
+    const hud = document.createElement('div');
+    hud.style.cssText = [
+      'position:fixed', 'top:12px', 'left:62px',
+      'font:bold 14px/1 monospace', 'color:#ccccff',
+      'text-shadow:-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000',
+      'pointer-events:none', 'user-select:none', 'z-index:999',
+    ].join(';');
+    hud.textContent = this.hudString();
+    document.body.appendChild(hud);
+    this.hudDiv = hud;
 
     this.cameras.main.setZoom(2.5);
     this.cameras.main.centerOn(startWX, startWY);
@@ -152,6 +186,8 @@ export class Game extends Scene {
 
     // pointerdown: start pinch (2 fingers) or record drag origin (1 finger).
     this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
+      // DOM pause overlay intercepts its own clicks; just guard game input.
+      if (this.paused) return;
       this.touches.set(ptr.id, { x: ptr.x, y: ptr.y });
 
       if (this.touches.size >= 2) {
@@ -234,6 +270,7 @@ export class Game extends Scene {
 
     this.addMinimap();
     this.addShiftSlow();
+    this.addPauseUI();
     this.addGridSlider();
 
     // Short delay so the tap that launched this scene isn't treated as a pick.
@@ -242,7 +279,7 @@ export class Game extends Scene {
 
 
   private addMinimap(): void {
-    const b   = trackBounds(OVAL_SMALL);
+    const b   = trackBounds(this.trackPieces);
     const pad = gridPx * 3;
 
     this.mmWL = b.x - pad;
@@ -281,7 +318,7 @@ export class Game extends Scene {
     const step = 5;
     for (let wy = this.mmWT; wy <= this.mmWT + this.mmWH; wy += step) {
       for (let wx = this.mmWL; wx <= this.mmWL + this.mmWW; wx += step) {
-        if (isOnSurface(wx, wy, OVAL_SMALL)) {
+        if (isOnSurface(wx, wy, this.trackPieces)) {
           const lx = (wx - this.mmWL) / this.mmWW * this.mmW;
           const ly = (wy - this.mmWT) / this.mmWH * this.mmH;
           ctx.fillRect(lx, ly, 2, 2);
@@ -305,7 +342,7 @@ export class Game extends Scene {
         // Checkpoint dots
         for (let i = 0; i < this.checkpointIndices.length; i++) {
           const mi = this.checkpointIndices[i];
-          const m  = OVAL_SMALL_MARKERS[mi];
+          const m  = this.trackMarkers[mi];
           const mx = (m.x - this.mmWL) / this.mmWW * this.mmW;
           const my = (m.y - this.mmWT) / this.mmWH * this.mmH;
           const touched = this.checkpointTouched[i];
@@ -322,7 +359,7 @@ export class Game extends Scene {
 
         // Finish line square
         if (this.finishIndex >= 0) {
-          const fm = OVAL_SMALL_MARKERS[this.finishIndex];
+          const fm = this.trackMarkers[this.finishIndex];
           const fx = (fm.x - this.mmWL) / this.mmWW * this.mmW;
           const fy = (fm.y - this.mmWT) / this.mmWH * this.mmH;
           ctx.fillStyle = this.finishActive ? '#ffffff' : '#444444';
@@ -372,7 +409,7 @@ export class Game extends Scene {
         const tx = natX + dx, ty = natY + dy;
         const twx = tx * gridPx, twy = ty * gridPx;
         if ((wp.x - twx) ** 2 + (wp.y - twy) ** 2 <= hitR * hitR) {
-          if (isOnSurface(twx, twy, OVAL_SMALL)) {
+          if (isOnSurface(twx, twy, this.trackPieces)) {
             this.commitMove(tx, ty, dx, dy);
           } else {
             // Player deliberately picked an off-track target.
@@ -408,7 +445,7 @@ export class Game extends Scene {
         this.velX = newVX;
         this.velY = newVY;
         this.turn++;
-        this.hudText.setText(this.hudString());
+        this.updateHud();
 
         this.checkMarkerCrossing();
         if (this.won) return;
@@ -429,7 +466,7 @@ export class Game extends Scene {
     const natY = this.gy + this.velY;
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
-        if (isOnSurface((natX + dx) * gridPx, (natY + dy) * gridPx, OVAL_SMALL)) {
+        if (isOnSurface((natX + dx) * gridPx, (natY + dy) * gridPx, this.trackPieces)) {
           return true;
         }
       }
@@ -460,7 +497,7 @@ export class Game extends Scene {
 
     this.crashes++;
     if (countTurn) this.turn++;
-    this.hudText.setText(this.hudString());
+    this.updateHud();
 
     const crashWX = crashGX * gridPx;
     const crashWY = crashGY * gridPx;
@@ -569,7 +606,7 @@ export class Game extends Scene {
       const t  = i / 20;
       const wx = fromWX + (toWX - fromWX) * t;
       const wy = fromWY + (toWY - fromWY) * t;
-      if (!isOnSurface(wx, wy, OVAL_SMALL)) break;
+      if (!isOnSurface(wx, wy, this.trackPieces)) break;
       lastWX = wx;
       lastWY = wy;
     }
@@ -585,7 +622,7 @@ export class Game extends Scene {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
           const gx = cx + dx, gy = cy + dy;
-          if (isOnSurface(gx * gridPx, gy * gridPx, OVAL_SMALL)) return { gx, gy };
+          if (isOnSurface(gx * gridPx, gy * gridPx, this.trackPieces)) return { gx, gy };
         }
       }
     }
@@ -679,8 +716,8 @@ export class Game extends Scene {
     this.finishActive      = false;
     this.won               = false;
 
-    for (let i = 0; i < OVAL_SMALL_MARKERS.length; i++) {
-      const m   = OVAL_SMALL_MARKERS[i];
+    for (let i = 0; i < this.trackMarkers.length; i++) {
+      const m   = this.trackMarkers[i];
       const key = m.kind === 'finish'        ? 'tile_finish_0'
                 : m.shape === 'circle'       ? 'tile_checkpoint_circle_0'
                 :                              'tile_checkpoint_0';
@@ -706,7 +743,7 @@ export class Game extends Scene {
     for (let i = 0; i < this.checkpointIndices.length; i++) {
       if (this.checkpointTouched[i]) continue;
       const mi = this.checkpointIndices[i];
-      const m  = OVAL_SMALL_MARKERS[mi];
+      const m  = this.trackMarkers[mi];
       if (this.crossesMarker(m, carWX, carWY)) {
         this.checkpointTouched[i] = true;
         this.markerImgList[mi].setTexture(
@@ -726,7 +763,7 @@ export class Game extends Scene {
     }
 
     if (allCheckpointsDone && this.finishIndex >= 0) {
-      const fm = OVAL_SMALL_MARKERS[this.finishIndex];
+      const fm = this.trackMarkers[this.finishIndex];
       if (this.crossesMarker(fm, carWX, carWY)) {
         this.triggerWin();
       }
@@ -881,7 +918,7 @@ export class Game extends Scene {
       for (let dx = -1; dx <= 1; dx++) {
         const tx = natGX + dx, ty = natGY + dy;
         const twx = tx * gridPx, twy = ty * gridPx;
-        const valid     = isOnSurface(twx, twy, OVAL_SMALL);
+        const valid     = isOnSurface(twx, twy, this.trackPieces);
         const isNatural = dx === 0 && dy === 0;
 
         if (!valid) {
@@ -914,7 +951,7 @@ export class Game extends Scene {
     this.dotGfx.clear();
     this.dotGfx.fillStyle(0x8888aa, 0.25);
 
-    const b      = trackBounds(OVAL_SMALL);
+    const b      = trackBounds(this.trackPieces);
     const margin = gridPx * 2;
     const x0 = Math.floor((b.x - margin) / gridPx);
     const y0 = Math.floor((b.y - margin) / gridPx);
@@ -924,7 +961,7 @@ export class Game extends Scene {
     for (let gx = x0; gx <= x1; gx++) {
       for (let gy = y0; gy <= y1; gy++) {
         const wx = gx * gridPx, wy = gy * gridPx;
-        if (isOnSurface(wx, wy, OVAL_SMALL)) {
+        if (isOnSurface(wx, wy, this.trackPieces)) {
           this.dotGfx.fillCircle(wx, wy, 1.4);
         }
       }
@@ -1031,6 +1068,144 @@ export class Game extends Scene {
       (document.getElementById('dv-grid-px') as HTMLInputElement).value = String(gridPx);
       document.getElementById('dv-grid-val')!.textContent = String(gridPx);
     }
+  }
+
+  // ── Pause menu ────────────────────────────────────────────────────────────────
+
+  private addPauseUI(): void {
+    // DOM pause button — immune to camera zoom, always fixed top-left.
+    const btn = document.createElement('button');
+    btn.style.cssText = [
+      'position:fixed', 'top:6px', 'left:6px',
+      'width:46px', 'height:38px',
+      'background:#3355cc', 'border:2px solid #aabbff', 'border-radius:5px',
+      'cursor:pointer', 'z-index:999', 'padding:0',
+      'display:flex', 'align-items:center', 'justify-content:center',
+    ].join(';');
+    btn.innerHTML = `<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3"  y="2" width="6" height="18" rx="1" fill="white"/>
+      <rect x="13" y="2" width="6" height="18" rx="1" fill="white"/>
+    </svg>`;
+    btn.addEventListener('click', () => { if (!this.paused && !this.won) this.showPause(); });
+    document.body.appendChild(btn);
+    this.pauseBtnEl = btn;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (this.paused) this.resumeGame();
+        else if (!this.won) this.showPause();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+
+    this.events.once('shutdown', () => {
+      window.removeEventListener('keydown', onKey);
+      btn.remove();
+      this.pauseBtnEl = null;
+      this.hudDiv?.remove();
+      this.hudDiv = null;
+      this.pauseOverlayEl?.remove();
+      this.pauseOverlayEl = null;
+    });
+  }
+
+  private updateHud(): void {
+    if (this.hudDiv) this.hudDiv.textContent = this.hudString();
+  }
+
+  private showPause(): void {
+    this.paused           = true;
+    this.savedTweenScale  = this.tweens.timeScale;
+    this.savedTimeScale   = this.time.timeScale;
+    this.tweens.timeScale = 0;
+    this.time.timeScale   = 0;
+    if (this.minimapCanvas) this.minimapCanvas.style.display = 'none';
+    if (this.pauseBtnEl)    this.pauseBtnEl.style.display    = 'none';
+    if (this.hudDiv)        this.hudDiv.style.display        = 'none';
+    this.pauseOverlayEl = this.buildPauseDOM();
+    document.body.appendChild(this.pauseOverlayEl);
+  }
+
+  private resumeGame(): void {
+    this.paused           = false;
+    this.tweens.timeScale = this.savedTweenScale;
+    this.time.timeScale   = this.savedTimeScale;
+    this.pauseOverlayEl?.remove();
+    this.pauseOverlayEl = null;
+    if (this.minimapCanvas) this.minimapCanvas.style.display = '';
+    if (this.pauseBtnEl)    this.pauseBtnEl.style.display    = '';
+    if (this.hudDiv)        this.hudDiv.style.display        = '';
+    if (!this.won && !this.crashing && this.picking) this.drawUI();
+  }
+
+  private clearPauseAndGo(fn: () => void): void {
+    this.paused           = false;
+    this.tweens.timeScale = 1;
+    this.time.timeScale   = 1;
+    this.pauseOverlayEl?.remove();
+    this.pauseOverlayEl = null;
+    if (this.minimapCanvas) this.minimapCanvas.style.display = '';
+    if (this.pauseBtnEl)    this.pauseBtnEl.style.display    = '';
+    if (this.hudDiv)        this.hudDiv.style.display        = '';
+    fn();
+  }
+
+  private buildPauseDOM(): HTMLElement {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:1002',
+      'background:rgba(0,0,0,0.65)',
+      'display:flex', 'align-items:center', 'justify-content:center',
+    ].join(';');
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = [
+      'background:#111130', 'border:1.5px solid #5555aa', 'border-radius:10px',
+      'width:min(320px,calc(100% - 24px))',
+      'max-height:calc(100% - 24px)',
+      'overflow:hidden',
+      'display:flex', 'flex-direction:column', 'align-items:stretch',
+      'padding:16px 14px 14px', 'box-sizing:border-box', 'gap:8px',
+    ].join(';');
+
+    const title = document.createElement('div');
+    title.textContent = 'Game Paused';
+    title.style.cssText = [
+      'font:bold 20px "Arial Black",Arial,sans-serif',
+      'color:#e8e8ff', 'text-align:center',
+      'text-shadow:0 0 6px #000,-1px -1px 0 #000,1px 1px 0 #000',
+    ].join(';');
+
+    const body = document.createElement('div');
+    body.innerHTML = "The race isn't over yet.<br>What would you like to do?";
+    body.style.cssText = [
+      'font:13px Arial,sans-serif', 'color:#9999cc', 'text-align:center',
+      'margin-bottom:4px',
+    ].join(';');
+
+    const btnStyle = (color: string) => [
+      'display:block', 'width:100%', 'padding:14px 0',
+      'background:#1a1a3a', 'border:1px solid #4444aa', 'border-radius:8px',
+      `color:${color}`, 'font:bold 18px "Arial Black",Arial,sans-serif',
+      'cursor:pointer', 'text-shadow:0 0 4px #000,-1px -1px 0 #000,1px 1px 0 #000',
+    ].join(';');
+
+    const makeBtn = (label: string, color: string, onClick: () => void) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = btnStyle(color);
+      b.addEventListener('click', onClick);
+      return b;
+    };
+
+    dialog.appendChild(title);
+    dialog.appendChild(body);
+    dialog.appendChild(makeBtn('Continue', '#66ff99', () => this.resumeGame()));
+    dialog.appendChild(makeBtn('Restart',  '#ffcc44', () => this.clearPauseAndGo(() => this.scene.start('Game', { trackId: this.trackEntry.id }))));
+    dialog.appendChild(makeBtn('Exit',     '#ff6666', () => this.clearPauseAndGo(() => this.scene.start('TrackSelect'))));
+
+    overlay.appendChild(dialog);
+    return overlay;
   }
 
   override update() { /* driven by events */ }
