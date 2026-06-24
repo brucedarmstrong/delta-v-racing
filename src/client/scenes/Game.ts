@@ -1,9 +1,10 @@
 import { Scene, GameObjects } from 'phaser';
-import { buildTrackTexture } from '../track/TrackCanvasRenderer';
+import { buildTrackTexture, drawBarriersOnCanvas } from '../track/TrackCanvasRenderer';
+import { type GhostMove, type GhostData, serializeGhost } from '../track/GhostData';
 import { NEON_GREEN } from '../track/TrackSkin';
 import { TRACK_REGISTRY, type TrackEntry } from '../tracks/trackRegistry';
 import { type PlacedPiece, trackBounds } from '../track/TrackLayout';
-import { isOnSurface } from '../track/TrackCollision';
+import { intersectsBarrier, pointInsideBarrier } from '../track/TrackCollision';
 import { CORRIDOR } from '../track/TrackGeometry';
 import type { TrackMarker } from '../track/convertGmsTrack';
 
@@ -60,6 +61,11 @@ export class Game extends Scene {
   private velGfx!:   GameObjects.Graphics;
   private pickGfx!:  GameObjects.Graphics;
   private dotGfx!:   GameObjects.Graphics;
+  private trailGfx!: GameObjects.Graphics;
+
+  // Ghost recording
+  private ghostMoves:   GhostMove[]   = [];
+  private currentGhost: GhostData | null = null;
 
   // DOM HUD — immune to Phaser camera zoom/scroll (setScrollFactor(0) only prevents scroll, not zoom)
   private hudDiv:      HTMLElement | null = null;
@@ -73,11 +79,18 @@ export class Game extends Scene {
   private finishActive       = false;
   private won                = false;
 
+  // Last move origin/target — used by triggerWin to compute finesse fraction.
+  private moveFromWX = 0;
+  private moveFromWY = 0;
+  private moveToWX   = 0;
+  private moveToWY   = 0;
+
   // Pause menu
   private paused           = false;
   private savedTweenScale  = 1;
   private savedTimeScale   = 1;
   private pauseOverlayEl:  HTMLElement | null = null;
+  private finishOverlayEl: HTMLElement | null = null;
 
   // Minimap — plain DOM <canvas> fixed to the viewport, immune to Phaser camera effects
   private minimapCanvas:   HTMLCanvasElement        | null = null;
@@ -92,10 +105,16 @@ export class Game extends Scene {
 
   constructor() { super('Game'); }
 
-  init(data?: { trackId?: string }) {
-    const id = data?.trackId ?? lastTrackId;
-    lastTrackId = id;
-    const entry = TRACK_REGISTRY.get(id) ?? TRACK_REGISTRY.values().next().value!;
+  init(data?: { trackId?: string; track?: TrackEntry }) {
+    let entry: TrackEntry;
+    if (data?.track) {
+      entry = data.track;
+      lastTrackId = entry.id;
+    } else {
+      const id = data?.trackId ?? lastTrackId;
+      lastTrackId = id;
+      entry = TRACK_REGISTRY.get(id) ?? TRACK_REGISTRY.values().next().value!;
+    }
     this.trackEntry   = entry;
     this.trackPieces  = entry.pieces;
     this.trackMarkers = entry.markers;
@@ -143,8 +162,11 @@ export class Game extends Scene {
     this.crashes = 0;
     this.picking = false;
 
-    this.dotGfx = this.add.graphics().setDepth(1);
-    this.drawDotGrid();
+    this.dotGfx   = this.add.graphics().setDepth(-1);
+    this.drawGrid();
+    this.ghostMoves   = [];
+    this.currentGhost = null;
+    this.trailGfx = this.add.graphics().setDepth(3);
 
     this.addTrackMarkers();
 
@@ -313,18 +335,13 @@ export class Game extends Scene {
     ctx.fillStyle = '#0d0d20';
     ctx.fillRect(0, 0, this.mmW, this.mmH);
 
-    // Scan the world and paint on-surface pixels as green dots.
-    ctx.fillStyle = '#33aa33';
-    const step = 5;
-    for (let wy = this.mmWT; wy <= this.mmWT + this.mmWH; wy += step) {
-      for (let wx = this.mmWL; wx <= this.mmWL + this.mmWW; wx += step) {
-        if (isOnSurface(wx, wy, this.trackPieces)) {
-          const lx = (wx - this.mmWL) / this.mmWW * this.mmW;
-          const ly = (wy - this.mmWT) / this.mmWH * this.mmH;
-          ctx.fillRect(lx, ly, 2, 2);
-        }
-      }
-    }
+    // Draw barrier walls geometrically.
+    drawBarriersOnCanvas(
+      ctx, this.trackPieces,
+      this.mmWL, this.mmWT,
+      this.mmW / this.mmWW, this.mmH / this.mmWH,
+      0, 0, '#33bb55', 1.5,
+    );
 
     // Capture the static track as a reusable ImageData baseline.
     this.minimapTrackImg = ctx.getImageData(0, 0, this.mmW, this.mmH);
@@ -409,10 +426,10 @@ export class Game extends Scene {
         const tx = natX + dx, ty = natY + dy;
         const twx = tx * gridPx, twy = ty * gridPx;
         if ((wp.x - twx) ** 2 + (wp.y - twy) ** 2 <= hitR * hitR) {
-          if (isOnSurface(twx, twy, this.trackPieces)) {
+          if (!intersectsBarrier(this.gx * gridPx, this.gy * gridPx, twx, twy, this.trackPieces)) {
             this.commitMove(tx, ty, dx, dy);
           } else {
-            // Player deliberately picked an off-track target.
+            // Player deliberately picked a barrier-crossing target.
             // If we're in a forced-crash pause the turn was already counted; otherwise count it now.
             this.commitCrash(tx, ty, !this.pendingForcedCrash);
           }
@@ -426,6 +443,14 @@ export class Game extends Scene {
     this.picking = false;
     this.velGfx.clear();
     this.pickGfx.clear();
+
+    this.moveFromWX = this.gx * gridPx;
+    this.moveFromWY = this.gy * gridPx;
+    this.moveToWX   = newGX  * gridPx;
+    this.moveToWY   = newGY  * gridPx;
+
+    this.ghostMoves.push({ gx: newGX, gy: newGY, crash: false });
+    this.drawTrailSegment(this.gx, this.gy, newGX, newGY, false);
 
     const newVX      = this.velX + dvx;
     const newVY      = this.velY + dvy;
@@ -462,11 +487,12 @@ export class Game extends Scene {
   // ── Crash handling ───────────────────────────────────────────────────────────
 
   private anyValidMove(): boolean {
-    const natX = this.gx + this.velX;
-    const natY = this.gy + this.velY;
+    const fromWX = this.gx * gridPx, fromWY = this.gy * gridPx;
+    const natX   = this.gx + this.velX;
+    const natY   = this.gy + this.velY;
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
-        if (isOnSurface((natX + dx) * gridPx, (natY + dy) * gridPx, this.trackPieces)) {
+        if (!intersectsBarrier(fromWX, fromWY, (natX + dx) * gridPx, (natY + dy) * gridPx, this.trackPieces)) {
           return true;
         }
       }
@@ -499,11 +525,13 @@ export class Game extends Scene {
     if (countTurn) this.turn++;
     this.updateHud();
 
+    this.ghostMoves.push({ gx: crashGX, gy: crashGY, crash: true });
+    this.drawTrailSegment(this.gx, this.gy, crashGX, crashGY, true);
+
     const crashWX = crashGX * gridPx;
     const crashWY = crashGY * gridPx;
-    const safe    = this.findNearestValid(crashWX, crashWY);
-    const safeGX  = safe?.gx ?? this.gx;
-    const safeGY  = safe?.gy ?? this.gy;
+    const safeGX  = this.gx;
+    const safeGY  = this.gy;
     const safeWX  = safeGX * gridPx;
     const safeWY  = safeGY * gridPx;
 
@@ -602,15 +630,36 @@ export class Game extends Scene {
     toWX:   number, toWY:   number,
   ): { wx: number; wy: number } {
     let lastWX = fromWX, lastWY = fromWY;
-    for (let i = 1; i <= 20; i++) {
-      const t  = i / 20;
+    for (let i = 1; i <= 40; i++) {
+      const t  = i / 40;
       const wx = fromWX + (toWX - fromWX) * t;
       const wy = fromWY + (toWY - fromWY) * t;
-      if (!isOnSurface(wx, wy, this.trackPieces)) break;
+      if (pointInsideBarrier(wx, wy, this.trackPieces)) break;
       lastWX = wx;
       lastWY = wy;
     }
     return { wx: lastWX, wy: lastWY };
+  }
+
+  /**
+   * Walk the finishing move in 200 steps and return the parameter t ∈ [0,1]
+   * at which the path first crosses the finish gate.
+   * t=0 means the car was already on the line; t=1 means contact at the target.
+   */
+  private findFinishContactFraction(
+    fromWX: number, fromWY: number,
+    toWX:   number, toWY:   number,
+  ): number {
+    if (this.finishIndex < 0) return 1;
+    const fm    = this.trackMarkers[this.finishIndex];
+    const steps = 200;
+    for (let i = 0; i <= steps; i++) {
+      const t  = i / steps;
+      const wx = fromWX + (toWX - fromWX) * t;
+      const wy = fromWY + (toWY - fromWY) * t;
+      if (this.crossesMarker(fm, wx, wy)) return t;
+    }
+    return 1;
   }
 
   private findNearestValid(crashWX: number, crashWY: number): { gx: number; gy: number } | null {
@@ -622,7 +671,7 @@ export class Game extends Scene {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
           const gx = cx + dx, gy = cy + dy;
-          if (isOnSurface(gx * gridPx, gy * gridPx, this.trackPieces)) return { gx, gy };
+          if (!pointInsideBarrier(gx * gridPx, gy * gridPx, this.trackPieces)) return { gx, gy };
         }
       }
     }
@@ -798,23 +847,101 @@ export class Game extends Scene {
     this.velGfx.clear();
     this.pickGfx.clear();
 
-    const { width, height } = this.scale;
-    const crashStr = this.crashes > 0 ? `\n${this.crashes} crash${this.crashes > 1 ? 'es' : ''}` : '';
-    this.add.text(
-      width / 2, height / 2,
-      `FINISH!\nTurn ${this.turn}${crashStr}`,
-      {
-        fontFamily: 'Arial Black',
-        fontSize:   '42px',
-        color:      '#ffee00',
-        stroke:     '#000000',
-        strokeThickness: 8,
-        align:      'center',
-      },
-    )
-    .setScrollFactor(0)
-    .setOrigin(0.5)
-    .setDepth(30);
+    // Score = turns + crash penalty + finesse fraction (0–0.99).
+    // Crashes already consumed one turn each; this adds a second penalty turn per crash.
+    // Finesse = parameter t at which the finishing move first crosses the gate (higher = better).
+    const finesse = this.findFinishContactFraction(
+      this.moveFromWX, this.moveFromWY,
+      this.moveToWX,   this.moveToWY,
+    );
+    const score    = this.turn + this.crashes + Math.min(finesse, 0.99);
+    const scoreStr = score.toFixed(2);
+
+    // Assemble ghost for upload.
+    this.currentGhost = {
+      v:       1,
+      trackId: this.trackEntry.id,
+      score,
+      startGX: Math.round(this.startWX / gridPx),
+      startGY: Math.round(this.startWY / gridPx),
+      moves:   [...this.ghostMoves],
+    };
+
+    const crashStr = this.crashes > 0
+      ? `<div style="font-size:0.6em;margin-top:6px;color:#ffaa44">${this.crashes} crash${this.crashes > 1 ? 'es' : ''}</div>`
+      : '';
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:1002',
+      'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
+      'background:rgba(0,0,0,0.55)',
+    ].join(';');
+
+    overlay.innerHTML = `
+      <div style="font:bold clamp(28px,8vw,52px) 'Arial Black',Arial,sans-serif;color:#ffee00;
+                  text-shadow:0 0 16px #ff8800,0 2px 4px #000;text-align:center;line-height:1.2">
+        FINISH!
+        <div style="font-size:0.55em;color:#ccddff;margin-top:4px">Score: ${scoreStr}</div>
+        ${crashStr}
+        <div style="display:flex;gap:10px;justify-content:center;margin-top:16px;flex-wrap:wrap">
+          <button id="dvr-upload-ghost" style="
+            padding:10px 20px;font:bold 14px Arial,sans-serif;color:#ccddff;
+            background:#1a1a44;border:1px solid #5566cc;border-radius:6px;cursor:pointer;
+          ">Upload Ghost</button>
+          <button id="dvr-play-again" style="
+            padding:10px 20px;font:bold 14px Arial,sans-serif;color:#ccffcc;
+            background:#0a2a0a;border:1px solid #33aa33;border-radius:6px;cursor:pointer;
+          ">Play Again</button>
+          <button id="dvr-exit" style="
+            padding:10px 20px;font:bold 14px Arial,sans-serif;color:#aaaacc;
+            background:#1a1a2a;border:1px solid #444466;border-radius:6px;cursor:pointer;
+          ">Exit</button>
+        </div>
+      </div>`;
+
+    document.body.appendChild(overlay);
+    this.finishOverlayEl = overlay;
+
+    overlay.querySelector('#dvr-upload-ghost')?.addEventListener('click', () => this.uploadGhost());
+    overlay.querySelector('#dvr-play-again')?.addEventListener('click',  () => {
+      this.finishOverlayEl?.remove(); this.finishOverlayEl = null;
+      this.scene.start('Game', { trackId: this.trackEntry.id });
+    });
+    overlay.querySelector('#dvr-exit')?.addEventListener('click', () => {
+      this.finishOverlayEl?.remove(); this.finishOverlayEl = null;
+      this.scene.start('TrackSelect');
+    });
+  }
+
+  private uploadGhost(): void {
+    if (!this.currentGhost) return;
+
+    const btn = this.finishOverlayEl?.querySelector('#dvr-upload-ghost') as HTMLButtonElement | null;
+    if (btn) { btn.textContent = 'Uploading…'; btn.disabled = true; }
+
+    const ghost = this.currentGhost;
+    const body = JSON.stringify({
+      trackId: ghost.trackId,
+      score:   ghost.score,
+      ghost:   serializeGhost(ghost),
+    });
+
+    fetch('/api/ghost', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json() as { rank?: number };
+        const rankStr = data.rank ? ` (#${data.rank})` : '';
+        if (btn) btn.textContent = `Uploaded!${rankStr}`;
+      })
+      .catch((err) => {
+        console.error('[ghost upload]', err);
+        if (btn) { btn.textContent = 'Upload failed'; btn.disabled = false; }
+      });
   }
 
   private playCrashSound() {
@@ -918,7 +1045,7 @@ export class Game extends Scene {
       for (let dx = -1; dx <= 1; dx++) {
         const tx = natGX + dx, ty = natGY + dy;
         const twx = tx * gridPx, twy = ty * gridPx;
-        const valid     = isOnSurface(twx, twy, this.trackPieces);
+        const valid     = !intersectsBarrier(carWX, carWY, twx, twy, this.trackPieces);
         const isNatural = dx === 0 && dy === 0;
 
         if (!valid) {
@@ -947,25 +1074,67 @@ export class Game extends Scene {
     }
   }
 
-  private drawDotGrid() {
+  private drawTrailSegment(fromGX: number, fromGY: number, toGX: number, toGY: number, crash: boolean): void {
+    const fromWX = fromGX * gridPx, fromWY = fromGY * gridPx;
+    const toWX   = toGX   * gridPx, toWY   = toGY   * gridPx;
+    const color  = crash ? 0xff4422 : 0x4488ff;
+    const alpha  = crash ? 0.80     : 0.65;
+
+    // Segment line
+    this.trailGfx.lineStyle(2, color, alpha);
+    this.trailGfx.beginPath();
+    this.trailGfx.moveTo(fromWX, fromWY);
+    this.trailGfx.lineTo(toWX, toWY);
+    this.trailGfx.strokePath();
+
+    // Joint dot at the origin (future: customizable icon/pattern)
+    this.trailGfx.fillStyle(color, Math.min(alpha + 0.15, 1));
+    this.trailGfx.fillCircle(fromWX, fromWY, 3);
+  }
+
+  private drawGrid() {
     this.dotGfx.clear();
-    this.dotGfx.fillStyle(0x8888aa, 0.25);
 
     const b      = trackBounds(this.trackPieces);
-    const margin = gridPx * 2;
-    const x0 = Math.floor((b.x - margin) / gridPx);
-    const y0 = Math.floor((b.y - margin) / gridPx);
-    const x1 = Math.ceil((b.x + b.width  + margin) / gridPx);
-    const y1 = Math.ceil((b.y + b.height + margin) / gridPx);
+    const margin = Math.max(b.width, b.height, 1200);
 
-    for (let gx = x0; gx <= x1; gx++) {
-      for (let gy = y0; gy <= y1; gy++) {
-        const wx = gx * gridPx, wy = gy * gridPx;
-        if (isOnSurface(wx, wy, this.trackPieces)) {
-          this.dotGfx.fillCircle(wx, wy, 1.4);
-        }
-      }
+    // Snap grid origin to gridPx so lines always fall on integer grid coords.
+    const xMin = Math.floor((b.x - margin) / gridPx) * gridPx;
+    const yMin = Math.floor((b.y - margin) / gridPx) * gridPx;
+    const xMax = Math.ceil((b.x + b.width  + margin) / gridPx) * gridPx;
+    const yMax = Math.ceil((b.y + b.height + margin) / gridPx) * gridPx;
+
+    const major = 5; // major line every 5 cells
+
+    // Minor lines — batch all in one path call each axis
+    this.dotGfx.lineStyle(1, 0x15153a, 0.9);
+    this.dotGfx.beginPath();
+    for (let x = xMin; x <= xMax; x += gridPx) {
+      if ((x / gridPx) % major === 0) continue;
+      this.dotGfx.moveTo(x, yMin);
+      this.dotGfx.lineTo(x, yMax);
     }
+    for (let y = yMin; y <= yMax; y += gridPx) {
+      if ((y / gridPx) % major === 0) continue;
+      this.dotGfx.moveTo(xMin, y);
+      this.dotGfx.lineTo(xMax, y);
+    }
+    this.dotGfx.strokePath();
+
+    // Major lines
+    this.dotGfx.lineStyle(1, 0x20205a, 1.0);
+    this.dotGfx.beginPath();
+    for (let x = xMin; x <= xMax; x += gridPx) {
+      if ((x / gridPx) % major !== 0) continue;
+      this.dotGfx.moveTo(x, yMin);
+      this.dotGfx.lineTo(x, yMax);
+    }
+    for (let y = yMin; y <= yMax; y += gridPx) {
+      if ((y / gridPx) % major !== 0) continue;
+      this.dotGfx.moveTo(xMin, y);
+      this.dotGfx.lineTo(xMax, y);
+    }
+    this.dotGfx.strokePath();
   }
 
   // ── Textures ──────────────────────────────────────────────────────────────────
@@ -1106,6 +1275,8 @@ export class Game extends Scene {
       this.hudDiv = null;
       this.pauseOverlayEl?.remove();
       this.pauseOverlayEl = null;
+      this.finishOverlayEl?.remove();
+      this.finishOverlayEl = null;
     });
   }
 

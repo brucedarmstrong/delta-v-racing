@@ -66,6 +66,35 @@ function strokePass(
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
+ * Draw all barrier walls onto an existing 2D canvas context at an arbitrary scale.
+ * scaleX/scaleY map world pixels to canvas pixels; offX/offY shift the origin.
+ * lineWidthPx is the desired stroke width in canvas pixels.
+ */
+export function drawBarriersOnCanvas(
+  ctx: CanvasRenderingContext2D,
+  pieces: PlacedPiece[],
+  worldL: number,
+  worldT: number,
+  scaleX: number,
+  scaleY: number,
+  offX = 0,
+  offY = 0,
+  color = '#33bb55',
+  lineWidthPx = 1.5,
+): void {
+  ctx.save();
+  ctx.translate(offX - worldL * scaleX, offY - worldT * scaleY);
+  ctx.scale(scaleX, scaleY);
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = lineWidthPx / Math.min(scaleX, scaleY);
+  ctx.lineCap     = 'round';
+  ctx.beginPath();
+  for (const p of pieces) addPiecePaths(ctx, p);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
  * Render the entire track onto a single canvas texture and add it to the scene.
  *
  * Drawing all walls in one pass per neon layer means every piece junction is

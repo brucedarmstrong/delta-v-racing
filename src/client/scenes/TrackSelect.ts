@@ -1,7 +1,9 @@
 import { Scene, GameObjects } from 'phaser';
 import { STANDARD_TRACKS, type TrackEntry } from '../tracks/trackRegistry';
 import { trackBounds } from '../track/TrackLayout';
-import { isOnSurface } from '../track/TrackCollision';
+import { drawBarriersOnCanvas } from '../track/TrackCanvasRenderer';
+import { fetchCommunityTrack, fetchCommunityTracks } from '../track/TrackUpload';
+import type { CommunityTrackMeta } from '../../shared/api';
 
 const BG         = 0x0a0a16;
 const SURFACE    = 0x12122a;
@@ -39,6 +41,8 @@ export class TrackSelect extends Scene {
   private listEl:         HTMLElement | null = null;
   private contextMenuEl:  HTMLElement | null = null;
   private dismissFn:      ((e: PointerEvent) => void) | null = null;
+  private communityTracks: CommunityTrackMeta[] = [];
+  private communityLoaded  = false;
 
   constructor() { super('TrackSelect'); }
 
@@ -133,7 +137,11 @@ export class TrackSelect extends Scene {
 
       this.chromeHits.push({
         x: tx, y: tabY, w: tabW, h: TAB_H,
-        action: () => { this.activeTab = tab.id; this.buildList(); },
+        action: () => {
+          if (tab.id === 'community' && this.activeTab !== 'community') this.communityLoaded = false;
+          this.activeTab = tab.id;
+          this.buildList();
+        },
       });
     });
 
@@ -161,15 +169,38 @@ export class TrackSelect extends Scene {
       'box-sizing:border-box',
     ].join(';');
 
-    if (this.activeTab !== 'standard') {
+    if (this.activeTab === 'standard') {
+      for (const track of STANDARD_TRACKS) {
+        el.appendChild(this.buildCard(track));
+      }
+    } else if (this.activeTab === 'community') {
+      if (!this.communityLoaded) {
+        const msg = document.createElement('div');
+        msg.textContent = 'Loading…';
+        msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:80px;';
+        el.appendChild(msg);
+        fetchCommunityTracks().then(tracks => {
+          this.communityTracks  = tracks;
+          this.communityLoaded  = true;
+          this.buildList();
+        }).catch(() => {
+          msg.textContent = 'Failed to load community tracks.';
+        });
+      } else if (this.communityTracks.length === 0) {
+        const msg = document.createElement('div');
+        msg.textContent = 'No community tracks yet.';
+        msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:80px;';
+        el.appendChild(msg);
+      } else {
+        for (const meta of this.communityTracks) {
+          el.appendChild(this.buildCommunityCard(meta));
+        }
+      }
+    } else {
       const msg = document.createElement('div');
       msg.textContent = 'Coming Soon';
       msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:80px;';
       el.appendChild(msg);
-    } else {
-      for (const track of STANDARD_TRACKS) {
-        el.appendChild(this.buildCard(track));
-      }
     }
 
     document.body.appendChild(el);
@@ -247,6 +278,68 @@ export class TrackSelect extends Scene {
       if (!didLongPress) this.scene.start('Game', { trackId: track.id });
       didLongPress = false;
     });
+
+    return card;
+  }
+
+  private buildCommunityCard(meta: CommunityTrackMeta): HTMLElement {
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'display:flex', 'align-items:center', 'gap:12px',
+      'background:#12122a', 'border:1px solid #3a3a6a', 'border-radius:6px',
+      'padding:10px', 'margin-bottom:10px', 'cursor:pointer',
+      '-webkit-tap-highlight-color:rgba(100,100,200,0.2)',
+      'user-select:none', '-webkit-user-select:none',
+    ].join(';');
+
+    // Placeholder thumbnail (no pieces yet — drawn after fetch)
+    const canvas  = document.createElement('canvas');
+    canvas.width  = THUMB_W;
+    canvas.height = THUMB_H;
+    canvas.style.cssText = 'flex-shrink:0;border:1px solid #3a3a6a;border-radius:3px;background:#0a0a16;';
+
+    const info = document.createElement('div');
+    info.style.cssText = 'flex:1;min-width:0;';
+
+    const name = document.createElement('div');
+    name.textContent = meta.name;
+    name.style.cssText = 'font:bold 17px "Arial Black",Arial,sans-serif;color:#e8e8ff;margin-bottom:8px;';
+
+    const author = document.createElement('div');
+    author.textContent = `by ${meta.author}`;
+    author.style.cssText = 'font:13px Arial,sans-serif;color:#6666aa;';
+
+    info.appendChild(name);
+    info.appendChild(author);
+
+    const arrow = document.createElement('div');
+    arrow.textContent = '›';
+    arrow.style.cssText = 'font:28px Arial,sans-serif;color:#5555aa;flex-shrink:0;line-height:1;';
+
+    card.appendChild(canvas);
+    card.appendChild(info);
+    card.appendChild(arrow);
+
+    card.addEventListener('click', () => {
+      arrow.textContent = '…';
+      card.style.opacity = '0.6';
+      card.style.pointerEvents = 'none';
+      fetchCommunityTrack(meta.id)
+        .then(track => { this.scene.start('Game', { track }); })
+        .catch(() => {
+          arrow.textContent = '!';
+          card.style.opacity = '';
+          card.style.pointerEvents = '';
+        });
+    });
+
+    // Fetch full track data in the background to draw the thumbnail.
+    fetchCommunityTrack(meta.id)
+      .then(track => {
+        const ctx = canvas.getContext('2d');
+        if (ctx) this.drawThumbnail(canvas, track);
+      })
+      .catch(() => { /* thumbnail stays blank */ });
 
     return card;
   }
@@ -342,25 +435,15 @@ export class TrackSelect extends Scene {
 
     const b   = trackBounds(track.pieces);
     const pad = 24 * 2;
-    const WL  = b.x - pad,      WT = b.y - pad;
+    const WL  = b.x - pad, WT = b.y - pad;
     const WW  = b.width + pad * 2, WH = b.height + pad * 2;
 
     const scale = Math.min(tw / WW, th / WH);
     const offX  = (tw - WW * scale) / 2;
     const offY  = (th - WH * scale) / 2;
-    const step  = Math.max(2, Math.ceil(1 / scale));
-    const dot   = Math.max(1, Math.ceil(scale));
 
     ctx.fillStyle = '#0a0a16';
     ctx.fillRect(0, 0, tw, th);
-    ctx.fillStyle = '#22cc44';
-
-    for (let wy = WT; wy <= WT + WH; wy += step) {
-      for (let wx = WL; wx <= WL + WW; wx += step) {
-        if (isOnSurface(wx, wy, track.pieces)) {
-          ctx.fillRect(offX + (wx - WL) * scale, offY + (wy - WT) * scale, dot, dot);
-        }
-      }
-    }
+    drawBarriersOnCanvas(ctx, track.pieces, WL, WT, scale, scale, offX, offY, '#33bb55', 1.5);
   }
 }

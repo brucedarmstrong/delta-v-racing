@@ -64,8 +64,65 @@ function checkCorner(lx: number, ly: number, piece: CornerDef): Hit | null {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
+ * Returns true if (wx, wy) penetrates a wall on any piece.
+ * Uses exact piece bounds (no junction-overlap tolerance) so points in open
+ * space just past a piece end are never falsely flagged.
+ */
+export function pointInsideBarrier(wx: number, wy: number, pieces: PlacedPiece[]): boolean {
+  for (const piece of pieces) {
+    const dx = wx - piece.x, dy = wy - piece.y;
+    const maxR = piece.type === 'straight'
+      ? Math.max(STRAIGHT_LEN[(piece as StraightDef).size] / 2, HALF_TRACK) + HALF_TRACK
+      : (piece.type === 'corner' ? TIGHT : BIG).outerR + 20;
+    if (dx * dx + dy * dy > maxR * maxR) continue;
+
+    const [lx, ly] = toLocal(wx, wy, piece);
+
+    if (piece.type === 'straight') {
+      // Exact longitudinal extent — no extra HALF_TRACK tolerance used by physics.
+      const half = STRAIGHT_LEN[(piece as StraightDef).size] / 2;
+      if (Math.abs(ly) > half) continue;
+      if (lx < -HALF_TRACK || lx > HALF_TRACK) return true;
+    } else {
+      const { outerR, innerR } = piece.type === 'corner' ? TIGHT : BIG;
+      const theta = (piece as CornerDef).angle * (Math.PI / 180);
+      const cx = (piece as CornerDef).flip ? -lx : lx;
+      const cy = ly;
+      // Exact angular range — no ±0.05 radian tolerance used by physics.
+      const angle = Math.atan2(-cy, -cx);
+      if (angle < 0 || angle > theta) continue;
+      const dist = Math.sqrt(cx * cx + cy * cy);
+      if (dist < 0.001) continue;
+      if (dist < innerR || dist > outerR) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Returns true if the straight line from (fromWX,fromWY) to (toWX,toWY)
+ * passes through any barrier wall.  Samples every ~6 px along the segment.
+ * A move that stays in open space never triggers this.
+ */
+export function intersectsBarrier(
+  fromWX: number, fromWY: number,
+  toWX:   number, toWY:   number,
+  pieces: PlacedPiece[],
+): boolean {
+  const dx = toWX - fromWX, dy = toWY - fromWY;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len === 0) return pointInsideBarrier(fromWX, fromWY, pieces);
+  const steps = Math.max(1, Math.ceil(len / 6));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    if (pointInsideBarrier(fromWX + dx * t, fromWY + dy * t, pieces)) return true;
+  }
+  return false;
+}
+
+/**
  * Returns true if (wx, wy) in world pixels is on any track piece's driveable surface.
- * Used for turn-based move validation.
+ * Used for rendering (minimap, thumbnails, dot grid) — not for move validation.
  */
 export function isOnSurface(wx: number, wy: number, pieces: PlacedPiece[]): boolean {
   for (const piece of pieces) {
