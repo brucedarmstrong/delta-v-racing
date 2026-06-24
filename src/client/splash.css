@@ -2,9 +2,6 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
-    Arial, sans-serif;
-  color: #000000;
 }
 
 .app {
@@ -14,73 +11,106 @@
   justify-content: center;
   align-items: center;
   height: 100vh;
-  margin: 0;
-  gap: 16px;
+  background: #0a0a16;
+  overflow: hidden;
 }
 
-.snoo {
-  object-fit: contain;
-  width: 50%;
-  max-width: 250px;
-  margin: 0 auto;
+/* Subtle static star field */
+.stars {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(1px 1px at 15%  20%, #ffffff44, transparent),
+    radial-gradient(1px 1px at 72%  8%,  #ffffff33, transparent),
+    radial-gradient(1px 1px at 40%  55%, #ffffff22, transparent),
+    radial-gradient(1px 1px at 88%  40%, #ffffff44, transparent),
+    radial-gradient(1px 1px at 5%   70%, #ffffff33, transparent),
+    radial-gradient(1px 1px at 60%  80%, #ffffff22, transparent),
+    radial-gradient(1px 1px at 30%  90%, #ffffff33, transparent),
+    radial-gradient(1px 1px at 95%  65%, #ffffff44, transparent),
+    radial-gradient(1px 1px at 52%  32%, #ffffff22, transparent),
+    radial-gradient(1px 1px at 78%  88%, #ffffff33, transparent);
+  pointer-events: none;
 }
 
 .content {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  z-index: 1;
+  width: 100%;
+  padding: 16px;
 }
 
-.title {
-  font-size: 1.5em;
-  font-weight: bold;
-  text-align: center;
-}
-
-.description {
-  font-size: 1em;
-  text-align: center;
-  color: #5c6c74;
-}
-
-.code {
-  background-color: #e5ebee;
-  padding: 2px 4px;
-  border-radius: 4px;
-}
-
-.start-button {
-  background-color: #d93900;
-  color: #ffffff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.title-block {
   line-height: 1;
-  border: none;
-  padding: 6px 16px;
-  height: 28px;
-  font-size: 1.1em;
-  border-radius: 12px;
+  text-align: center;
+}
+
+.title-delta {
+  font-family: "Arial Black", Arial, sans-serif;
+  font-size: clamp(28px, 10vw, 52px);
+  font-weight: 900;
+  color: #ffee00;
+  text-shadow:
+    0 0 12px #ff8800,
+    0 0 28px #ff440066,
+    0 2px 4px #000;
+  letter-spacing: 0.06em;
+}
+
+.title-racing {
+  font-family: "Arial Black", Arial, sans-serif;
+  font-size: clamp(14px, 5vw, 26px);
+  font-weight: 900;
+  color: #33ee88;
+  text-shadow:
+    0 0 10px #00ff6644,
+    0 1px 3px #000;
+  letter-spacing: 0.22em;
+  margin-top: 2px;
+}
+
+.tagline {
+  font-family: Arial, sans-serif;
+  font-size: clamp(11px, 3.5vw, 14px);
+  color: #6666aa;
+  letter-spacing: 0.05em;
+  margin-top: 2px;
+}
+
+.username {
+  font-family: Arial, sans-serif;
+  font-size: clamp(11px, 3vw, 13px);
+  color: #9999cc;
+  min-height: 1.4em;
+}
+
+.play-btn {
+  margin-top: 6px;
+  background: #1a1a44;
+  color: #ccddff;
+  border: 1.5px solid #5566cc;
+  border-radius: 8px;
+  padding: 10px 40px;
+  font-family: "Arial Black", Arial, sans-serif;
+  font-size: clamp(14px, 4.5vw, 18px);
+  font-weight: 900;
+  letter-spacing: 0.12em;
   cursor: pointer;
-  transition: background-color 0.2s ease;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  box-shadow: 0 0 12px #334488;
 }
 
-.footer {
-  position: absolute;
-  bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 12px;
-  font-size: 0.8em;
-  color: #666666;
+.play-btn:hover,
+.play-btn:focus {
+  background: #22265a;
+  border-color: #8899ff;
+  box-shadow: 0 0 20px #5566cc88;
+  outline: none;
 }
 
-.docs-link {
-  cursor: pointer;
-}
-
-.divider {
-  color: rgba(0, 0, 0, 0.1);
+.play-btn:active {
+  background: #0f1030;
 }

@@ -1,12 +1,13 @@
 import { Scene, GameObjects } from 'phaser';
 import { buildTrackTexture, drawBarriersOnCanvas } from '../track/TrackCanvasRenderer';
-import { type GhostMove, type GhostData, serializeGhost } from '../track/GhostData';
+import { type GhostMove, type GhostData, serializeGhost, deserializeGhost } from '../track/GhostData';
 import { NEON_GREEN } from '../track/TrackSkin';
 import { TRACK_REGISTRY, type TrackEntry } from '../tracks/trackRegistry';
 import { type PlacedPiece, trackBounds } from '../track/TrackLayout';
 import { intersectsBarrier, pointInsideBarrier } from '../track/TrackCollision';
 import { CORRIDOR } from '../track/TrackGeometry';
 import type { TrackMarker } from '../track/convertGmsTrack';
+import { username, isLoggedIn } from '../devvitContext';
 
 // ── Grid / camera constants ────────────────────────────────────────────────────
 // gridPx is mutable so the debug slider can adjust it at runtime.
@@ -65,7 +66,8 @@ export class Game extends Scene {
 
   // Ghost recording
   private ghostMoves:   GhostMove[]   = [];
-  private currentGhost: GhostData | null = null;
+  private currentGhost:    GhostData | null = null;
+  private personalBest:    GhostData | null = null;
 
   // DOM HUD — immune to Phaser camera zoom/scroll (setScrollFactor(0) only prevents scroll, not zoom)
   private hudDiv:      HTMLElement | null = null;
@@ -166,7 +168,10 @@ export class Game extends Scene {
     this.drawGrid();
     this.ghostMoves   = [];
     this.currentGhost = null;
+    this.personalBest = null;
     this.trailGfx = this.add.graphics().setDepth(3);
+
+    this.fetchPersonalBest();
 
     this.addTrackMarkers();
 
@@ -878,17 +883,23 @@ export class Game extends Scene {
       'background:rgba(0,0,0,0.55)',
     ].join(';');
 
+    const uploadBtn = isLoggedIn
+      ? `<button id="dvr-upload-ghost" style="
+            padding:10px 20px;font:bold 14px Arial,sans-serif;color:#ccddff;
+            background:#1a1a44;border:1px solid #5566cc;border-radius:6px;cursor:pointer;
+          ">Upload Ghost</button>`
+      : `<div style="font:13px Arial,sans-serif;color:#666688;padding:4px 0">
+            Sign in to upload your ghost
+          </div>`;
+
     overlay.innerHTML = `
       <div style="font:bold clamp(28px,8vw,52px) 'Arial Black',Arial,sans-serif;color:#ffee00;
                   text-shadow:0 0 16px #ff8800,0 2px 4px #000;text-align:center;line-height:1.2">
         FINISH!
         <div style="font-size:0.55em;color:#ccddff;margin-top:4px">Score: ${scoreStr}</div>
         ${crashStr}
-        <div style="display:flex;gap:10px;justify-content:center;margin-top:16px;flex-wrap:wrap">
-          <button id="dvr-upload-ghost" style="
-            padding:10px 20px;font:bold 14px Arial,sans-serif;color:#ccddff;
-            background:#1a1a44;border:1px solid #5566cc;border-radius:6px;cursor:pointer;
-          ">Upload Ghost</button>
+        <div style="display:flex;gap:10px;justify-content:center;margin-top:16px;flex-wrap:wrap;align-items:center">
+          ${uploadBtn}
           <button id="dvr-play-again" style="
             padding:10px 20px;font:bold 14px Arial,sans-serif;color:#ccffcc;
             background:#0a2a0a;border:1px solid #33aa33;border-radius:6px;cursor:pointer;
@@ -914,6 +925,46 @@ export class Game extends Scene {
     });
   }
 
+  // TEMPORARY: seed fake ghost entries for the current track (Shift+D)
+  private seedDebugGhosts(): void {
+    const trackId = this.trackEntry.id;
+    const fakeGhost = (u: string, score: number) => JSON.stringify({
+      v: 1, trackId, score,
+      startGX: this.gx, startGY: this.gy,
+      moves: [{ gx: this.gx + 1, gy: this.gy, crash: false }],
+    });
+
+    const seed = (u: string, score: number) =>
+      fetch('/api/debug/seed-ghost', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trackId, username: u, score, ghost: fakeGhost(u, score) }),
+      })
+        .then(r => r.json())
+        .then(d => console.log('[debug seed]', d))
+        .catch(e => console.error('[debug seed]', e));
+
+    seed('GhostRacer1', 8.50);
+    seed('SpeedDemon99', 11.20);
+    console.log(`[debug seed] seeding 2 fake ghosts for ${trackId}…`);
+  }
+
+  private fetchPersonalBest(): void {
+    if (!isLoggedIn) return;
+    const { id: trackId } = this.trackEntry;
+    fetch(`/api/ghost/${encodeURIComponent(trackId)}/${encodeURIComponent(username)}`)
+      .then(async (res) => {
+        if (res.status === 404) return; // no personal best yet
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json() as { ghost: string };
+        this.personalBest = deserializeGhost(data.ghost);
+        // TEMPORARY: log the move list for API verification
+        console.log(`[personal best] ${trackId} score=${this.personalBest.score.toFixed(2)} moves=${this.personalBest.moves.length}`);
+        console.log('[personal best] moves:', JSON.stringify(this.personalBest.moves));
+      })
+      .catch((err) => console.warn('[personal best fetch]', err));
+  }
+
   private uploadGhost(): void {
     if (!this.currentGhost) return;
 
@@ -937,11 +988,62 @@ export class Game extends Scene {
         const data = await res.json() as { rank?: number };
         const rankStr = data.rank ? ` (#${data.rank})` : '';
         if (btn) btn.textContent = `Uploaded!${rankStr}`;
+        // Fetch leaderboard and show it below the buttons.
+        this.showLeaderboard(ghost.trackId);
       })
       .catch((err) => {
         console.error('[ghost upload]', err);
         if (btn) { btn.textContent = 'Upload failed'; btn.disabled = false; }
       });
+  }
+
+  private showLeaderboard(trackId: string): void {
+    fetch(`/api/leaderboard/${encodeURIComponent(trackId)}`)
+      .then(async (res) => {
+        if (!res.ok) return;
+        const data = await res.json() as { entries?: { username: string; score: number }[] };
+        const entries = data.entries ?? [];
+        if (!entries.length || !this.finishOverlayEl) return;
+
+        const lb = document.createElement('div');
+        lb.style.cssText = [
+          'margin-top:14px', 'background:#10101e', 'border:1px solid #333366',
+          'border-radius:6px', 'padding:10px 14px', 'min-width:180px',
+          'font:13px monospace', 'color:#8888cc', 'text-align:left',
+        ].join(';');
+
+        const title = document.createElement('div');
+        title.textContent = 'Leaderboard';
+        title.style.cssText = 'color:#aaaaff;font-weight:bold;margin-bottom:6px;font-family:Arial,sans-serif;';
+        lb.appendChild(title);
+
+        entries.slice(0, 10).forEach((e, i) => {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;justify-content:space-between;gap:12px;padding:2px 0;';
+          const place = document.createElement('span');
+          place.textContent = `#${i + 1} ${e.username}`;
+          const score = document.createElement('span');
+          score.textContent = e.score.toFixed(2);
+          score.style.color = '#ccddff';
+          row.appendChild(place);
+          row.appendChild(score);
+          lb.appendChild(row);
+        });
+
+        // Insert below the button row inside the finish card.
+        const card = this.finishOverlayEl.firstElementChild;
+        card?.appendChild(lb);
+
+        // TEMPORARY: fetch and log the top ghost to verify download endpoint.
+        if (entries.length > 0) {
+          const top = entries[0];
+          fetch(`/api/ghost/${encodeURIComponent(trackId)}/${encodeURIComponent(top.username)}`)
+            .then(r => r.json())
+            .then(d => console.log('[ghost download]', d))
+            .catch(e => console.error('[ghost download]', e));
+        }
+      })
+      .catch(() => { /* leaderboard is non-critical */ });
   }
 
   private playCrashSound() {
@@ -974,7 +1076,8 @@ export class Game extends Scene {
 
   private hudString(): string {
     const c = this.crashes > 0 ? `  crashes ${this.crashes}` : '';
-    return `turn ${this.turn}${c}`;
+    const u = username ? `  u/${username}` : '';
+    return `turn ${this.turn}${c}${u}`;
   }
 
   // ── Camera framing ────────────────────────────────────────────────────────────
@@ -1264,6 +1367,8 @@ export class Game extends Scene {
         if (this.paused) this.resumeGame();
         else if (!this.won) this.showPause();
       }
+      // TEMPORARY: Shift+D seeds fake ghosts for the current track
+      if (e.key === 'D' && e.shiftKey) this.seedDebugGhosts();
     };
     window.addEventListener('keydown', onKey);
 

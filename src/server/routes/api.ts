@@ -121,15 +121,20 @@ api.post('/ghost', async (c) => {
     return c.json<ErrorResponse>({ status: 'error', message: 'Missing required fields' }, 400);
   }
 
-  // Store the ghost JSON keyed by track + user.
-  await redis.set(`ghost:${trackId}:${username}`, ghost);
-
-  // Update the leaderboard sorted set (lower score = better = lower rank).
+  // Only store ghost and update leaderboard if this beats the existing score.
   const lbKey = `lb:${trackId}`;
-  await redis.zAdd(lbKey, { score, member: username });
+  const existing = await redis.zScore(lbKey, username);
+  const isPersonalBest = existing === undefined || score < existing;
+
+  if (isPersonalBest) {
+    await redis.set(`ghost:${trackId}:${username}`, ghost);
+    await redis.zAdd(lbKey, { score, member: username });
+  }
 
   // Return the player's rank (1-based; lower score wins).
   const rank = await redis.zRank(lbKey, username);
+
+  console.log(`[ghost] ${username} on ${trackId}: score=${score.toFixed(2)} pb=${isPersonalBest} rank=#${(rank ?? 0) + 1} bytes=${ghost.length}`);
 
   return c.json<UploadGhostResponse>({
     type: 'upload_ghost',
@@ -138,6 +143,49 @@ api.post('/ghost', async (c) => {
     score,
     rank: (rank ?? 0) + 1,
   });
+});
+
+// ── DEBUG: seed a ghost without auth (remove before publishing) ───────────────
+
+api.post('/debug/seed-ghost', async (c) => {
+  let body: { trackId: string; username: string; score: number; ghost: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON body' }, 400);
+  }
+
+  const { trackId, username, score, ghost } = body;
+  if (!trackId || !username || typeof score !== 'number' || !ghost) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Missing required fields' }, 400);
+  }
+
+  await redis.set(`ghost:${trackId}:${username}`, ghost);
+  const lbKey = `lb:${trackId}`;
+  await redis.zAdd(lbKey, { score, member: username });
+  const rank = await redis.zRank(lbKey, username);
+
+  console.log(`[debug seed] ${username} on ${trackId}: score=${score.toFixed(2)} rank=#${(rank ?? 0) + 1}`);
+
+  return c.json({ type: 'debug_seed', trackId, username, score, rank: (rank ?? 0) + 1 });
+});
+
+// ── Ghost download ────────────────────────────────────────────────────────────
+
+api.get('/ghost/:trackId/:username', async (c) => {
+  const { trackId, username } = c.req.param();
+  const key = `ghost:${trackId}:${username}`;
+  const raw = await redis.get(key);
+
+  if (!raw) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Ghost not found' }, 404);
+  }
+
+  // TEMPORARY: log the full ghost contents for verification
+  console.log(`[ghost download] key=${key} bytes=${raw.length}`);
+  console.log(`[ghost download] contents=${raw}`);
+
+  return c.json({ type: 'ghost', trackId, username, ghost: raw });
 });
 
 // ── Track upload / community ──────────────────────────────────────────────────

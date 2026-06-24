@@ -1,30 +1,13 @@
-import { navigateTo, context, requestExpandedMode } from '@devvit/web/client';
+import { requestExpandedMode } from '@devvit/web/client';
+import { username } from './devvitContext';
 
-const docsLink = document.getElementById('docs-link') as HTMLDivElement;
-const playtestLink = document.getElementById('playtest-link') as HTMLDivElement;
-const discordLink = document.getElementById('discord-link') as HTMLDivElement;
-const startButton = document.getElementById('start-button') as HTMLButtonElement;
+const usernameEl = document.getElementById('username') as HTMLDivElement;
+const playBtn    = document.getElementById('play-btn')  as HTMLButtonElement;
 
-startButton.addEventListener('click', (e) => {
-  requestExpandedMode(e, 'game');
-});
-
-docsLink.addEventListener('click', () => {
-  navigateTo('https://developers.reddit.com/docs');
-});
-
-playtestLink.addEventListener('click', () => {
-  navigateTo('https://www.reddit.com/r/Devvit');
-});
-
-discordLink.addEventListener('click', () => {
-  navigateTo('https://discord.com/invite/R7yu2wh9Qz');
-});
-
-const titleElement = document.getElementById('title') as HTMLHeadingElement;
-
-function init() {
-  titleElement.textContent = `Hey ${context.username ?? 'user'} 👋`;
+if (username) {
+  usernameEl.textContent = `u/${username}`;
 }
 
-init();
+playBtn.addEventListener('click', (e) => {
+  requestExpandedMode(e, 'game');
+});
