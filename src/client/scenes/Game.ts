@@ -8,11 +8,30 @@ import { intersectsBarrier, pointInsideBarrier } from '../track/TrackCollision';
 import { CORRIDOR } from '../track/TrackGeometry';
 import type { TrackMarker } from '../track/convertGmsTrack';
 import { username, isLoggedIn } from '../devvitContext';
+import { fetchOrGenerateAiGhost, generateAndUploadAiGhosts } from '../track/AiGhost';
 
 // ── Grid / camera constants ────────────────────────────────────────────────────
 // gridPx is mutable so the debug slider can adjust it at runtime.
 // pickR is always floor(gridPx/2)-1, guaranteeing no circle overlap.
 let gridPx = 24;
+
+// Tint + trail colour assigned to each racing ghost slot (up to 3).
+const GHOST_COLORS = [
+  { tint: 0x44aaff, trail: 0x44dddd }, // cyan-blue
+  { tint: 0xffaa33, trail: 0xff9933 }, // amber
+  { tint: 0xcc55ff, trail: 0xaa44cc }, // violet
+] as const;
+
+type GhostState = {
+  data:      GhostData;
+  carImg:    GameObjects.Image;
+  trailGfx:  GameObjects.Graphics;
+  gx:        number;
+  gy:        number;
+  moveIdx:   number;
+  tint:      number;
+  trailTint: number;
+};
 
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 5.0;
@@ -65,9 +84,12 @@ export class Game extends Scene {
   private trailGfx!: GameObjects.Graphics;
 
   // Ghost recording
-  private ghostMoves:   GhostMove[]   = [];
-  private currentGhost:    GhostData | null = null;
-  private personalBest:    GhostData | null = null;
+  private ghostMoves:   GhostMove[] = [];
+  private currentGhost: GhostData | null = null;
+
+  // Ghost playback — one entry per racing opponent, up to 3.
+  private ghostStates:   GhostState[] = [];
+  private pendingGhosts: GhostData[] | null = null; // set by init(), consumed by createInner()
 
   // DOM HUD — immune to Phaser camera zoom/scroll (setScrollFactor(0) only prevents scroll, not zoom)
   private hudDiv:      HTMLElement | null = null;
@@ -107,7 +129,7 @@ export class Game extends Scene {
 
   constructor() { super('Game'); }
 
-  init(data?: { trackId?: string; track?: TrackEntry }) {
+  init(data?: { trackId?: string; track?: TrackEntry; ghosts?: GhostData[] }) {
     let entry: TrackEntry;
     if (data?.track) {
       entry = data.track;
@@ -122,6 +144,7 @@ export class Game extends Scene {
     this.trackMarkers = entry.markers;
     this.startWX      = entry.startX;
     this.startWY      = entry.startY;
+    this.pendingGhosts = data?.ghosts ?? null;
   }
 
   preload() {
@@ -168,15 +191,20 @@ export class Game extends Scene {
     this.drawGrid();
     this.ghostMoves   = [];
     this.currentGhost = null;
-    this.personalBest = null;
+    this.ghostStates  = [];
     this.trailGfx = this.add.graphics().setDepth(3);
-
-    this.fetchPersonalBest();
-
-    this.addTrackMarkers();
 
     this.makeSpark();
     this.makeCarTexture();
+    this.makeGhostTextures();
+
+    if (this.pendingGhosts) {
+      this.initGhosts(this.pendingGhosts);
+    } else {
+      this.fetchPersonalBest();
+    }
+
+    this.addTrackMarkers();
 
     const startWX = this.gx * gridPx;
     const startWY = this.gy * gridPx;
@@ -393,12 +421,27 @@ export class Game extends Scene {
           }
         }
 
-        // Car dot
+        // Ghost dots (drawn first so player dot renders on top)
+        for (const state of this.ghostStates) {
+          if (!state.carImg.visible) continue;
+          const gx  = (state.carImg.x - this.mmWL) / this.mmWW * this.mmW;
+          const gy  = (state.carImg.y - this.mmWT) / this.mmWH * this.mmH;
+          const css = '#' + state.trailTint.toString(16).padStart(6, '0');
+          ctx.beginPath();
+          ctx.arc(gx, gy, 4, 0, Math.PI * 2);
+          ctx.fillStyle   = css;
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+          ctx.lineWidth   = 1;
+          ctx.stroke();
+        }
+
+        // Player dot (magenta, slightly larger so it reads on top)
         const dotX = (this.carImg.x - this.mmWL) / this.mmWW * this.mmW;
         const dotY = (this.carImg.y - this.mmWT) / this.mmWH * this.mmH;
         ctx.beginPath();
         ctx.arc(dotX, dotY, 6, 0, Math.PI * 2);
-        ctx.fillStyle   = '#ff2222';
+        ctx.fillStyle   = '#ff33ff';
         ctx.fill();
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth   = 1.5;
@@ -476,6 +519,7 @@ export class Game extends Scene {
         this.velY = newVY;
         this.turn++;
         this.updateHud();
+        this.advanceGhosts();
 
         this.checkMarkerCrossing();
         if (this.won) return;
@@ -619,6 +663,7 @@ export class Game extends Scene {
               this.velY = 0;
               this.carImg.setAlpha(1);
               this.crashing = false;
+              this.advanceGhosts();
               this.checkMarkerCrossing();
               if (!this.won) this.framePicker();
             },
@@ -852,9 +897,6 @@ export class Game extends Scene {
     this.velGfx.clear();
     this.pickGfx.clear();
 
-    // Score = turns + crash penalty + finesse fraction (0–0.99).
-    // Crashes already consumed one turn each; this adds a second penalty turn per crash.
-    // Finesse = parameter t at which the finishing move first crosses the gate (higher = better).
     const finesse = this.findFinishContactFraction(
       this.moveFromWX, this.moveFromWY,
       this.moveToWX,   this.moveToWY,
@@ -862,67 +904,146 @@ export class Game extends Scene {
     const score    = this.turn + this.crashes + Math.min(finesse, 0.99);
     const scoreStr = score.toFixed(2);
 
-    // Assemble ghost for upload.
     this.currentGhost = {
-      v:       1,
-      trackId: this.trackEntry.id,
+      v:          1,
+      trackId:    this.trackEntry.id,
       score,
-      startGX: Math.round(this.startWX / gridPx),
-      startGY: Math.round(this.startWY / gridPx),
-      moves:   [...this.ghostMoves],
+      startGX:    Math.round(this.startWX / gridPx),
+      startGY:    Math.round(this.startWY / gridPx),
+      moves:      [...this.ghostMoves],
+      author:     username || undefined,
+      recordedAt: Date.now(),
     };
 
-    const crashStr = this.crashes > 0
-      ? `<div style="font-size:0.6em;margin-top:6px;color:#ffaa44">${this.crashes} crash${this.crashes > 1 ? 'es' : ''}</div>`
-      : '';
-
+    // ── Overlay shell ─────────────────────────────────────────────────────────
     const overlay = document.createElement('div');
     overlay.style.cssText = [
       'position:fixed', 'inset:0', 'z-index:1002',
-      'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
-      'background:rgba(0,0,0,0.55)',
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'background:rgba(0,0,0,0.6)', 'overflow-y:auto', 'padding:16px',
+      'box-sizing:border-box',
     ].join(';');
 
-    const uploadBtn = isLoggedIn
-      ? `<button id="dvr-upload-ghost" style="
-            padding:10px 20px;font:bold 14px Arial,sans-serif;color:#ccddff;
-            background:#1a1a44;border:1px solid #5566cc;border-radius:6px;cursor:pointer;
-          ">Upload Ghost</button>`
-      : `<div style="font:13px Arial,sans-serif;color:#666688;padding:4px 0">
-            Sign in to upload your ghost
-          </div>`;
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'background:#0d0d1e', 'border:1.5px solid #444488', 'border-radius:10px',
+      'padding:18px 16px 14px', 'width:min(340px,100%)',
+      'display:flex', 'flex-direction:column', 'gap:10px',
+      'box-shadow:0 8px 32px rgba(0,0,0,0.7)',
+    ].join(';');
 
-    overlay.innerHTML = `
-      <div style="font:bold clamp(28px,8vw,52px) 'Arial Black',Arial,sans-serif;color:#ffee00;
-                  text-shadow:0 0 16px #ff8800,0 2px 4px #000;text-align:center;line-height:1.2">
-        FINISH!
-        <div style="font-size:0.55em;color:#ccddff;margin-top:4px">Score: ${scoreStr}</div>
-        ${crashStr}
-        <div style="display:flex;gap:10px;justify-content:center;margin-top:16px;flex-wrap:wrap;align-items:center">
-          ${uploadBtn}
-          <button id="dvr-play-again" style="
-            padding:10px 20px;font:bold 14px Arial,sans-serif;color:#ccffcc;
-            background:#0a2a0a;border:1px solid #33aa33;border-radius:6px;cursor:pointer;
-          ">Play Again</button>
-          <button id="dvr-exit" style="
-            padding:10px 20px;font:bold 14px Arial,sans-serif;color:#aaaacc;
-            background:#1a1a2a;border:1px solid #444466;border-radius:6px;cursor:pointer;
-          ">Exit</button>
-        </div>
-      </div>`;
+    // Score header
+    const scoreHeader = document.createElement('div');
+    scoreHeader.style.cssText = 'text-align:center;';
+    const finishTitle = document.createElement('div');
+    finishTitle.style.cssText = "font:bold clamp(26px,7vw,44px) 'Arial Black',Arial,sans-serif;color:#ffee00;text-shadow:0 0 16px #ff8800,0 2px 4px #000;line-height:1.1;";
+    finishTitle.textContent = 'FINISH!';
+    const scoreLabel = document.createElement('div');
+    scoreLabel.style.cssText = 'font:bold clamp(14px,4vw,20px) Arial,sans-serif;color:#ccddff;margin-top:4px;';
+    scoreLabel.textContent = `Score: ${scoreStr}`;
+    scoreHeader.appendChild(finishTitle);
+    scoreHeader.appendChild(scoreLabel);
+    if (this.crashes > 0) {
+      const crashLabel = document.createElement('div');
+      crashLabel.style.cssText = 'font:13px Arial,sans-serif;color:#ffaa44;margin-top:2px;';
+      crashLabel.textContent = `${this.crashes} crash${this.crashes > 1 ? 'es' : ''}`;
+      scoreHeader.appendChild(crashLabel);
+    }
+    card.appendChild(scoreHeader);
 
+    // Upload status row (logged-in only)
+    let statusEl: HTMLElement | null = null;
+    if (isLoggedIn) {
+      statusEl = document.createElement('div');
+      statusEl.style.cssText = 'font:13px Arial,sans-serif;color:#8899cc;text-align:center;min-height:1.4em;';
+      statusEl.textContent = 'Uploading…';
+      card.appendChild(statusEl);
+    }
+
+    // Swappable content area (race results ↔ all-time leaderboard)
+    const contentEl = document.createElement('div');
+    card.appendChild(contentEl);
+
+    // Persistent action buttons
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:10px;justify-content:center;margin-top:4px;flex-wrap:wrap;';
+
+    const makeBtn = (label: string, fg: string, bg: string, border: string) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = `padding:10px 20px;font:bold 14px Arial,sans-serif;color:${fg};background:${bg};border:1px solid ${border};border-radius:6px;cursor:pointer;`;
+      return b;
+    };
+
+    const playAgainBtn = makeBtn('Play Again', '#ccffcc', '#0a2a0a', '#33aa33');
+    playAgainBtn.addEventListener('click', () => {
+      overlay.remove(); this.finishOverlayEl = null;
+      this.scene.start('Game', { trackId: this.trackEntry.id });
+    });
+    const exitBtn = makeBtn('Exit', '#aaaacc', '#1a1a2a', '#444466');
+    exitBtn.addEventListener('click', () => {
+      overlay.remove(); this.finishOverlayEl = null;
+      this.scene.start('TrackSelect');
+    });
+    const viewBtn = makeBtn('View Track', '#aaccff', '#0a1828', '#334466');
+    viewBtn.addEventListener('click', () => {
+      const prevZoom = this.cameras.main.zoom;
+      const prevX    = this.cameras.main.worldView.centerX;
+      const prevY    = this.cameras.main.worldView.centerY;
+
+      card.style.display = 'none';
+      this.zoomToFitTrack();
+
+      const backBtn = document.createElement('button');
+      backBtn.textContent = '‹ Results';
+      backBtn.style.cssText = [
+        'position:fixed', 'bottom:20px', 'left:50%', 'transform:translateX(-50%)',
+        'padding:10px 24px', 'font:bold 14px Arial,sans-serif',
+        'color:#aaccff', 'background:rgba(10,24,40,0.92)', 'border:1px solid #334466',
+        'border-radius:6px', 'cursor:pointer', 'z-index:1003',
+      ].join(';');
+      backBtn.addEventListener('click', () => {
+        backBtn.remove();
+        card.style.display = '';
+        const cam   = this.cameras.main;
+        const proxy = { x: cam.worldView.centerX, y: cam.worldView.centerY, zoom: cam.zoom };
+        this.tweens.add({
+          targets: proxy, x: prevX, y: prevY, zoom: prevZoom,
+          duration: 500, ease: 'Quad.easeInOut',
+          onUpdate: () => { cam.setZoom(proxy.zoom); cam.centerOn(proxy.x, proxy.y); },
+        });
+      });
+      overlay.appendChild(backBtn);
+    });
+    actions.appendChild(playAgainBtn);
+    actions.appendChild(exitBtn);
+    actions.appendChild(viewBtn);
+    card.appendChild(actions);
+
+    overlay.appendChild(card);
     document.body.appendChild(overlay);
     this.finishOverlayEl = overlay;
 
-    overlay.querySelector('#dvr-upload-ghost')?.addEventListener('click', () => this.uploadGhost());
-    overlay.querySelector('#dvr-play-again')?.addEventListener('click',  () => {
-      this.finishOverlayEl?.remove(); this.finishOverlayEl = null;
-      this.scene.start('Game', { trackId: this.trackEntry.id });
-    });
-    overlay.querySelector('#dvr-exit')?.addEventListener('click', () => {
-      this.finishOverlayEl?.remove(); this.finishOverlayEl = null;
-      this.scene.start('TrackSelect');
-    });
+    this.renderRaceResults(contentEl, score);
+
+    if (isLoggedIn) {
+      this.uploadGhost(statusEl);
+    }
+  }
+
+  // TEMPORARY: remove fake ghost entries for the current track (Shift+X)
+  private cleanupDebugGhosts(): void {
+    const trackId = this.trackEntry.id;
+    const DEBUG_USERS = ['GhostRacer1', 'SpeedDemon99'];
+    for (const u of DEBUG_USERS) {
+      fetch(`/api/debug/ghost/${encodeURIComponent(trackId)}/${encodeURIComponent(u)}`, {
+        method: 'DELETE',
+      })
+        .then(r => r.json())
+        .then(d => console.log('[debug delete]', d))
+        .catch(e => console.error('[debug delete]', e));
+    }
+    console.log(`[debug cleanup] removing ${DEBUG_USERS.join(', ')} from ${trackId}…`);
   }
 
   // TEMPORARY: seed fake ghost entries for the current track (Shift+D)
@@ -950,100 +1071,293 @@ export class Game extends Scene {
   }
 
   private fetchPersonalBest(): void {
-    if (!isLoggedIn) return;
+    if (!isLoggedIn) {
+      this.fetchAiGhostFallback();
+      return;
+    }
     const { id: trackId } = this.trackEntry;
     fetch(`/api/ghost/${encodeURIComponent(trackId)}/${encodeURIComponent(username)}`)
       .then(async (res) => {
-        if (res.status === 404) return; // no personal best yet
+        if (res.status === 404) { this.fetchAiGhostFallback(); return; }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json() as { ghost: string };
-        this.personalBest = deserializeGhost(data.ghost);
-        // TEMPORARY: log the move list for API verification
-        console.log(`[personal best] ${trackId} score=${this.personalBest.score.toFixed(2)} moves=${this.personalBest.moves.length}`);
-        console.log('[personal best] moves:', JSON.stringify(this.personalBest.moves));
+        this.initGhosts([deserializeGhost(data.ghost)]);
       })
       .catch((err) => console.warn('[personal best fetch]', err));
   }
 
-  private uploadGhost(): void {
+  private fetchAiGhostFallback(): void {
+    fetchOrGenerateAiGhost(this.trackEntry.id, 'skilled', this.trackEntry, gridPx)
+      .then((ghost) => {
+        if (!ghost || this.ghostStates.length > 0) return;
+        this.initGhosts([ghost]);
+      })
+      .catch((err) => console.warn('[ai ghost fallback]', err));
+  }
+
+  private initGhosts(ghosts: GhostData[]): void {
+    for (let i = 0; i < Math.min(ghosts.length, 3); i++) {
+      const ghost = ghosts[i];
+      const { tint, trail } = GHOST_COLORS[i];
+
+      const carImg = this.add.image(
+        ghost.startGX * gridPx,
+        ghost.startGY * gridPx,
+        `ghost-car-${i}`,
+      ).setAngle(90).setDepth(9).setAlpha(0.55);
+
+      const trailGfx = this.add.graphics().setDepth(2);
+
+      const state: GhostState = {
+        data: ghost, carImg, trailGfx,
+        gx: ghost.startGX, gy: ghost.startGY,
+        moveIdx: 0, tint, trailTint: trail,
+      };
+
+      // Fast-forward silently if the ghost loaded after the player already moved.
+      for (let j = 0; j < this.turn; j++) this.stepGhostState(state, true);
+
+      this.ghostStates.push(state);
+    }
+  }
+
+  private advanceGhosts(): void {
+    for (const state of this.ghostStates) this.stepGhostState(state, false);
+  }
+
+  private stepGhostState(state: GhostState, silent: boolean): void {
+    if (state.moveIdx >= state.data.moves.length) {
+      state.carImg.setVisible(false);
+      return;
+    }
+
+    const move   = state.data.moves[state.moveIdx];
+    const fromGX = state.gx;
+    const fromGY = state.gy;
+    state.moveIdx++;
+
+    if (!move.crash) {
+      if (!silent) {
+        state.trailGfx.lineStyle(2, state.trailTint, 0.45);
+        state.trailGfx.beginPath();
+        state.trailGfx.moveTo(fromGX * gridPx, fromGY * gridPx);
+        state.trailGfx.lineTo(move.gx * gridPx, move.gy * gridPx);
+        state.trailGfx.strokePath();
+        state.trailGfx.fillStyle(state.trailTint, 0.55);
+        state.trailGfx.fillCircle(fromGX * gridPx, fromGY * gridPx, 3);
+      }
+
+      state.gx = move.gx;
+      state.gy = move.gy;
+
+      const dx = move.gx - fromGX, dy = move.gy - fromGY;
+      if (dx !== 0 || dy !== 0) {
+        state.carImg.setAngle(Math.atan2(dx, -dy) * (180 / Math.PI));
+      }
+
+      if (!silent) {
+        this.tweens.add({
+          targets:  state.carImg,
+          x:        state.gx * gridPx,
+          y:        state.gy * gridPx,
+          duration: 180,
+          ease:     'Quad.easeInOut',
+        });
+      } else {
+        state.carImg.setPosition(state.gx * gridPx, state.gy * gridPx);
+      }
+    } else {
+      // Crash — ghost stays at current position; draw dim trail to the attempted cell.
+      if (!silent) {
+        state.trailGfx.lineStyle(2, 0xff9933, 0.30);
+        state.trailGfx.beginPath();
+        state.trailGfx.moveTo(fromGX * gridPx, fromGY * gridPx);
+        state.trailGfx.lineTo(move.gx * gridPx, move.gy * gridPx);
+        state.trailGfx.strokePath();
+      }
+      // state.gx/gy unchanged — ghost returns to safe position just like the real car
+    }
+  }
+
+  private uploadGhost(statusEl: HTMLElement | null): void {
     if (!this.currentGhost) return;
 
-    const btn = this.finishOverlayEl?.querySelector('#dvr-upload-ghost') as HTMLButtonElement | null;
-    if (btn) { btn.textContent = 'Uploading…'; btn.disabled = true; }
+    const setStatus = (msg: string, color = '#8899cc') => {
+      if (statusEl) { statusEl.textContent = msg; statusEl.style.color = color; }
+    };
 
     const ghost = this.currentGhost;
-    const body = JSON.stringify({
-      trackId: ghost.trackId,
-      score:   ghost.score,
-      ghost:   serializeGhost(ghost),
-    });
-
     fetch('/api/ghost', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body,
+      body:    JSON.stringify({ trackId: ghost.trackId, score: ghost.score, ghost: serializeGhost(ghost) }),
     })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json() as { rank?: number };
-        const rankStr = data.rank ? ` (#${data.rank})` : '';
-        if (btn) btn.textContent = `Uploaded!${rankStr}`;
-        // Fetch leaderboard and show it below the buttons.
-        this.showLeaderboard(ghost.trackId);
+        const data = await res.json() as { rank?: number; isPB?: boolean; previousBest?: number };
+        if (data.isPB) {
+          const label = data.previousBest === undefined ? 'Uploaded!' : 'New Personal Best!';
+          setStatus(`${label} · Rank #${data.rank ?? '?'}`, '#88ccff');
+        } else {
+          setStatus(`Your best: ${data.previousBest!.toFixed(2)} · Rank #${data.rank ?? '?'}`, '#8899cc');
+        }
       })
       .catch((err) => {
         console.error('[ghost upload]', err);
-        if (btn) { btn.textContent = 'Upload failed'; btn.disabled = false; }
+        setStatus('Upload failed', '#ff6655');
       });
   }
 
-  private showLeaderboard(trackId: string): void {
-    fetch(`/api/leaderboard/${encodeURIComponent(trackId)}`)
+  private renderRaceResults(container: HTMLElement, playerScore: number): void {
+    const ghostLabel = (author: string | undefined, slotIdx: number): string => {
+      if (!author) return `Ghost ${slotIdx + 1}`;
+      // Normalise old server-stored format [AI:skilled] → [bot] Skilled
+      const aiMatch = author.match(/^\[AI:(\w+)\]$/);
+      if (aiMatch) {
+        const s = aiMatch[1];
+        return `[bot] ${s.charAt(0).toUpperCase()}${s.slice(1)}`;
+      }
+      // Player's own PB ghost — distinguish from their live result
+      if (author === username) return `${author} Ghost`;
+      return author;
+    };
+
+    type Racer = { label: string; score: number; isPlayer: boolean };
+    const racers: Racer[] = [
+      { label: username || 'You', score: playerScore, isPlayer: true },
+      ...this.ghostStates.map((s, i) => ({
+        label:    ghostLabel(s.data.author, i),
+        score:    s.data.score,
+        isPlayer: false,
+      })),
+    ].sort((a, b) => a.score - b.score);
+
+    container.innerHTML = '';
+
+    const title = document.createElement('div');
+    title.textContent = 'THIS RACE';
+    title.style.cssText = 'font:bold 11px Arial,sans-serif;color:#666699;letter-spacing:0.1em;margin-bottom:6px;';
+    container.appendChild(title);
+
+    const MEDALS = ['🥇', '🥈', '🥉', '  '];
+    racers.forEach((r, i) => {
+      const row = document.createElement('div');
+      row.style.cssText = [
+        'display:flex', 'align-items:baseline', 'gap:8px',
+        'padding:4px 6px', 'border-radius:4px', 'font:14px monospace',
+        r.isPlayer ? 'background:rgba(68,136,255,0.15)' : '',
+      ].join(';');
+
+      const medal = document.createElement('span');
+      medal.textContent = MEDALS[Math.min(i, MEDALS.length - 1)];
+      medal.style.cssText = 'width:1.6em;text-align:center;flex-shrink:0;';
+
+      const name = document.createElement('span');
+      name.textContent = r.label;
+      name.style.cssText = `flex:1;color:${r.isPlayer ? '#88ccff' : '#aaaacc'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+
+      const scoreEl = document.createElement('span');
+      scoreEl.textContent = r.score.toFixed(2);
+      scoreEl.style.cssText = `color:${r.isPlayer ? '#aaddff' : '#888899'};flex-shrink:0;`;
+
+      row.appendChild(medal);
+      row.appendChild(name);
+      row.appendChild(scoreEl);
+      container.appendChild(row);
+    });
+
+    const lbBtn = document.createElement('button');
+    lbBtn.textContent = 'All-Time Leaderboard ›';
+    lbBtn.style.cssText = [
+      'margin-top:12px', 'width:100%', 'padding:8px',
+      'background:transparent', 'border:1px solid #333366', 'border-radius:5px',
+      'color:#6666aa', 'font:13px Arial,sans-serif', 'cursor:pointer',
+    ].join(';');
+    lbBtn.addEventListener('click', () => this.switchToLeaderboard(container));
+    container.appendChild(lbBtn);
+  }
+
+  private switchToLeaderboard(container: HTMLElement): void {
+    container.innerHTML = '<div style="text-align:center;color:#555588;padding:16px;font:14px Arial">Loading…</div>';
+
+    const trackId = this.trackEntry.id;
+    const url = isLoggedIn
+      ? `/api/leaderboard/${encodeURIComponent(trackId)}/around/${encodeURIComponent(username)}?above=3&below=3`
+      : `/api/leaderboard/${encodeURIComponent(trackId)}?limit=10`;
+
+    fetch(url)
       .then(async (res) => {
-        if (!res.ok) return;
-        const data = await res.json() as { entries?: { username: string; score: number }[] };
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json() as {
+          entries?: Array<{ username: string; score: number; rank?: number; isMe?: boolean }>;
+          total?: number;
+        };
         const entries = data.entries ?? [];
-        if (!entries.length || !this.finishOverlayEl) return;
+        container.innerHTML = '';
 
-        const lb = document.createElement('div');
-        lb.style.cssText = [
-          'margin-top:14px', 'background:#10101e', 'border:1px solid #333366',
-          'border-radius:6px', 'padding:10px 14px', 'min-width:180px',
-          'font:13px monospace', 'color:#8888cc', 'text-align:left',
-        ].join(';');
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;';
+        const headerTitle = document.createElement('span');
+        headerTitle.textContent = 'ALL-TIME';
+        headerTitle.style.cssText = 'font:bold 11px Arial,sans-serif;color:#666699;letter-spacing:0.1em;';
+        header.appendChild(headerTitle);
+        if (data.total != null) {
+          const tot = document.createElement('span');
+          tot.textContent = `${data.total} racers`;
+          tot.style.cssText = 'font:11px Arial,sans-serif;color:#444466;';
+          header.appendChild(tot);
+        }
+        container.appendChild(header);
 
-        const title = document.createElement('div');
-        title.textContent = 'Leaderboard';
-        title.style.cssText = 'color:#aaaaff;font-weight:bold;margin-bottom:6px;font-family:Arial,sans-serif;';
-        lb.appendChild(title);
+        if (entries.length === 0) {
+          const empty = document.createElement('div');
+          empty.textContent = 'No entries yet.';
+          empty.style.cssText = 'color:#555588;font:13px Arial;text-align:center;padding:8px;';
+          container.appendChild(empty);
+        }
 
-        entries.slice(0, 10).forEach((e, i) => {
+        entries.forEach((e, i) => {
+          const rankNum = e.rank ?? (i + 1);
           const row = document.createElement('div');
-          row.style.cssText = 'display:flex;justify-content:space-between;gap:12px;padding:2px 0;';
-          const place = document.createElement('span');
-          place.textContent = `#${i + 1} ${e.username}`;
-          const score = document.createElement('span');
-          score.textContent = e.score.toFixed(2);
-          score.style.color = '#ccddff';
-          row.appendChild(place);
-          row.appendChild(score);
-          lb.appendChild(row);
+          row.style.cssText = [
+            'display:flex', 'gap:8px', 'padding:4px 6px', 'border-radius:4px',
+            'font:14px monospace',
+            e.isMe ? 'background:rgba(68,136,255,0.15)' : '',
+          ].join(';');
+
+          const rankEl = document.createElement('span');
+          rankEl.textContent = `#${rankNum}`;
+          rankEl.style.cssText = 'width:2.5em;flex-shrink:0;color:#555577;';
+
+          const name = document.createElement('span');
+          name.textContent = e.username;
+          name.style.cssText = `flex:1;color:${e.isMe ? '#88ccff' : '#aaaacc'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+
+          const scoreEl = document.createElement('span');
+          scoreEl.textContent = e.score.toFixed(2);
+          scoreEl.style.cssText = `color:${e.isMe ? '#aaddff' : '#888899'};flex-shrink:0;`;
+
+          row.appendChild(rankEl);
+          row.appendChild(name);
+          row.appendChild(scoreEl);
+          container.appendChild(row);
         });
 
-        // Insert below the button row inside the finish card.
-        const card = this.finishOverlayEl.firstElementChild;
-        card?.appendChild(lb);
-
-        // TEMPORARY: fetch and log the top ghost to verify download endpoint.
-        if (entries.length > 0) {
-          const top = entries[0];
-          fetch(`/api/ghost/${encodeURIComponent(trackId)}/${encodeURIComponent(top.username)}`)
-            .then(r => r.json())
-            .then(d => console.log('[ghost download]', d))
-            .catch(e => console.error('[ghost download]', e));
-        }
+        const backBtn = document.createElement('button');
+        backBtn.textContent = '‹ Race Results';
+        backBtn.style.cssText = [
+          'margin-top:12px', 'width:100%', 'padding:8px',
+          'background:transparent', 'border:1px solid #333366', 'border-radius:5px',
+          'color:#6666aa', 'font:13px Arial,sans-serif', 'cursor:pointer',
+        ].join(';');
+        backBtn.addEventListener('click', () => {
+          if (this.currentGhost) this.renderRaceResults(container, this.currentGhost.score);
+        });
+        container.appendChild(backBtn);
       })
-      .catch(() => { /* leaderboard is non-critical */ });
+      .catch(() => {
+        container.innerHTML = '<div style="color:#ff6655;text-align:center;padding:16px;font:13px Arial">Leaderboard unavailable</div>';
+      });
   }
 
   private playCrashSound() {
@@ -1095,6 +1409,26 @@ export class Game extends Scene {
       ease:       'Quad.easeOut',
       onUpdate:   () => cam.centerOn(proxy.x, proxy.y),
       onComplete: () => onComplete?.(),
+    });
+  }
+
+  private zoomToFitTrack(): void {
+    const bounds  = trackBounds(this.trackPieces);
+    const pad     = gridPx * 4;
+    const cam     = this.cameras.main;
+    const zoomX   = cam.width  / (bounds.width  + pad * 2);
+    const zoomY   = cam.height / (bounds.height + pad * 2);
+    const zoom    = Math.min(zoomX, zoomY, 2.5);
+    const cx      = bounds.x + bounds.width  / 2;
+    const cy      = bounds.y + bounds.height / 2;
+    cam.stopFollow();
+    const proxy   = { x: cam.worldView.centerX, y: cam.worldView.centerY, zoom: cam.zoom };
+    this.tweens.add({
+      targets:  proxy,
+      x: cx, y: cy, zoom,
+      duration: 700,
+      ease:     'Quad.easeInOut',
+      onUpdate: () => { cam.setZoom(proxy.zoom); cam.centerOn(proxy.x, proxy.y); },
     });
   }
 
@@ -1180,7 +1514,7 @@ export class Game extends Scene {
   private drawTrailSegment(fromGX: number, fromGY: number, toGX: number, toGY: number, crash: boolean): void {
     const fromWX = fromGX * gridPx, fromWY = fromGY * gridPx;
     const toWX   = toGX   * gridPx, toWY   = toGY   * gridPx;
-    const color  = crash ? 0xff4422 : 0x4488ff;
+    const color  = crash ? 0xff4422 : 0xff33ff;
     const alpha  = crash ? 0.80     : 0.65;
 
     // Segment line
@@ -1290,6 +1624,50 @@ export class Game extends Scene {
     ct.refresh();
   }
 
+  private makeGhostTextures(): void {
+    const HW  = Math.round(gridPx * 0.50);
+    const HH  = Math.round(gridPx * 0.85);
+    const PAD = Math.round(gridPx * 0.45);
+    const W   = (HW + PAD) * 2;
+    const H   = (HH + PAD) * 2;
+    const cx  = W / 2, cy = H / 2;
+
+    GHOST_COLORS.forEach(({ trail }, i) => {
+      const key = `ghost-car-${i}`;
+      const r   = (trail >> 16) & 0xff;
+      const g   = (trail >>  8) & 0xff;
+      const b   =  trail        & 0xff;
+      const css = `rgb(${r},${g},${b})`;
+
+      if (this.textures.exists(key)) this.textures.remove(key);
+      const ct  = this.textures.createCanvas(key, W, H)!;
+      const ctx = ct.getContext();
+
+      ctx.shadowColor = css;
+      ctx.shadowBlur  = 8;
+      ctx.fillStyle   = css;
+      ctx.beginPath();
+      ctx.moveTo(cx,       cy - HH);
+      ctx.lineTo(cx + HW,  cy + HH);
+      ctx.lineTo(cx,       cy + HH * 0.35);
+      ctx.lineTo(cx - HW,  cy + HH);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+      ctx.fillStyle  = 'rgba(255,255,255,0.55)';
+      ctx.beginPath();
+      ctx.moveTo(cx,              cy - HH + 3);
+      ctx.lineTo(cx + HW * 0.45,  cy + HH * 0.2);
+      ctx.lineTo(cx,              cy + HH * 0.1);
+      ctx.lineTo(cx - HW * 0.45,  cy + HH * 0.2);
+      ctx.closePath();
+      ctx.fill();
+
+      ct.refresh();
+    });
+  }
+
   // ── Debug: shift-key slow-motion (temporary) ─────────────────────────────────
 
   private addShiftSlow(): void {
@@ -1367,8 +1745,16 @@ export class Game extends Scene {
         if (this.paused) this.resumeGame();
         else if (!this.won) this.showPause();
       }
-      // TEMPORARY: Shift+D seeds fake ghosts for the current track
+      // TEMPORARY: Shift+D seeds / Shift+X cleans up fake ghosts for the current track
       if (e.key === 'D' && e.shiftKey) this.seedDebugGhosts();
+      if (e.key === 'X' && e.shiftKey) this.cleanupDebugGhosts();
+      // TEMPORARY: Shift+G generates and uploads AI ghosts for the current track
+      if (e.key === 'G' && e.shiftKey) {
+        console.log(`[ai ghosts] generating for ${this.trackEntry.id}…`);
+        generateAndUploadAiGhosts(this.trackEntry, undefined, gridPx)
+          .then(() => console.log(`[ai ghosts] done for ${this.trackEntry.id}`))
+          .catch((err: unknown) => console.error('[ai ghosts]', err));
+      }
     };
     window.addEventListener('keydown', onKey);
 
@@ -1381,6 +1767,8 @@ export class Game extends Scene {
       this.pauseOverlayEl?.remove();
       this.pauseOverlayEl = null;
       this.finishOverlayEl?.remove();
+      for (const s of this.ghostStates) { s.carImg.destroy(); s.trailGfx.destroy(); }
+      this.ghostStates = [];
       this.finishOverlayEl = null;
     });
   }

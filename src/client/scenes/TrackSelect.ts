@@ -3,6 +3,7 @@ import { STANDARD_TRACKS, type TrackEntry } from '../tracks/trackRegistry';
 import { trackBounds } from '../track/TrackLayout';
 import { drawBarriersOnCanvas } from '../track/TrackCanvasRenderer';
 import { fetchCommunityTrack, fetchCommunityTracks } from '../track/TrackUpload';
+import { fetchRaceGhosts } from '../track/RaceGhosts';
 import type { CommunityTrackMeta } from '../../shared/api';
 
 const BG         = 0x0a0a16;
@@ -275,8 +276,14 @@ export class TrackSelect extends Scene {
       this.showContextMenu(track, e.clientX, e.clientY);
     });
     card.addEventListener('click', () => {
-      if (!didLongPress) this.scene.start('Game', { trackId: track.id });
+      if (didLongPress) { didLongPress = false; return; }
       didLongPress = false;
+      arrow.textContent = '…';
+      card.style.opacity = '0.6';
+      card.style.pointerEvents = 'none';
+      fetchRaceGhosts(track.id, track)
+        .then(ghosts  => this.scene.start('Game', { trackId: track.id, ghosts }))
+        .catch(()     => this.scene.start('Game', { trackId: track.id }));
     });
 
     return card;
@@ -325,7 +332,11 @@ export class TrackSelect extends Scene {
       card.style.opacity = '0.6';
       card.style.pointerEvents = 'none';
       fetchCommunityTrack(meta.id)
-        .then(track => { this.scene.start('Game', { track }); })
+        .then(track =>
+          fetchRaceGhosts(meta.id, track)
+            .then(ghosts => this.scene.start('Game', { track, ghosts }))
+            .catch(()    => this.scene.start('Game', { track }))
+        )
         .catch(() => {
           arrow.textContent = '!';
           card.style.opacity = '';

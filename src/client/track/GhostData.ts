@@ -11,6 +11,8 @@ export type GhostData = {
   startGX: number;
   startGY: number;
   moves: GhostMove[];
+  author?: string;      // username at time of recording
+  recordedAt?: number;  // unix ms
 };
 
 export function serializeGhost(g: GhostData): string {
