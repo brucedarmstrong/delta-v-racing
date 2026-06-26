@@ -1,4 +1,5 @@
 import { Scene } from 'phaser';
+import { appVersion } from '../devvitContext';
 
 const BG      = 0x0a0a16;
 const SURFACE = 0x12122a;
@@ -8,9 +9,10 @@ type BtnDef = { label: string; action: () => void };
 type BtnObj = BtnDef & { gfx: Phaser.GameObjects.Graphics; text: Phaser.GameObjects.Text; bx: number; by: number; bw: number; bh: number };
 
 export class ModeSelect extends Scene {
-  private btns:  BtnObj[]                    = [];
-  private title: Phaser.GameObjects.Text    | null = null;
-  private sub:   Phaser.GameObjects.Text    | null = null;
+  private btns:    BtnObj[]                    = [];
+  private title:   Phaser.GameObjects.Text    | null = null;
+  private sub:     Phaser.GameObjects.Text    | null = null;
+  private verText: Phaser.GameObjects.Text    | null = null;
 
   constructor() { super('ModeSelect'); }
 
@@ -45,6 +47,10 @@ export class ModeSelect extends Scene {
       }).setScrollFactor(0).setOrigin(0.5).setDepth(11),
       bx: 0, by: 0, bw: 0, bh: 0,
     }));
+
+    this.verText = this.add.text(0, 0, appVersion, {
+      fontFamily: 'Arial', fontSize: '13px', color: '#555588',
+    }).setScrollFactor(0).setOrigin(0.5).setDepth(10);
 
     this.layout();
     this.scale.on('resize', () => this.layout());
@@ -86,5 +92,8 @@ export class ModeSelect extends Scene {
       btn.text.setPosition(W / 2, by + btnH / 2);
       by += btnH + gap;
     }
+
+    // Version label below the button stack
+    this.verText?.setPosition(W / 2, by + 4);
   }
 }

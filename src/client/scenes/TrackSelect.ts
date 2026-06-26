@@ -2,9 +2,15 @@ import { Scene, GameObjects } from 'phaser';
 import { STANDARD_TRACKS, type TrackEntry } from '../tracks/trackRegistry';
 import { trackBounds } from '../track/TrackLayout';
 import { drawBarriersOnCanvas } from '../track/TrackCanvasRenderer';
-import { fetchCommunityTrack, fetchCommunityTracks } from '../track/TrackUpload';
+import {
+  fetchCommunityTrack, fetchCommunityTracks,
+  fetchMineTrack, fetchMineTracks, deleteMineTrack, publishMineTrack,
+  type TrackPayload,
+} from '../track/TrackUpload';
 import { fetchRaceGhosts } from '../track/RaceGhosts';
-import type { CommunityTrackMeta } from '../../shared/api';
+import { generateAndUploadAiGhosts } from '../track/AiGhost';
+import { isLoggedIn } from '../devvitContext';
+import type { CommunityTrackMeta, MineTrackMeta } from '../../shared/api';
 
 const BG         = 0x0a0a16;
 const SURFACE    = 0x12122a;
@@ -41,11 +47,23 @@ export class TrackSelect extends Scene {
   // DOM list — native scroll, no Phaser zoom/coordinate issues
   private listEl:         HTMLElement | null = null;
   private contextMenuEl:  HTMLElement | null = null;
-  private dismissFn:      ((e: PointerEvent) => void) | null = null;
   private communityTracks: CommunityTrackMeta[] = [];
   private communityLoaded  = false;
+  private mineTracks:      MineTrackMeta[]      = [];
+  private mineLoaded       = false;
 
   constructor() { super('TrackSelect'); }
+
+  init(data?: { activeTab?: Tab }): void {
+    if (data?.activeTab) {
+      this.activeTab = data.activeTab;
+    }
+    // Reset cached lists so switching scenes refreshes data.
+    this.communityLoaded = false;
+    this.mineLoaded      = false;
+    this.mineTracks      = [];
+    this.communityTracks = [];
+  }
 
   create() {
     const cam = this.cameras.main;
@@ -139,7 +157,6 @@ export class TrackSelect extends Scene {
       this.chromeHits.push({
         x: tx, y: tabY, w: tabW, h: TAB_H,
         action: () => {
-          if (tab.id === 'community' && this.activeTab !== 'community') this.communityLoaded = false;
           this.activeTab = tab.id;
           this.layout();
         },
@@ -197,7 +214,36 @@ export class TrackSelect extends Scene {
           el.appendChild(this.buildCommunityCard(meta));
         }
       }
+    } else if (this.activeTab === 'mine') {
+      if (!isLoggedIn) {
+        const msg = document.createElement('div');
+        msg.textContent = 'Log in to save and upload tracks.';
+        msg.style.cssText = 'text-align:center;color:#555588;font:16px Arial;margin-top:80px;padding:0 24px;';
+        el.appendChild(msg);
+      } else if (!this.mineLoaded) {
+        const msg = document.createElement('div');
+        msg.textContent = 'Loading…';
+        msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:80px;';
+        el.appendChild(msg);
+        fetchMineTracks().then(tracks => {
+          this.mineTracks = tracks;
+          this.mineLoaded = true;
+          this.buildList();
+        }).catch(() => {
+          msg.textContent = 'Failed to load your tracks.';
+        });
+      } else if (this.mineTracks.length === 0) {
+        const msg = document.createElement('div');
+        msg.innerHTML = 'No saved tracks yet.<br><br>Tap CREATE to build one!';
+        msg.style.cssText = 'text-align:center;color:#555588;font:16px Arial;margin-top:80px;padding:0 24px;line-height:1.5;';
+        el.appendChild(msg);
+      } else {
+        for (const meta of this.mineTracks) {
+          el.appendChild(this.buildMineCard(meta));
+        }
+      }
     } else {
+      // Daily tab — Coming Soon
       const msg = document.createElement('div');
       msg.textContent = 'Coming Soon';
       msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:80px;';
@@ -249,35 +295,7 @@ export class TrackSelect extends Scene {
     card.appendChild(info);
     card.appendChild(arrow);
 
-    // Long-press detection (500ms) → context menu; short tap → start game
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let startX = 0, startY = 0, didLongPress = false;
-
-    const cancelTimer = () => { if (timer !== null) { clearTimeout(timer); timer = null; } };
-
-    card.addEventListener('pointerdown', (e) => {
-      didLongPress = false;
-      startX = e.clientX; startY = e.clientY;
-      timer = setTimeout(() => {
-        timer = null;
-        didLongPress = true;
-        this.showContextMenu(track, e.clientX, e.clientY);
-      }, 500);
-    });
-    card.addEventListener('pointermove', (e) => {
-      if (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10) cancelTimer();
-    });
-    card.addEventListener('pointerup',     () => cancelTimer());
-    card.addEventListener('pointercancel', () => cancelTimer());
-    card.addEventListener('contextmenu',   (e) => {
-      e.preventDefault();
-      cancelTimer();
-      didLongPress = true;
-      this.showContextMenu(track, e.clientX, e.clientY);
-    });
     card.addEventListener('click', () => {
-      if (didLongPress) { didLongPress = false; return; }
-      didLongPress = false;
       arrow.textContent = '…';
       card.style.opacity = '0.6';
       card.style.pointerEvents = 'none';
@@ -285,6 +303,226 @@ export class TrackSelect extends Scene {
         .then(ghosts  => this.scene.start('Game', { trackId: track.id, ghosts }))
         .catch(()     => this.scene.start('Game', { trackId: track.id }));
     });
+
+    return card;
+  }
+
+  private static ensureSpinStyle(): void {
+    if (document.getElementById('dv-spin-style')) return;
+    const s = document.createElement('style');
+    s.id = 'dv-spin-style';
+    s.textContent = '@keyframes dv-spin{to{transform:rotate(360deg)}}';
+    document.head.appendChild(s);
+  }
+
+  private buildMineCard(meta: MineTrackMeta): HTMLElement {
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'display:flex', 'align-items:flex-start', 'gap:12px',
+      'background:#12122a', 'border:1px solid #3a3a6a', 'border-radius:6px',
+      'padding:10px', 'margin-bottom:10px',
+      'user-select:none', '-webkit-user-select:none',
+    ].join(';');
+
+    // Thumbnail — populated after fetch
+    const canvas  = document.createElement('canvas');
+    canvas.width  = THUMB_W;
+    canvas.height = THUMB_H;
+    canvas.style.cssText = 'flex-shrink:0;border:1px solid #3a3a6a;border-radius:3px;background:#0a0a16;';
+
+    const info = document.createElement('div');
+    info.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;';
+
+    const name = document.createElement('div');
+    name.textContent = meta.name;
+    name.style.cssText = 'font:bold 16px "Arial Black",Arial,sans-serif;color:#e8e8ff;';
+
+    const date = document.createElement('div');
+    const d = new Date(meta.createdAt);
+    date.textContent = `Saved ${d.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' })}`;
+    date.style.cssText = 'font:12px Arial,sans-serif;color:#555588;';
+
+    // Action buttons row
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:6px;';
+
+    const mkBtn = (label: string, clr: string, bg: string, border: string) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = [
+        'flex:1', 'padding:7px 4px',
+        `color:${clr}`, `background:${bg}`, `border:1px solid ${border}`,
+        'border-radius:5px', 'font:bold 12px Arial,sans-serif', 'cursor:pointer',
+        'white-space:nowrap',
+      ].join(';');
+      return b;
+    };
+
+    const playBtn   = mkBtn('▶ Play',   '#88ffaa', '#001a08', '#226633');
+    const editBtn   = mkBtn('✎ Edit',   '#aaaaff', '#0a0a22', '#333366');
+    const deleteBtn = mkBtn('✕ Del',    '#ff8888', '#1a0808', '#663333');
+
+    // Upload button (full-width, below the 3 action buttons)
+    const uploadBtn = document.createElement('button');
+    const isUploaded = !!meta.uploadedId;
+    const canUpload  = meta.verified && !isUploaded;
+
+    uploadBtn.textContent = isUploaded ? '✓ Published'
+      : meta.verified     ? '↑ Upload to Community'
+      :                     '↑ Upload (play first)';
+    uploadBtn.disabled = !canUpload;
+    uploadBtn.style.cssText = [
+      'width:100%', 'padding:8px 4px',
+      `color:${isUploaded ? '#55aa55' : canUpload ? '#88aaff' : '#444466'}`,
+      `background:${isUploaded ? '#0a1a0a' : canUpload ? '#0a0a22' : '#0a0a14'}`,
+      `border:1px solid ${isUploaded ? '#226622' : canUpload ? '#334488' : '#222244'}`,
+      'border-radius:5px', 'font:bold 12px Arial,sans-serif',
+      `cursor:${canUpload ? 'pointer' : 'default'}`,
+    ].join(';');
+
+    btnRow.appendChild(playBtn);
+    btnRow.appendChild(editBtn);
+    btnRow.appendChild(deleteBtn);
+
+    info.appendChild(name);
+    info.appendChild(date);
+    info.appendChild(btnRow);
+    info.appendChild(uploadBtn);
+
+    card.appendChild(canvas);
+    card.appendChild(info);
+
+    // ── Handlers ──
+
+    playBtn.addEventListener('click', () => {
+      playBtn.textContent = '…';
+      playBtn.disabled = true;
+      fetchMineTrack(meta.id)
+        .then(({ meta: m, data }) => {
+          const payload  = JSON.parse(data) as TrackPayload;
+          const entry: TrackEntry = {
+            id:      m.id,
+            name:    m.name,
+            author:  '',
+            startX:  payload.startX,
+            startY:  payload.startY,
+            pieces:  payload.pieces,
+            markers: payload.markers,
+          };
+          this.scene.start('Game', { track: entry, mineTrackId: m.id });
+        })
+        .catch(() => {
+          playBtn.textContent = '▶ Play';
+          playBtn.disabled = false;
+        });
+    });
+
+    editBtn.addEventListener('click', () => {
+      editBtn.textContent = '…';
+      editBtn.disabled = true;
+      fetchMineTrack(meta.id)
+        .then(({ meta: m, data }) => {
+          const payload = JSON.parse(data) as TrackPayload;
+          const entry: TrackEntry = {
+            id:      m.id,
+            name:    m.name,
+            author:  '',
+            startX:  payload.startX,
+            startY:  payload.startY,
+            pieces:  payload.pieces,
+            markers: payload.markers,
+          };
+          this.scene.start('TrackEditor', { mineTrackId: m.id, track: entry, startHeading: payload.startHeading });
+        })
+        .catch(() => {
+          editBtn.textContent = '✎ Edit';
+          editBtn.disabled = false;
+        });
+    });
+
+    deleteBtn.addEventListener('click', () => {
+      if (!confirm(`Delete "${meta.name}"?`)) return;
+      deleteBtn.textContent = '…';
+      deleteBtn.disabled = true;
+      deleteMineTrack(meta.id)
+        .then(() => {
+          this.mineTracks = this.mineTracks.filter(t => t.id !== meta.id);
+          this.buildList();
+        })
+        .catch(() => {
+          deleteBtn.textContent = '✕ Del';
+          deleteBtn.disabled = false;
+        });
+    });
+
+    if (canUpload) {
+      uploadBtn.addEventListener('click', () => {
+        // Lock all card actions while upload is in progress.
+        const cardBtns = [playBtn, editBtn, deleteBtn, uploadBtn];
+        for (const b of cardBtns) b.disabled = true;
+
+        // Replace button content with a CSS spinner.
+        uploadBtn.innerHTML = '';
+        const spinner = document.createElement('span');
+        spinner.style.cssText = [
+          'display:inline-block', 'width:14px', 'height:14px',
+          'border:2px solid #334488', 'border-top-color:#88aaff',
+          'border-radius:50%', 'animation:dv-spin 0.8s linear infinite',
+          'vertical-align:middle',
+        ].join(';');
+        TrackSelect.ensureSpinStyle();
+        uploadBtn.appendChild(spinner);
+
+        const restoreOnError = () => {
+          for (const b of cardBtns) b.disabled = false;
+          uploadBtn.innerHTML = '';
+          uploadBtn.textContent = '↑ Upload to Community';
+        };
+
+        fetchMineTrack(meta.id)
+          .then(async ({ meta: m, data }) => {
+            const payload = JSON.parse(data) as TrackPayload;
+            const entry: TrackEntry = {
+              id:      '',
+              name:    m.name,
+              author:  '',
+              startX:  payload.startX,
+              startY:  payload.startY,
+              pieces:  payload.pieces,
+              markers: payload.markers,
+            };
+            const res = await fetch('/api/track', {
+              method:  'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify({ name: entry.name, data }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json() as { id: string };
+            const communityId = json.id;
+
+            await generateAndUploadAiGhosts({ ...entry, id: communityId }, ['average', 'rookie']);
+            await publishMineTrack(m.id, communityId);
+
+            const idx = this.mineTracks.findIndex(t => t.id === m.id);
+            if (idx !== -1) this.mineTracks[idx] = { ...this.mineTracks[idx], uploadedId: communityId };
+            this.buildList();
+          })
+          .catch(restoreOnError);
+      });
+    }
+
+    // Load thumbnail in background
+    fetchMineTrack(meta.id)
+      .then(({ data }) => {
+        const payload = JSON.parse(data) as TrackPayload;
+        const ctx = canvas.getContext('2d');
+        if (ctx) this.drawThumbnail(canvas, {
+          id: meta.id, name: meta.name, author: '',
+          startX: payload.startX, startY: payload.startY,
+          pieces: payload.pieces, markers: payload.markers,
+        });
+      })
+      .catch(() => { /* thumbnail stays blank */ });
 
     return card;
   }
@@ -355,89 +593,9 @@ export class TrackSelect extends Scene {
     return card;
   }
 
-  private showContextMenu(track: TrackEntry, cx: number, cy: number): void {
-    this.closeContextMenu();
-
-    // Block list clicks while the menu is open so nothing falls through.
-    if (this.listEl) this.listEl.style.pointerEvents = 'none';
-
-    const menuW = 160, menuH = 100;
-    const left  = (cx + menuW > window.innerWidth)  ? cx - menuW : cx;
-    const top   = (cy + menuH > window.innerHeight) ? cy - menuH : cy;
-
-    const menu = document.createElement('div');
-    menu.style.cssText = [
-      'position:fixed',
-      `left:${left}px`, `top:${top}px`,
-      'background:#1a1a36', 'border:1px solid #5555aa', 'border-radius:6px',
-      'overflow:hidden', 'z-index:200', `min-width:${menuW}px`,
-      'box-shadow:0 4px 16px rgba(0,0,0,0.7)',
-    ].join(';');
-
-    const makeBtn = (label: string, color: string, action: () => void) => {
-      const btn = document.createElement('button');
-      btn.textContent = label;
-      btn.style.cssText = [
-        'display:block', 'width:100%', 'padding:14px 16px',
-        `color:${color}`, 'background:transparent', 'border:none',
-        'text-align:left', 'font:14px Arial,sans-serif', 'cursor:pointer',
-      ].join(';');
-      btn.addEventListener('mouseover', () => { btn.style.background = '#2a2a4a'; });
-      btn.addEventListener('mouseout',  () => { btn.style.background = 'transparent'; });
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        this.closeContextMenu();
-        action();
-      });
-      return btn;
-    };
-
-    menu.appendChild(makeBtn('Delete',  '#ff7777', () => this.deleteTrack(track)));
-    menu.appendChild(makeBtn('Upload',  '#88aaff', () => this.uploadTrack(track)));
-
-    document.body.appendChild(menu);
-    this.contextMenuEl = menu;
-
-    const dismiss = (e: PointerEvent) => {
-      if (!menu.contains(e.target as Node)) this.closeContextMenu();
-    };
-    this.dismissFn = dismiss;
-    setTimeout(() => {
-      if (this.dismissFn === dismiss) document.addEventListener('pointerdown', dismiss);
-    }, 50);
-  }
-
   private closeContextMenu(): void {
-    if (this.dismissFn) {
-      document.removeEventListener('pointerdown', this.dismissFn);
-      this.dismissFn = null;
-    }
     this.contextMenuEl?.remove();
     this.contextMenuEl = null;
-    // Restore list interaction after a brief delay to absorb any in-flight events.
-    const el = this.listEl;
-    if (el) setTimeout(() => { el.style.pointerEvents = ''; }, 150);
-  }
-
-  private deleteTrack(track: TrackEntry): void {
-    const idx = STANDARD_TRACKS.findIndex(t => t.id === track.id);
-    if (idx !== -1) STANDARD_TRACKS.splice(idx, 1);
-    this.buildList();
-  }
-
-  private uploadTrack(_track: TrackEntry): void {
-    // TODO: connect to Devvit/Redis backend
-    const toast = document.createElement('div');
-    toast.textContent = 'Upload coming soon';
-    toast.style.cssText = [
-      'position:fixed', 'bottom:32px', 'left:50%', 'transform:translateX(-50%)',
-      'background:#2a2a50', 'border:1px solid #5555aa', 'border-radius:6px',
-      'padding:10px 20px', 'color:#ccccff', 'font:14px Arial,sans-serif',
-      'z-index:300', 'pointer-events:none',
-    ].join(';');
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 2000);
   }
 
   private drawThumbnail(canvas: HTMLCanvasElement, track: TrackEntry): void {

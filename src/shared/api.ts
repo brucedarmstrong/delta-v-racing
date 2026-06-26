@@ -130,3 +130,36 @@ export type CommunityTrackResponse = {
   meta: CommunityTrackMeta;
   data: string; // same format as UploadTrackRequest.data
 };
+
+// ── Mine tracks (user's saved drafts) ────────────────────────────────────────
+
+export type MineTrackMeta = {
+  id:          string;
+  name:        string;
+  createdAt:   number;  // unix ms
+  verified:    boolean; // user completed the track at least once
+  uploadedId?: string;  // community track ID after publishing
+};
+
+export type SaveMineTrackRequest = {
+  id?:  string; // if set, update existing record; omit to create new
+  name: string;
+  data: string; // serialized TrackPayload JSON
+};
+
+export type SaveMineTrackResponse = {
+  type:      'save_mine_track';
+  id:        string;
+  createdAt: number;
+};
+
+export type MineTracksResponse = {
+  type:   'mine_tracks';
+  tracks: MineTrackMeta[];
+};
+
+export type MineTrackResponse = {
+  type: 'mine_track';
+  meta: MineTrackMeta;
+  data: string; // serialized TrackPayload JSON
+};

@@ -114,3 +114,11 @@
 .play-btn:active {
   background: #0f1030;
 }
+
+.build-stamp {
+  font-family: Arial, sans-serif;
+  font-size: 11px;
+  color: #3a3a66;
+  margin-top: 8px;
+  letter-spacing: 0.03em;
+}

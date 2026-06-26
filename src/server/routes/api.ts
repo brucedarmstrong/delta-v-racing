@@ -15,8 +15,13 @@ import type {
   LeaderboardAroundResponse,
   LeaderboardEntry,
   LeaderboardResponse,
+  MineTrackMeta,
+  MineTrackResponse,
+  MineTracksResponse,
   OverallLeaderboardEntry,
   OverallLeaderboardResponse,
+  SaveMineTrackRequest,
+  SaveMineTrackResponse,
   UploadGhostRequest,
   UploadGhostResponse,
   UploadTrackRequest,
@@ -345,6 +350,199 @@ api.get('/track/:id', async (c) => {
   } catch {
     return c.json<ErrorResponse>({ status: 'error', message: 'Corrupt track data' }, 500);
   }
+});
+
+// ── Mine tracks (user drafts, not yet published) ──────────────────────────────
+
+type MineTrackRecord = MineTrackMeta & { author: string; data: string };
+
+api.post('/mine-track', async (c) => {
+  const username = await reddit.getCurrentUsername();
+  if (!username) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+  }
+
+  let body: SaveMineTrackRequest;
+  try {
+    body = await c.req.json<SaveMineTrackRequest>();
+  } catch {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON body' }, 400);
+  }
+
+  const { name, data } = body;
+  if (!name || !data) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Missing required fields' }, 400);
+  }
+
+  let id = body.id;
+  let createdAt: number;
+  let verified = false;
+  let uploadedId: string | undefined;
+
+  if (id) {
+    // Update existing — verify ownership first.
+    const existing = await redis.get(`mine-track:${id}`);
+    if (!existing) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'Track not found' }, 404);
+    }
+    const rec = JSON.parse(existing) as MineTrackRecord;
+    if (rec.author !== username) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'Forbidden' }, 403);
+    }
+    // Preserve non-data fields from the existing record.
+    createdAt  = rec.createdAt;
+    verified   = rec.verified;
+    uploadedId = rec.uploadedId;
+  } else {
+    id        = `${username}_${Date.now()}`;
+    createdAt = Date.now();
+  }
+
+  const record: MineTrackRecord = {
+    id, name, author: username, createdAt, verified,
+    ...(uploadedId ? { uploadedId } : {}),
+    data,
+  };
+  await redis.set(`mine-track:${id}`, JSON.stringify(record));
+  await redis.zAdd(`mine:${username}`, { score: createdAt, member: id });
+
+  return c.json<SaveMineTrackResponse>({ type: 'save_mine_track', id, createdAt });
+});
+
+api.get('/mine-tracks', async (c) => {
+  const username = await reddit.getCurrentUsername();
+  if (!username) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+  }
+
+  const total = await redis.zCard(`mine:${username}`);
+  if (total === 0) {
+    return c.json<MineTracksResponse>({ type: 'mine_tracks', tracks: [] });
+  }
+
+  // Newest first (reverse).
+  const ids  = await redis.zRange(`mine:${username}`, 0, total - 1, { by: 'rank', reverse: true });
+  const raws = await redis.mGet(ids.map(({ member }) => `mine-track:${member}`));
+
+  const tracks: MineTrackMeta[] = [];
+  for (const raw of raws) {
+    if (!raw) continue;
+    try {
+      const r = JSON.parse(raw) as MineTrackRecord;
+      tracks.push({
+        id: r.id, name: r.name, createdAt: r.createdAt,
+        verified: r.verified,
+        ...(r.uploadedId ? { uploadedId: r.uploadedId } : {}),
+      });
+    } catch { /* skip corrupt */ }
+  }
+
+  return c.json<MineTracksResponse>({ type: 'mine_tracks', tracks });
+});
+
+api.get('/mine-track/:id', async (c) => {
+  const username = await reddit.getCurrentUsername();
+  if (!username) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+  }
+
+  const { id } = c.req.param();
+  const raw = await redis.get(`mine-track:${id}`);
+  if (!raw) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Track not found' }, 404);
+  }
+
+  const r = JSON.parse(raw) as MineTrackRecord;
+  if (r.author !== username) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Forbidden' }, 403);
+  }
+
+  return c.json<MineTrackResponse>({
+    type: 'mine_track',
+    meta: {
+      id: r.id, name: r.name, createdAt: r.createdAt, verified: r.verified,
+      ...(r.uploadedId ? { uploadedId: r.uploadedId } : {}),
+    },
+    data: r.data,
+  });
+});
+
+api.delete('/mine-track/:id', async (c) => {
+  const username = await reddit.getCurrentUsername();
+  if (!username) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+  }
+
+  const { id } = c.req.param();
+  const raw = await redis.get(`mine-track:${id}`);
+  if (!raw) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Track not found' }, 404);
+  }
+
+  const r = JSON.parse(raw) as MineTrackRecord;
+  if (r.author !== username) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Forbidden' }, 403);
+  }
+
+  await redis.del(`mine-track:${id}`);
+  await redis.zRem(`mine:${username}`, [id]);
+
+  return c.json({ type: 'delete_mine_track', id });
+});
+
+api.patch('/mine-track/:id/verify', async (c) => {
+  const username = await reddit.getCurrentUsername();
+  if (!username) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+  }
+
+  const { id } = c.req.param();
+  const raw = await redis.get(`mine-track:${id}`);
+  if (!raw) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Track not found' }, 404);
+  }
+
+  const r = JSON.parse(raw) as MineTrackRecord;
+  if (r.author !== username) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Forbidden' }, 403);
+  }
+
+  r.verified = true;
+  await redis.set(`mine-track:${id}`, JSON.stringify(r));
+
+  return c.json({ type: 'verify_mine_track', id });
+});
+
+api.patch('/mine-track/:id/publish', async (c) => {
+  const username = await reddit.getCurrentUsername();
+  if (!username) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+  }
+
+  const { id } = c.req.param();
+  let communityId: string;
+  try {
+    const body = await c.req.json<{ communityId: string }>();
+    communityId = body.communityId;
+    if (!communityId) throw new Error('missing');
+  } catch {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Missing communityId' }, 400);
+  }
+
+  const raw = await redis.get(`mine-track:${id}`);
+  if (!raw) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Track not found' }, 404);
+  }
+
+  const r = JSON.parse(raw) as MineTrackRecord;
+  if (r.author !== username) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Forbidden' }, 403);
+  }
+
+  r.uploadedId = communityId;
+  await redis.set(`mine-track:${id}`, JSON.stringify(r));
+
+  return c.json({ type: 'publish_mine_track', id, communityId });
 });
 
 // ── Race ghost composition ────────────────────────────────────────────────────

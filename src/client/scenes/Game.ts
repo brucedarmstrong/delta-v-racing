@@ -9,6 +9,7 @@ import { CORRIDOR } from '../track/TrackGeometry';
 import type { TrackMarker } from '../track/convertGmsTrack';
 import { username, isLoggedIn } from '../devvitContext';
 import { fetchOrGenerateAiGhost, generateAndUploadAiGhosts } from '../track/AiGhost';
+import { verifyMineTrack } from '../track/TrackUpload';
 
 // ── Grid / camera constants ────────────────────────────────────────────────────
 // gridPx is mutable so the debug slider can adjust it at runtime.
@@ -54,6 +55,7 @@ export class Game extends Scene {
   private trackMarkers!: TrackMarker[];
   private startWX = 0;
   private startWY = 0;
+  private mineTrackId: string | null = null;
 
   // Turn-based state
   private gx                 = 0;
@@ -133,7 +135,7 @@ export class Game extends Scene {
 
   constructor() { super('Game'); }
 
-  init(data?: { trackId?: string; track?: TrackEntry; ghosts?: GhostData[] }) {
+  init(data?: { trackId?: string; track?: TrackEntry; ghosts?: GhostData[]; mineTrackId?: string }) {
     let entry: TrackEntry;
     if (data?.track) {
       entry = data.track;
@@ -143,11 +145,12 @@ export class Game extends Scene {
       lastTrackId = id;
       entry = TRACK_REGISTRY.get(id) ?? TRACK_REGISTRY.values().next().value!;
     }
-    this.trackEntry   = entry;
-    this.trackPieces  = entry.pieces;
-    this.trackMarkers = entry.markers;
-    this.startWX      = entry.startX;
-    this.startWY      = entry.startY;
+    this.trackEntry    = entry;
+    this.trackPieces   = entry.pieces;
+    this.trackMarkers  = entry.markers;
+    this.startWX       = entry.startX;
+    this.startWY       = entry.startY;
+    this.mineTrackId   = data?.mineTrackId ?? null;
     this.pendingGhosts = data?.ghosts ?? null;
   }
 
@@ -1045,6 +1048,7 @@ export class Game extends Scene {
       const prevY    = this.cameras.main.worldView.centerY;
 
       overlay.style.display = 'none';
+      if (this.minimapCanvas) this.minimapCanvas.style.display = 'none';
       this.zoomToFitTrack();
 
       const backBtn = document.createElement('button');
@@ -1059,6 +1063,7 @@ export class Game extends Scene {
         backBtn.remove();
         this.viewTrackBackBtn = null;
         overlay.style.display = '';
+        if (this.minimapCanvas) this.minimapCanvas.style.display = '';
         const cam   = this.cameras.main;
         const proxy = { x: cam.worldView.centerX, y: cam.worldView.centerY, zoom: cam.zoom };
         this.tweens.add({
@@ -1217,7 +1222,8 @@ export class Game extends Scene {
       if (statusEl) { statusEl.textContent = msg; statusEl.style.color = color; }
     };
 
-    const ghost = this.currentGhost;
+    const ghost        = this.currentGhost;
+    const mineTrackId  = this.mineTrackId;
     fetch('/api/ghost', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1232,6 +1238,8 @@ export class Game extends Scene {
         } else {
           setStatus(`Your best: ${data.previousBest!.toFixed(2)} · Rank #${data.rank ?? '?'}`, '#8899cc');
         }
+        // Mark the mine track as verified so the user can upload it.
+        if (mineTrackId) verifyMineTrack(mineTrackId).catch(() => {});
       })
       .catch((err) => {
         console.error('[ghost upload]', err);
