@@ -3,7 +3,9 @@ import { fetchOrGenerateAiGhost } from './AiGhost';
 import type { SkillLevel } from './GhostSolver';
 import type { TrackEntry } from '../tracks/trackRegistry';
 
-const AI_FILL_SKILLS: SkillLevel[] = ['skilled', 'average', 'rookie'];
+// BFS-based skills (skilled/perfect) are too slow to run in the browser on
+// complex tracks — they are generated at upload time via generateAndUploadAiGhosts.
+const AI_FILL_SKILLS: SkillLevel[] = ['average', 'rookie'];
 
 // Fetches up to 3 race ghosts for a track.
 //
@@ -29,7 +31,7 @@ export async function fetchRaceGhosts(
   // Server returned nothing — generate AI ghosts locally.
   // This only happens on a completely fresh track (no human OR cached AI ghosts).
   const fills = await Promise.all(
-    AI_FILL_SKILLS.map(skill => fetchOrGenerateAiGhost(trackId, skill, entry, gridPx)),
+    AI_FILL_SKILLS.map(skill => fetchOrGenerateAiGhost(trackId, skill, entry, gridPx, true)),
   );
   return fills.filter((g): g is GhostData => g !== null);
 }

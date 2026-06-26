@@ -157,31 +157,6 @@ api.post('/ghost', async (c) => {
   });
 });
 
-// ── DEBUG: seed a ghost without auth (remove before publishing) ───────────────
-
-api.post('/debug/seed-ghost', async (c) => {
-  let body: { trackId: string; username: string; score: number; ghost: string };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON body' }, 400);
-  }
-
-  const { trackId, username, score, ghost } = body;
-  if (!trackId || !username || typeof score !== 'number' || !ghost) {
-    return c.json<ErrorResponse>({ status: 'error', message: 'Missing required fields' }, 400);
-  }
-
-  await redis.set(`ghost:${trackId}:${username}`, ghost);
-  const lbKey = `lb:${trackId}`;
-  await redis.zAdd(lbKey, { score, member: username });
-  const rank = await redis.zRank(lbKey, username);
-
-  console.log(`[debug seed] ${username} on ${trackId}: score=${score.toFixed(2)} rank=#${(rank ?? 0) + 1}`);
-
-  return c.json({ type: 'debug_seed', trackId, username, score, rank: (rank ?? 0) + 1 });
-});
-
 api.delete('/debug/ghost/:trackId/:username', async (c) => {
   const { trackId, username } = c.req.param();
   await redis.del(`ghost:${trackId}:${username}`);

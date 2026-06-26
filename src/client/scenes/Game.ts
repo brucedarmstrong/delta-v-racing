@@ -2,7 +2,7 @@ import { Scene, GameObjects } from 'phaser';
 import { buildTrackTexture, drawBarriersOnCanvas } from '../track/TrackCanvasRenderer';
 import { type GhostMove, type GhostData, serializeGhost, deserializeGhost } from '../track/GhostData';
 import { NEON_GREEN } from '../track/TrackSkin';
-import { TRACK_REGISTRY, type TrackEntry } from '../tracks/trackRegistry';
+import { TRACK_REGISTRY, STANDARD_TRACKS, type TrackEntry } from '../tracks/trackRegistry';
 import { type PlacedPiece, trackBounds } from '../track/TrackLayout';
 import { intersectsBarrier, pointInsideBarrier } from '../track/TrackCollision';
 import { CORRIDOR } from '../track/TrackGeometry';
@@ -38,7 +38,7 @@ const MAX_ZOOM = 5.0;
 
 // Slow-motion multiplier applied from crash contact until car reappears.
 // Set to 1 to disable once the animation is tuned.
-const CRASH_SLO = 0.2;
+const CRASH_SLO = 0.4;
 
 // Last-used track ID persists across grid-slider scene restarts.
 let lastTrackId = 'oval_small';
@@ -109,12 +109,16 @@ export class Game extends Scene {
   private moveToWX   = 0;
   private moveToWY   = 0;
 
+  // Mouse hover state during picking phase (null = no target under cursor).
+  private hoverTarget: { tx: number; ty: number; valid: boolean } | null = null;
+
   // Pause menu
   private paused           = false;
   private savedTweenScale  = 1;
   private savedTimeScale   = 1;
-  private pauseOverlayEl:  HTMLElement | null = null;
-  private finishOverlayEl: HTMLElement | null = null;
+  private pauseOverlayEl:   HTMLElement | null = null;
+  private finishOverlayEl:  HTMLElement | null = null;
+  private viewTrackBackBtn: HTMLElement | null = null;
 
   // Minimap — plain DOM <canvas> fixed to the viewport, immune to Phaser camera effects
   private minimapCanvas:   HTMLCanvasElement        | null = null;
@@ -280,6 +284,12 @@ export class Game extends Scene {
         return;
       }
 
+      // Mouse hover (no button pressed, no active touch) — highlight target under cursor.
+      if (this.picking && !ptr.isDown && this.touches.size === 0) {
+        this.updateHover(ptr);
+        return;
+      }
+
       if (!this.picking || !ptr.isDown) return;
       const dx = ptr.x - this.dragStartX;
       const dy = ptr.y - this.dragStartY;
@@ -334,15 +344,54 @@ export class Game extends Scene {
 
 
   private addMinimap(): void {
-    const b   = trackBounds(this.trackPieces);
-    const pad = gridPx * 3;
+    // Compute pixel-accurate barrier bounds by rendering to a small probe canvas
+    // and scanning for drawn pixels.  trackBounds() is too conservative — it
+    // extends outerR in all four directions from each piece center even though a
+    // corner arc only occupies one quadrant, leaving large empty margins.
+    const loose      = trackBounds(this.trackPieces);
+    const loosePad   = 60;
+    const lWL = loose.x - loosePad, lWT = loose.y - loosePad;
+    const lWW = loose.width + loosePad * 2, lWH = loose.height + loosePad * 2;
+    const probeScale = Math.min(1.0, 512 / Math.max(lWW, lWH));
+    const probeW     = Math.ceil(lWW * probeScale);
+    const probeH     = Math.ceil(lWH * probeScale);
 
-    this.mmWL = b.x - pad;
-    this.mmWT = b.y - pad;
-    this.mmWW = b.width  + pad * 2;
-    this.mmWH = b.height + pad * 2;
-    this.mmW  = 200;
-    this.mmH  = Math.round(this.mmW * this.mmWH / this.mmWW);
+    const probe = document.createElement('canvas');
+    probe.width  = probeW;
+    probe.height = probeH;
+    const pc = probe.getContext('2d')!;
+    pc.fillStyle = '#000000';
+    pc.fillRect(0, 0, probeW, probeH);
+    drawBarriersOnCanvas(pc, this.trackPieces, lWL, lWT, probeScale, probeScale, 0, 0, '#ffffff', 3);
+
+    const { data } = pc.getImageData(0, 0, probeW, probeH);
+    let pxMin = probeW, pyMin = probeH, pxMax = 0, pyMax = 0;
+    for (let y = 0; y < probeH; y++) {
+      for (let x = 0; x < probeW; x++) {
+        if (data[(y * probeW + x) * 4] > 0) {
+          if (x < pxMin) pxMin = x;
+          if (x > pxMax) pxMax = x;
+          if (y < pyMin) pyMin = y;
+          if (y > pyMax) pyMax = y;
+        }
+      }
+    }
+
+    // Fall back to loose bounds if scan found nothing (shouldn't happen).
+    if (pxMin > pxMax || pyMin > pyMax) {
+      pxMin = 0; pyMin = 0; pxMax = probeW - 1; pyMax = probeH - 1;
+    }
+
+    const mmBorder = 12; // world-pixel border around actual barriers
+    this.mmWL = lWL + pxMin / probeScale - mmBorder;
+    this.mmWT = lWT + pyMin / probeScale - mmBorder;
+    this.mmWW = (pxMax - pxMin) / probeScale + mmBorder * 2;
+    this.mmWH = (pyMax - pyMin) / probeScale + mmBorder * 2;
+    const MAX_MM_W = 200;
+    const MAX_MM_H = 150;
+    const scaleToFit = Math.min(MAX_MM_W / this.mmWW, MAX_MM_H / this.mmWH);
+    this.mmW = Math.round(this.mmWW * scaleToFit);
+    this.mmH = Math.round(this.mmWH * scaleToFit);
 
     // Create a plain HTML canvas fixed to the top-right of the viewport.
     // This is entirely outside Phaser so camera zoom/scroll cannot affect it.
@@ -938,10 +987,14 @@ export class Game extends Scene {
     const finishTitle = document.createElement('div');
     finishTitle.style.cssText = "font:bold clamp(26px,7vw,44px) 'Arial Black',Arial,sans-serif;color:#ffee00;text-shadow:0 0 16px #ff8800,0 2px 4px #000;line-height:1.1;";
     finishTitle.textContent = 'FINISH!';
+    const trackLabel = document.createElement('div');
+    trackLabel.style.cssText = 'font:13px Arial,sans-serif;color:#8888bb;margin-top:2px;letter-spacing:0.04em;';
+    trackLabel.textContent = this.trackEntry.name;
     const scoreLabel = document.createElement('div');
     scoreLabel.style.cssText = 'font:bold clamp(14px,4vw,20px) Arial,sans-serif;color:#ccddff;margin-top:4px;';
     scoreLabel.textContent = `Score: ${scoreStr}`;
     scoreHeader.appendChild(finishTitle);
+    scoreHeader.appendChild(trackLabel);
     scoreHeader.appendChild(scoreLabel);
     if (this.crashes > 0) {
       const crashLabel = document.createElement('div');
@@ -991,7 +1044,7 @@ export class Game extends Scene {
       const prevX    = this.cameras.main.worldView.centerX;
       const prevY    = this.cameras.main.worldView.centerY;
 
-      card.style.display = 'none';
+      overlay.style.display = 'none';
       this.zoomToFitTrack();
 
       const backBtn = document.createElement('button');
@@ -1004,7 +1057,8 @@ export class Game extends Scene {
       ].join(';');
       backBtn.addEventListener('click', () => {
         backBtn.remove();
-        card.style.display = '';
+        this.viewTrackBackBtn = null;
+        overlay.style.display = '';
         const cam   = this.cameras.main;
         const proxy = { x: cam.worldView.centerX, y: cam.worldView.centerY, zoom: cam.zoom };
         this.tweens.add({
@@ -1013,7 +1067,8 @@ export class Game extends Scene {
           onUpdate: () => { cam.setZoom(proxy.zoom); cam.centerOn(proxy.x, proxy.y); },
         });
       });
-      overlay.appendChild(backBtn);
+      document.body.appendChild(backBtn);
+      this.viewTrackBackBtn = backBtn;
     });
     actions.appendChild(playAgainBtn);
     actions.appendChild(exitBtn);
@@ -1046,30 +1101,6 @@ export class Game extends Scene {
     console.log(`[debug cleanup] removing ${DEBUG_USERS.join(', ')} from ${trackId}…`);
   }
 
-  // TEMPORARY: seed fake ghost entries for the current track (Shift+D)
-  private seedDebugGhosts(): void {
-    const trackId = this.trackEntry.id;
-    const fakeGhost = (u: string, score: number) => JSON.stringify({
-      v: 1, trackId, score,
-      startGX: this.gx, startGY: this.gy,
-      moves: [{ gx: this.gx + 1, gy: this.gy, crash: false }],
-    });
-
-    const seed = (u: string, score: number) =>
-      fetch('/api/debug/seed-ghost', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trackId, username: u, score, ghost: fakeGhost(u, score) }),
-      })
-        .then(r => r.json())
-        .then(d => console.log('[debug seed]', d))
-        .catch(e => console.error('[debug seed]', e));
-
-    seed('GhostRacer1', 8.50);
-    seed('SpeedDemon99', 11.20);
-    console.log(`[debug seed] seeding 2 fake ghosts for ${trackId}…`);
-  }
-
   private fetchPersonalBest(): void {
     if (!isLoggedIn) {
       this.fetchAiGhostFallback();
@@ -1087,7 +1118,7 @@ export class Game extends Scene {
   }
 
   private fetchAiGhostFallback(): void {
-    fetchOrGenerateAiGhost(this.trackEntry.id, 'skilled', this.trackEntry, gridPx)
+    fetchOrGenerateAiGhost(this.trackEntry.id, 'average', this.trackEntry, gridPx)
       .then((ghost) => {
         if (!ghost || this.ghostStates.length > 0) return;
         this.initGhosts([ghost]);
@@ -1433,29 +1464,86 @@ export class Game extends Scene {
   }
 
   private framePicker() {
+    this.hoverTarget = null;
     const pickR = Math.floor(gridPx / 2) - 1;
     const pad   = pickR + 8;
     const natX  = this.gx + this.velX;
     const natY  = this.gy + this.velY;
 
+    // Bounding box that must be fully visible: car position + all 9 pick targets.
     const x0 = Math.min(this.gx, natX - 1) * gridPx - pad;
     const y0 = Math.min(this.gy, natY - 1) * gridPx - pad;
     const x1 = Math.max(this.gx, natX + 1) * gridPx + pad;
     const y1 = Math.max(this.gy, natY + 1) * gridPx + pad;
 
-    const view = this.cameras.main.worldView;
+    const cx    = (x0 + x1) / 2;
+    const cy    = (y0 + y1) / 2;
+    const bboxW = x1 - x0;
+    const bboxH = y1 - y0;
+
+    const cam  = this.cameras.main;
+    const view = cam.worldView;
+    const done = () => { this.picking = true; this.drawUI(); };
+
+    // Already fully on screen — no adjustment needed.
     const alreadyVisible =
       view.x <= x0 && view.right  >= x1 &&
       view.y <= y0 && view.bottom >= y1;
-
-    const done = () => { this.picking = true; this.drawUI(); };
-
     if (alreadyVisible) { done(); return; }
 
-    this.panTo((x0 + x1) / 2, (y0 + y1) / 2, 240, done);
+    // Fits at current zoom but is off-screen — pan only.
+    const viewW = cam.width  / cam.zoom;
+    const viewH = cam.height / cam.zoom;
+    if (bboxW <= viewW && bboxH <= viewH) {
+      this.panTo(cx, cy, 240, done);
+      return;
+    }
+
+    // Doesn't fit at current zoom — zoom out to fit while panning.
+    const targetZoom = Math.max(
+      Math.min(cam.width / bboxW, cam.height / bboxH) * 0.92,
+      MIN_ZOOM,
+    );
+    cam.stopFollow();
+    const proxy = { x: view.centerX, y: view.centerY, zoom: cam.zoom };
+    this.tweens.add({
+      targets:    proxy,
+      x: cx, y: cy, zoom: targetZoom,
+      duration:   300,
+      ease:       'Quad.easeOut',
+      onUpdate:   () => { cam.setZoom(proxy.zoom); cam.centerOn(proxy.x, proxy.y); },
+      onComplete: () => done(),
+    });
   }
 
   // ── Drawing ───────────────────────────────────────────────────────────────────
+
+  private updateHover(ptr: Phaser.Input.Pointer): void {
+    const wp   = this.cameras.main.getWorldPoint(ptr.x, ptr.y);
+    const natX = this.gx + this.velX;
+    const natY = this.gy + this.velY;
+    const hitR = Math.floor(gridPx / 2) + 4;
+
+    let found: { tx: number; ty: number; valid: boolean } | null = null;
+    outer:
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const tx = natX + dx, ty = natY + dy;
+        const twx = tx * gridPx, twy = ty * gridPx;
+        if ((wp.x - twx) ** 2 + (wp.y - twy) ** 2 <= hitR * hitR) {
+          const valid = !intersectsBarrier(this.gx * gridPx, this.gy * gridPx, twx, twy, this.trackPieces);
+          found = { tx, ty, valid };
+          break outer;
+        }
+      }
+    }
+
+    const prev = this.hoverTarget;
+    if (found?.tx !== prev?.tx || found?.ty !== prev?.ty) {
+      this.hoverTarget = found;
+      this.drawUI();
+    }
+  }
 
   private drawUI() {
     this.velGfx.clear();
@@ -1466,13 +1554,17 @@ export class Game extends Scene {
     const natWX = (this.gx + this.velX) * gridPx;
     const natWY = (this.gy + this.velY) * gridPx;
 
+    // Yellow line points to the hovered valid target; falls back to natural position.
+    const lineToWX = this.hoverTarget?.valid ? this.hoverTarget.tx * gridPx : natWX;
+    const lineToWY = this.hoverTarget?.valid ? this.hoverTarget.ty * gridPx : natWY;
+
     this.velGfx.lineStyle(1.5, 0xffee00, 0.7);
     this.velGfx.beginPath();
     this.velGfx.moveTo(carWX, carWY);
-    this.velGfx.lineTo(natWX, natWY);
+    this.velGfx.lineTo(lineToWX, lineToWY);
     this.velGfx.strokePath();
     this.velGfx.fillStyle(0xffee00, 0.6);
-    this.velGfx.fillCircle(natWX, natWY, 2.5);
+    this.velGfx.fillCircle(lineToWX, lineToWY, 2.5);
 
     const natGX = this.gx + this.velX;
     const natGY = this.gy + this.velY;
@@ -1484,14 +1576,15 @@ export class Game extends Scene {
         const twx = tx * gridPx, twy = ty * gridPx;
         const valid     = !intersectsBarrier(carWX, carWY, twx, twy, this.trackPieces);
         const isNatural = dx === 0 && dy === 0;
+        const isHovered = this.hoverTarget?.tx === tx && this.hoverTarget?.ty === ty;
 
         if (!valid) {
-          // Dark-red circle with X — always shown, always clickable (intentional crash).
-          const arm = Math.max(Math.round(pickR * 0.55), 3);
-          this.pickGfx.fillStyle(0x550000, 0.80);
-          this.pickGfx.fillCircle(twx, twy, pickR);
-          this.pickGfx.lineStyle(1.5, 0xaa0000, 0.90);
-          this.pickGfx.strokeCircle(twx, twy, pickR);
+          const r   = isHovered ? pickR + 2 : pickR;
+          const arm = Math.max(Math.round(r * 0.55), 3);
+          this.pickGfx.fillStyle(isHovered ? 0x880000 : 0x550000, 0.80);
+          this.pickGfx.fillCircle(twx, twy, r);
+          this.pickGfx.lineStyle(1.5, isHovered ? 0xff3333 : 0xaa0000, 0.90);
+          this.pickGfx.strokeCircle(twx, twy, r);
           this.pickGfx.lineStyle(2, 0xdd2222, 1.0);
           this.pickGfx.beginPath();
           this.pickGfx.moveTo(twx - arm, twy - arm);
@@ -1503,10 +1596,13 @@ export class Game extends Scene {
         }
 
         const fill = isNatural ? 0xffee00 : 0x33ee88;
-        this.pickGfx.fillStyle(fill, 0.80);
-        this.pickGfx.fillCircle(twx, twy, pickR);
-        this.pickGfx.lineStyle(1, 0xffffff, 0.35);
-        this.pickGfx.strokeCircle(twx, twy, pickR);
+        const r    = isHovered ? pickR + 2 : pickR;
+        this.pickGfx.fillStyle(fill, isHovered ? 1.0 : 0.80);
+        this.pickGfx.fillCircle(twx, twy, r);
+        this.pickGfx.lineStyle(isHovered ? 2 : 1, isHovered ? 0xffffff : 0xffffff, isHovered ? 1.0 : 0.35);
+        this.pickGfx.strokeCircle(twx, twy, r);
+
+
       }
     }
   }
@@ -1745,8 +1841,7 @@ export class Game extends Scene {
         if (this.paused) this.resumeGame();
         else if (!this.won) this.showPause();
       }
-      // TEMPORARY: Shift+D seeds / Shift+X cleans up fake ghosts for the current track
-      if (e.key === 'D' && e.shiftKey) this.seedDebugGhosts();
+      // TEMPORARY: Shift+X cleans up fake ghosts for the current track
       if (e.key === 'X' && e.shiftKey) this.cleanupDebugGhosts();
       // TEMPORARY: Shift+G generates and uploads AI ghosts for the current track
       if (e.key === 'G' && e.shiftKey) {
@@ -1754,6 +1849,17 @@ export class Game extends Scene {
         generateAndUploadAiGhosts(this.trackEntry, undefined, gridPx)
           .then(() => console.log(`[ai ghosts] done for ${this.trackEntry.id}`))
           .catch((err: unknown) => console.error('[ai ghosts]', err));
+      }
+      // TEMPORARY: Shift+A generates and uploads AI ghosts for ALL standard tracks
+      if (e.key === 'A' && e.shiftKey) {
+        console.log(`[ai ghosts] generating for all ${STANDARD_TRACKS.length} standard tracks…`);
+        (async () => {
+          for (const track of STANDARD_TRACKS) {
+            console.log(`[ai ghosts] → ${track.id}`);
+            await generateAndUploadAiGhosts(track, undefined, gridPx);
+          }
+          console.log('[ai ghosts] all standard tracks done');
+        })().catch((err: unknown) => console.error('[ai ghosts all]', err));
       }
     };
     window.addEventListener('keydown', onKey);
@@ -1767,9 +1873,11 @@ export class Game extends Scene {
       this.pauseOverlayEl?.remove();
       this.pauseOverlayEl = null;
       this.finishOverlayEl?.remove();
+      this.finishOverlayEl = null;
+      this.viewTrackBackBtn?.remove();
+      this.viewTrackBackBtn = null;
       for (const s of this.ghostStates) { s.carImg.destroy(); s.trailGfx.destroy(); }
       this.ghostStates = [];
-      this.finishOverlayEl = null;
     });
   }
 

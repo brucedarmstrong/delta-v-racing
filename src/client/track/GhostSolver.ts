@@ -171,8 +171,18 @@ function greedySolve(
   const cpTouched = new Array<boolean>(checkpoints.length).fill(false);
   const moves: GhostMove[] = [];
 
-  const getTarget = (): TrackMarker =>
-    checkpoints.find((_, i) => !cpTouched[i]) ?? finish;
+  // Nearest-neighbour: pick the closest untouched checkpoint each turn,
+  // since checkpoint visit order is free and part of the player's strategy.
+  const getTarget = (): TrackMarker => {
+    let bestM: TrackMarker | undefined;
+    let bestD = Infinity;
+    for (let i = 0; i < checkpoints.length; i++) {
+      if (cpTouched[i]) continue;
+      const d = dist2ToMarker(gx, gy, checkpoints[i], gridPx);
+      if (d < bestD) { bestD = d; bestM = checkpoints[i]; }
+    }
+    return bestM ?? finish;
+  };
 
   for (let turn = 0; turn < MAX_GREEDY_TURNS; turn++) {
     const target = getTarget();

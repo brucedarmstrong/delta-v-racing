@@ -68,6 +68,7 @@ function checkCorner(lx: number, ly: number, piece: CornerDef): Hit | null {
  * Uses exact piece bounds (no junction-overlap tolerance) so points in open
  * space just past a piece end are never falsely flagged.
  */
+// Kept for external callers that check whether a world point is already in barrier material.
 export function pointInsideBarrier(wx: number, wy: number, pieces: PlacedPiece[]): boolean {
   for (const piece of pieces) {
     const dx = wx - piece.x, dy = wy - piece.y;
@@ -79,7 +80,6 @@ export function pointInsideBarrier(wx: number, wy: number, pieces: PlacedPiece[]
     const [lx, ly] = toLocal(wx, wy, piece);
 
     if (piece.type === 'straight') {
-      // Exact longitudinal extent — no extra HALF_TRACK tolerance used by physics.
       const half = STRAIGHT_LEN[(piece as StraightDef).size] / 2;
       if (Math.abs(ly) > half) continue;
       if (lx < -HALF_TRACK || lx > HALF_TRACK) return true;
@@ -88,7 +88,6 @@ export function pointInsideBarrier(wx: number, wy: number, pieces: PlacedPiece[]
       const theta = (piece as CornerDef).angle * (Math.PI / 180);
       const cx = (piece as CornerDef).flip ? -lx : lx;
       const cy = ly;
-      // Exact angular range — no ±0.05 radian tolerance used by physics.
       const angle = Math.atan2(-cy, -cx);
       if (angle < 0 || angle > theta) continue;
       const dist = Math.sqrt(cx * cx + cy * cy);
@@ -99,23 +98,90 @@ export function pointInsideBarrier(wx: number, wy: number, pieces: PlacedPiece[]
   return false;
 }
 
+// Returns true if the line segment from (lx1,ly1)→(lx2,ly2) in local straight-piece
+// space crosses the lateral wall at lx=wallLx, within |ly| ≤ halfLen.
+function crossesStraightWall(
+  lx1: number, ly1: number, lx2: number, ly2: number,
+  wallLx: number, halfLen: number,
+): boolean {
+  const dLx = lx2 - lx1;
+  if (Math.abs(dLx) < 1e-8) return false; // segment parallel to wall
+  const t = (wallLx - lx1) / dLx;
+  if (t <= 0 || t >= 1) return false;      // crossing outside segment interior
+  return Math.abs(ly1 + (ly2 - ly1) * t) <= halfLen;
+}
+
+// Returns true if the line segment from (lx1,ly1)→(lx2,ly2) in local corner-piece
+// space crosses the arc of radius R within angular range [0, theta].
+// flip mirrors the x-axis so left-turn corners use the same angle convention.
+function crossesArc(
+  lx1: number, ly1: number, lx2: number, ly2: number,
+  flip: boolean, R: number, theta: number,
+): boolean {
+  const sx = flip ? -1 : 1;
+  const ax = sx * lx1, ay = ly1;
+  const bx = sx * lx2, by = ly2;
+  const dx = bx - ax, dy = by - ay;
+  const a = dx * dx + dy * dy;
+  if (a < 1e-8) return false;
+  const b = 2 * (ax * dx + ay * dy);
+  const c = ax * ax + ay * ay - R * R;
+  const disc = b * b - 4 * a * c;
+  if (disc < 0) return false;
+  const sq = Math.sqrt(disc);
+  for (const sign of [-1, 1] as const) {
+    const t = (-b + sign * sq) / (2 * a);
+    if (t <= 0 || t >= 1) continue;  // crossing outside segment interior
+    const ix = ax + dx * t, iy = ay + dy * t;
+    const angle = Math.atan2(-iy, -ix);
+    if (angle >= 0 && angle <= theta) return true;
+  }
+  return false;
+}
+
 /**
  * Returns true if the straight line from (fromWX,fromWY) to (toWX,toWY)
- * passes through any barrier wall.  Samples every ~6 px along the segment.
- * A move that stays in open space never triggers this.
+ * crosses any wall arc or line of any track piece.
+ *
+ * Wall-crossing only — no "corridor" or "barrier zone" concept.
+ * A move from a valid position never crashes unless the path actually crosses
+ * a wall, regardless of what any adjacent piece's geometry might claim.
  */
 export function intersectsBarrier(
   fromWX: number, fromWY: number,
   toWX:   number, toWY:   number,
   pieces: PlacedPiece[],
 ): boolean {
-  const dx = toWX - fromWX, dy = toWY - fromWY;
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len === 0) return pointInsideBarrier(fromWX, fromWY, pieces);
-  const steps = Math.max(1, Math.ceil(len / 6));
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    if (pointInsideBarrier(fromWX + dx * t, fromWY + dy * t, pieces)) return true;
+  const sdx = toWX - fromWX, sdy = toWY - fromWY;
+  if (sdx === 0 && sdy === 0) return false; // zero-length move never crosses a wall
+
+  const midX = (fromWX + toWX) / 2, midY = (fromWY + toWY) / 2;
+  const halfLen = Math.sqrt(sdx * sdx + sdy * sdy) / 2;
+
+  for (const piece of pieces) {
+    // Broad phase: skip pieces whose closest point is definitely too far.
+    const pdx = midX - piece.x, pdy = midY - piece.y;
+    const maxR = piece.type === 'straight'
+      ? Math.max(STRAIGHT_LEN[(piece as StraightDef).size] / 2, HALF_TRACK) + HALF_TRACK
+      : (piece.type === 'corner' ? TIGHT : BIG).outerR;
+    if (pdx * pdx + pdy * pdy > (maxR + halfLen) * (maxR + halfLen)) continue;
+
+    const [lx1, ly1] = toLocal(fromWX, fromWY, piece);
+    const [lx2, ly2] = toLocal(toWX,   toWY,   piece);
+
+    if (piece.type === 'straight') {
+      const half  = STRAIGHT_LEN[(piece as StraightDef).size] / 2;
+      const walls = (piece as StraightDef).walls;
+      if (walls !== 'inner' && crossesStraightWall(lx1, ly1, lx2, ly2, -HALF_TRACK, half)) return true;
+      if (walls !== 'outer' && crossesStraightWall(lx1, ly1, lx2, ly2,  HALF_TRACK, half)) return true;
+    } else {
+      const { outerR, innerR } = piece.type === 'corner' ? TIGHT : BIG;
+      const theta = (piece as CornerDef).angle * (Math.PI / 180);
+      const flip  = (piece as CornerDef).flip ?? false;
+      const walls = (piece as CornerDef).walls;
+      if (walls !== 'inner' && crossesArc(lx1, ly1, lx2, ly2, flip, outerR, theta)) return true;
+      if (walls !== 'outer' && crossesArc(lx1, ly1, lx2, ly2, flip, innerR, theta)) return true;
+    }
   }
   return false;
 }

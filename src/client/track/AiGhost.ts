@@ -36,13 +36,16 @@ async function uploadAiGhost(trackId: string, skill: SkillLevel, ghost: string):
 // Tries the server cache first. On miss, solves locally and uploads for future players.
 // Returns the deserialized GhostData, or null if the track is unsolvable.
 export async function fetchOrGenerateAiGhost(
-  trackId: string,
-  skill:   SkillLevel,
-  entry:   TrackEntry,
-  gridPx:  number,
+  trackId:         string,
+  skill:           SkillLevel,
+  entry:           TrackEntry,
+  gridPx:          number,
+  skipServerCheck = false,
 ): Promise<GhostData | null> {
-  const cached = await fetchAiGhost(trackId, skill);
-  if (cached) return deserializeGhost(cached);
+  if (!skipServerCheck) {
+    const cached = await fetchAiGhost(trackId, skill);
+    if (cached) return deserializeGhost(cached);
+  }
 
   const ghost = solveTrack(entry, skill, gridPx);
   if (!ghost) return null;

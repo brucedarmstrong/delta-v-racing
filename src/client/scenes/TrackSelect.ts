@@ -141,7 +141,7 @@ export class TrackSelect extends Scene {
         action: () => {
           if (tab.id === 'community' && this.activeTab !== 'community') this.communityLoaded = false;
           this.activeTab = tab.id;
-          this.buildList();
+          this.layout();
         },
       });
     });
@@ -456,5 +456,35 @@ export class TrackSelect extends Scene {
     ctx.fillStyle = '#0a0a16';
     ctx.fillRect(0, 0, tw, th);
     drawBarriersOnCanvas(ctx, track.pieces, WL, WT, scale, scale, offX, offY, '#33bb55', 1.5);
+
+    const toC = (wx: number, wy: number): [number, number] => [
+      offX + (wx - WL) * scale,
+      offY + (wy - WT) * scale,
+    ];
+
+    const dot = (wx: number, wy: number, r: number, fill: string, stroke?: string) => {
+      const [cx, cy] = toC(wx, wy);
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = fill;
+      ctx.fill();
+      if (stroke) {
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 0.75;
+        ctx.stroke();
+      }
+    };
+
+    // Checkpoints — yellow dots
+    for (const m of track.markers) {
+      if (m.kind === 'checkpoint') dot(m.x, m.y, 2.5, '#ffdd00');
+    }
+
+    // Finish — red dot with white ring
+    const finish = track.markers.find(m => m.kind === 'finish');
+    if (finish) dot(finish.x, finish.y, 3.5, '#ff3333', '#ffffff');
+
+    // Start — cyan dot, drawn last so it's always visible
+    dot(track.startX, track.startY, 3, '#00eeff', '#ffffff');
   }
 }
