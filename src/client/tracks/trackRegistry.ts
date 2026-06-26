@@ -18,6 +18,9 @@ import spiralJson       from './gms/spiral.json';
 import bigoneJson       from './gms/bigone.json';
 import json88          from './gms/88.json';
 import podsJson         from './gms/pods.json';
+import aitestJson       from './gms/aitest.json';
+import aitest2Json      from './gms/aitest2.json';
+import aitest3Json      from './gms/aitest3.json';
 import goGetterJson     from './gms/2026_go_getter.json';
 import mickeyJson       from './gms/2026_mickey.json';
 import squareJson       from './gms/2026_square.json';
@@ -61,6 +64,9 @@ export const STANDARD_TRACKS: TrackEntry[] = [
   fromGms(bigoneJson,       'bigone',        'Big One',       'Boomsmith',  240, 240),
   fromGms(json88,           '88',            '88',            'Boomsmith',  240, 528),
   fromGms(podsJson,         'pods',          'Pods',          'Boomsmith',  504, 192),
+  fromGms(aitestJson,       'circuit_a',     'Circuit A',     'Boomsmith',  864, 408),
+  fromGms(aitest2Json,      'speedway',      'Speedway',      'Boomsmith',  552, 144),
+  fromGms(aitest3Json,      'diagonal',      'Diagonal',      'Boomsmith',  408, 168),
   fromGms(goGetterJson,     '2026_go_getter', '2026 Go Getter', 'Custom',   336, 576),
   fromGms(mickeyJson,       '2026_mickey',   '2026 Mickey',   'Custom',    336, 504),
   fromGms(squareJson,       '2026_square',   '2026 Square',   'Custom',    600, 528),
