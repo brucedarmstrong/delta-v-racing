@@ -16,6 +16,8 @@ import crissCrossJson   from './gms/criss_cross.json';
 import rustyspringsJson from './gms/rusty_springs.json';
 import spiralJson       from './gms/spiral.json';
 import bigoneJson       from './gms/bigone.json';
+import json88          from './gms/88.json';
+import podsJson         from './gms/pods.json';
 import goGetterJson     from './gms/2026_go_getter.json';
 import mickeyJson       from './gms/2026_mickey.json';
 import squareJson       from './gms/2026_square.json';
@@ -57,6 +59,8 @@ export const STANDARD_TRACKS: TrackEntry[] = [
   fromGms(rustyspringsJson, 'rusty_springs', 'Rusty Springs', 'Boomsmith',  696, 120),
   fromGms(spiralJson,       'spiral',        'Spiral',        'Boomsmith', 1008,  96),
   fromGms(bigoneJson,       'bigone',        'Big One',       'Boomsmith',  240, 240),
+  fromGms(json88,           '88',            '88',            'Boomsmith',  240, 528),
+  fromGms(podsJson,         'pods',          'Pods',          'Boomsmith',  504, 192),
   fromGms(goGetterJson,     '2026_go_getter', '2026 Go Getter', 'Custom',   336, 576),
   fromGms(mickeyJson,       '2026_mickey',   '2026 Mickey',   'Custom',    336, 504),
   fromGms(squareJson,       '2026_square',   '2026 Square',   'Custom',    600, 528),
