@@ -4,12 +4,13 @@ import { trackBounds } from '../track/TrackLayout';
 import { drawBarriersOnCanvas } from '../track/TrackCanvasRenderer';
 import {
   fetchCommunityTrack, fetchCommunityTracks,
-  fetchMineTrack, fetchMineTracks, deleteMineTrack, publishMineTrack,
-  type TrackPayload,
+  fetchMineTrack, fetchMineTracks, deleteMineTrack, saveMineTrack,
+  getLocalDrafts, deleteLocalDraft,
+  type TrackPayload, type LocalDraft,
 } from '../track/TrackUpload';
 import { fetchRaceGhosts } from '../track/RaceGhosts';
 import { generateAndUploadAiGhosts } from '../track/AiGhost';
-import { isLoggedIn } from '../devvitContext';
+import { username, isLoggedIn } from '../devvitContext';
 import type { CommunityTrackMeta, MineTrackMeta } from '../../shared/api';
 
 const BG         = 0x0a0a16;
@@ -23,13 +24,22 @@ const THUMB_H = 88;
 const HEADER_H = 60;
 const TAB_H    = 48;
 
-type Tab = 'standard' | 'daily' | 'mine' | 'community';
+type Tab = 'standard' | 'daily' | 'drafts' | 'community';
 const TABS: { id: Tab; label: string }[] = [
   { id: 'standard',  label: 'Standard'  },
   { id: 'daily',     label: 'Daily'     },
-  { id: 'mine',      label: 'Mine'      },
+  { id: 'drafts',    label: 'Drafts'    },
   { id: 'community', label: 'Community' },
 ];
+
+type DraftEntry = {
+  id:        string;
+  name:      string;
+  createdAt: number;
+  verified:  boolean;
+  local:     boolean;    // true = localStorage only (Devvit save failed)
+  data?:     string;     // embedded for local entries; undefined for server entries
+};
 
 type HitZone = { x: number; y: number; w: number; h: number; action: () => void };
 
@@ -45,23 +55,21 @@ export class TrackSelect extends Scene {
   private chromeHits:  HitZone[]         = [];
 
   // DOM list — native scroll, no Phaser zoom/coordinate issues
-  private listEl:         HTMLElement | null = null;
-  private contextMenuEl:  HTMLElement | null = null;
+  private listEl:          HTMLElement | null = null;
+  private contextMenuEl:   HTMLElement | null = null;
   private communityTracks: CommunityTrackMeta[] = [];
   private communityLoaded  = false;
-  private mineTracks:      MineTrackMeta[]      = [];
-  private mineLoaded       = false;
+  private drafts:          DraftEntry[] = [];
+  private draftsLoaded     = false;
+  private mineFilter       = false;   // community tab: show only current user's tracks
 
   constructor() { super('TrackSelect'); }
 
   init(data?: { activeTab?: Tab }): void {
-    if (data?.activeTab) {
-      this.activeTab = data.activeTab;
-    }
-    // Reset cached lists so switching scenes refreshes data.
+    if (data?.activeTab) this.activeTab = data.activeTab;
     this.communityLoaded = false;
-    this.mineLoaded      = false;
-    this.mineTracks      = [];
+    this.draftsLoaded    = false;
+    this.drafts          = [];
     this.communityTracks = [];
   }
 
@@ -90,9 +98,8 @@ export class TrackSelect extends Scene {
     this.layout();
     this.scale.on('resize', () => this.layout());
 
-    // Header / tab taps — fire immediately on pointerdown (no scroll ambiguity).
     this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
-      if (ptr.y > HEADER_H + TAB_H) return; // below chrome — DOM list handles it
+      if (ptr.y > HEADER_H + TAB_H) return;
       for (const h of this.chromeHits) {
         if (ptr.x >= h.x && ptr.x <= h.x + h.w &&
             ptr.y >= h.y && ptr.y <= h.y + h.h) {
@@ -120,7 +127,6 @@ export class TrackSelect extends Scene {
     const pad = 14;
     this.chromeHits = [];
 
-    // Header
     this.headerGfx.clear();
     this.headerGfx.fillStyle(SURFACE, 1);
     this.headerGfx.fillRect(0, 0, W, HEADER_H);
@@ -131,7 +137,6 @@ export class TrackSelect extends Scene {
     this.backText.setPosition(pad + 4, HEADER_H / 2);
     this.chromeHits.push({ x: 0, y: 0, w: 100, h: HEADER_H, action: () => this.scene.start('ModeSelect') });
 
-    // Tab bar
     const tabY = HEADER_H;
     const tabW = W / TABS.length;
     this.tabGfx.clear();
@@ -191,57 +196,103 @@ export class TrackSelect extends Scene {
       for (const track of STANDARD_TRACKS) {
         el.appendChild(this.buildCard(track));
       }
+
     } else if (this.activeTab === 'community') {
+      // ── Mine filter toggle row
+      if (isLoggedIn) {
+        const filterRow = document.createElement('div');
+        filterRow.style.cssText = 'display:flex;gap:8px;margin-bottom:12px;';
+        const mkFilter = (label: string, active: boolean, fn: () => void) => {
+          const b = document.createElement('button');
+          b.textContent = label;
+          b.style.cssText = [
+            'padding:6px 14px', 'border-radius:16px',
+            active
+              ? 'background:#22224a;color:#ccccff;border:1.5px solid #6666cc;'
+              : 'background:#111128;color:#555588;border:1px solid #2a2a44;',
+            'font:13px Arial,sans-serif', 'cursor:pointer',
+          ].join(';');
+          b.addEventListener('click', fn);
+          return b;
+        };
+        filterRow.appendChild(mkFilter('All', !this.mineFilter, () => {
+          this.mineFilter = false; this.buildList();
+        }));
+        filterRow.appendChild(mkFilter('Mine', this.mineFilter, () => {
+          this.mineFilter = true; this.buildList();
+        }));
+        el.appendChild(filterRow);
+      }
+
       if (!this.communityLoaded) {
         const msg = document.createElement('div');
         msg.textContent = 'Loading…';
         msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:80px;';
         el.appendChild(msg);
         fetchCommunityTracks().then(tracks => {
-          this.communityTracks  = tracks;
-          this.communityLoaded  = true;
+          this.communityTracks = tracks;
+          this.communityLoaded = true;
           this.buildList();
-        }).catch(() => {
-          msg.textContent = 'Failed to load community tracks.';
-        });
-      } else if (this.communityTracks.length === 0) {
-        const msg = document.createElement('div');
-        msg.textContent = 'No community tracks yet.';
-        msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:80px;';
-        el.appendChild(msg);
+        }).catch(() => { msg.textContent = 'Failed to load community tracks.'; });
       } else {
-        for (const meta of this.communityTracks) {
-          el.appendChild(this.buildCommunityCard(meta));
+        const visible = this.mineFilter
+          ? this.communityTracks.filter(t => t.author === username)
+          : this.communityTracks;
+        if (visible.length === 0) {
+          const msg = document.createElement('div');
+          msg.textContent = this.mineFilter
+            ? 'You haven\'t published any tracks yet.'
+            : 'No community tracks yet.';
+          msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:60px;';
+          el.appendChild(msg);
+        } else {
+          for (const meta of visible) el.appendChild(this.buildCommunityCard(meta));
         }
       }
-    } else if (this.activeTab === 'mine') {
+
+    } else if (this.activeTab === 'drafts') {
       if (!isLoggedIn) {
         const msg = document.createElement('div');
         msg.textContent = 'Log in to save and upload tracks.';
         msg.style.cssText = 'text-align:center;color:#555588;font:16px Arial;margin-top:80px;padding:0 24px;';
         el.appendChild(msg);
-      } else if (!this.mineLoaded) {
+      } else if (!this.draftsLoaded) {
         const msg = document.createElement('div');
         msg.textContent = 'Loading…';
         msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:80px;';
         el.appendChild(msg);
-        fetchMineTracks().then(tracks => {
-          this.mineTracks = tracks;
-          this.mineLoaded = true;
-          this.buildList();
-        }).catch(() => {
-          msg.textContent = 'Failed to load your tracks.';
-        });
-      } else if (this.mineTracks.length === 0) {
+
+        const localEntries: DraftEntry[] = getLocalDrafts().map(d => ({
+          id: d.id, name: d.name, createdAt: d.createdAt,
+          verified: d.verified ?? false, local: true, data: d.data,
+        }));
+
+        fetchMineTracks()
+          .then(tracks => {
+            const serverEntries: DraftEntry[] = tracks.map(t => ({
+              id: t.id, name: t.name, createdAt: t.createdAt,
+              verified: t.verified, local: false,
+            }));
+            this.drafts = [...localEntries, ...serverEntries]
+              .sort((a, b) => b.createdAt - a.createdAt);
+            this.draftsLoaded = true;
+            this.buildList();
+          })
+          .catch(() => {
+            // Server unavailable — show only local drafts
+            this.drafts = localEntries.sort((a, b) => b.createdAt - a.createdAt);
+            this.draftsLoaded = true;
+            this.buildList();
+          });
+      } else if (this.drafts.length === 0) {
         const msg = document.createElement('div');
-        msg.innerHTML = 'No saved tracks yet.<br><br>Tap CREATE to build one!';
+        msg.innerHTML = 'No drafts yet.<br><br>Tap CREATE to build a track!';
         msg.style.cssText = 'text-align:center;color:#555588;font:16px Arial;margin-top:80px;padding:0 24px;line-height:1.5;';
         el.appendChild(msg);
       } else {
-        for (const meta of this.mineTracks) {
-          el.appendChild(this.buildMineCard(meta));
-        }
+        for (const draft of this.drafts) el.appendChild(this.buildDraftCard(draft));
       }
+
     } else {
       // Daily tab — Coming Soon
       const msg = document.createElement('div');
@@ -254,6 +305,8 @@ export class TrackSelect extends Scene {
     this.listEl = el;
   }
 
+  // ── Standard track card ───────────────────────────────────────────────────────
+
   private buildCard(track: TrackEntry): HTMLElement {
     const card = document.createElement('div');
     card.style.cssText = [
@@ -264,14 +317,12 @@ export class TrackSelect extends Scene {
       'user-select:none', '-webkit-user-select:none',
     ].join(';');
 
-    // Thumbnail
     const canvas  = document.createElement('canvas');
     canvas.width  = THUMB_W;
     canvas.height = THUMB_H;
     canvas.style.cssText = 'flex-shrink:0;border:1px solid #3a3a6a;border-radius:3px;';
     this.drawThumbnail(canvas, track);
 
-    // Text
     const info = document.createElement('div');
     info.style.cssText = 'flex:1;min-width:0;';
 
@@ -286,7 +337,6 @@ export class TrackSelect extends Scene {
     info.appendChild(name);
     info.appendChild(author);
 
-    // Arrow
     const arrow = document.createElement('div');
     arrow.textContent = '›';
     arrow.style.cssText = 'font:28px Arial,sans-serif;color:#5555aa;flex-shrink:0;line-height:1;';
@@ -307,6 +357,8 @@ export class TrackSelect extends Scene {
     return card;
   }
 
+  // ── Draft card (Drafts tab) ───────────────────────────────────────────────────
+
   private static ensureSpinStyle(): void {
     if (document.getElementById('dv-spin-style')) return;
     const s = document.createElement('style');
@@ -315,7 +367,7 @@ export class TrackSelect extends Scene {
     document.head.appendChild(s);
   }
 
-  private buildMineCard(meta: MineTrackMeta): HTMLElement {
+  private buildDraftCard(draft: DraftEntry): HTMLElement {
     const card = document.createElement('div');
     card.style.cssText = [
       'display:flex', 'align-items:flex-start', 'gap:12px',
@@ -324,7 +376,6 @@ export class TrackSelect extends Scene {
       'user-select:none', '-webkit-user-select:none',
     ].join(';');
 
-    // Thumbnail — populated after fetch
     const canvas  = document.createElement('canvas');
     canvas.width  = THUMB_W;
     canvas.height = THUMB_H;
@@ -333,16 +384,31 @@ export class TrackSelect extends Scene {
     const info = document.createElement('div');
     info.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;';
 
-    const name = document.createElement('div');
-    name.textContent = meta.name;
-    name.style.cssText = 'font:bold 16px "Arial Black",Arial,sans-serif;color:#e8e8ff;';
+    const nameRow = document.createElement('div');
+    nameRow.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
+
+    const nameEl = document.createElement('div');
+    nameEl.textContent = draft.name;
+    nameEl.style.cssText = 'font:bold 16px "Arial Black",Arial,sans-serif;color:#e8e8ff;';
+    nameRow.appendChild(nameEl);
+
+    if (draft.local) {
+      const badge = document.createElement('span');
+      badge.textContent = '⚠ Save failed';
+      badge.style.cssText = [
+        'font:bold 11px Arial,sans-serif', 'color:#ffaa44',
+        'background:#1a0e00', 'border:1px solid #553300',
+        'border-radius:10px', 'padding:2px 7px', 'white-space:nowrap',
+      ].join(';');
+      nameRow.appendChild(badge);
+    }
 
     const date = document.createElement('div');
-    const d = new Date(meta.createdAt);
-    date.textContent = `Saved ${d.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' })}`;
+    const d = new Date(draft.createdAt);
+    date.textContent = `Saved ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
     date.style.cssText = 'font:12px Arial,sans-serif;color:#555588;';
 
-    // Action buttons row
+    // Action buttons
     const btnRow = document.createElement('div');
     btnRow.style.cssText = 'display:flex;gap:6px;';
 
@@ -362,20 +428,15 @@ export class TrackSelect extends Scene {
     const editBtn   = mkBtn('✎ Edit',   '#aaaaff', '#0a0a22', '#333366');
     const deleteBtn = mkBtn('✕ Del',    '#ff8888', '#1a0808', '#663333');
 
-    // Upload button (full-width, below the 3 action buttons)
+    const canUpload = draft.verified;
     const uploadBtn = document.createElement('button');
-    const isUploaded = !!meta.uploadedId;
-    const canUpload  = meta.verified && !isUploaded;
-
-    uploadBtn.textContent = isUploaded ? '✓ Published'
-      : meta.verified     ? '↑ Upload to Community'
-      :                     '↑ Upload (play first)';
+    uploadBtn.textContent = draft.verified ? '↑ Upload to Community' : '↑ Upload (play first)';
     uploadBtn.disabled = !canUpload;
     uploadBtn.style.cssText = [
       'width:100%', 'padding:8px 4px',
-      `color:${isUploaded ? '#55aa55' : canUpload ? '#88aaff' : '#444466'}`,
-      `background:${isUploaded ? '#0a1a0a' : canUpload ? '#0a0a22' : '#0a0a14'}`,
-      `border:1px solid ${isUploaded ? '#226622' : canUpload ? '#334488' : '#222244'}`,
+      `color:${canUpload ? '#88aaff' : '#444466'}`,
+      `background:${canUpload ? '#0a0a22' : '#0a0a14'}`,
+      `border:1px solid ${canUpload ? '#334488' : '#222244'}`,
       'border-radius:5px', 'font:bold 12px Arial,sans-serif',
       `cursor:${canUpload ? 'pointer' : 'default'}`,
     ].join(';');
@@ -384,7 +445,7 @@ export class TrackSelect extends Scene {
     btnRow.appendChild(editBtn);
     btnRow.appendChild(deleteBtn);
 
-    info.appendChild(name);
+    info.appendChild(nameRow);
     info.appendChild(date);
     info.appendChild(btnRow);
     info.appendChild(uploadBtn);
@@ -392,76 +453,76 @@ export class TrackSelect extends Scene {
     card.appendChild(canvas);
     card.appendChild(info);
 
+    // ── Helper: resolve track data (local = inline, server = fetch) ──
+    const resolveData = async (): Promise<{ data: string; serverId: string | null }> => {
+      if (draft.local) return { data: draft.data!, serverId: null };
+      const result = await fetchMineTrack(draft.id);
+      return { data: result.data, serverId: draft.id };
+    };
+
     // ── Handlers ──
 
-    playBtn.addEventListener('click', () => {
+    playBtn.addEventListener('click', async () => {
       playBtn.textContent = '…';
       playBtn.disabled = true;
-      fetchMineTrack(meta.id)
-        .then(({ meta: m, data }) => {
-          const payload  = JSON.parse(data) as TrackPayload;
-          const entry: TrackEntry = {
-            id:      m.id,
-            name:    m.name,
-            author:  '',
-            startX:  payload.startX,
-            startY:  payload.startY,
-            pieces:  payload.pieces,
-            markers: payload.markers,
-          };
-          this.scene.start('Game', { track: entry, mineTrackId: m.id });
-        })
-        .catch(() => {
-          playBtn.textContent = '▶ Play';
-          playBtn.disabled = false;
-        });
+      try {
+        const { data } = await resolveData();
+        const payload  = JSON.parse(data) as TrackPayload;
+        const entry: TrackEntry = {
+          id: draft.id, name: draft.name, author: '',
+          startX: payload.startX, startY: payload.startY,
+          pieces: payload.pieces, markers: payload.markers,
+        };
+        this.scene.start('Game', { track: entry, mineTrackId: draft.id });
+      } catch {
+        playBtn.textContent = '▶ Play';
+        playBtn.disabled = false;
+      }
     });
 
-    editBtn.addEventListener('click', () => {
+    editBtn.addEventListener('click', async () => {
       editBtn.textContent = '…';
       editBtn.disabled = true;
-      fetchMineTrack(meta.id)
-        .then(({ meta: m, data }) => {
-          const payload = JSON.parse(data) as TrackPayload;
-          const entry: TrackEntry = {
-            id:      m.id,
-            name:    m.name,
-            author:  '',
-            startX:  payload.startX,
-            startY:  payload.startY,
-            pieces:  payload.pieces,
-            markers: payload.markers,
-          };
-          this.scene.start('TrackEditor', { mineTrackId: m.id, track: entry, startHeading: payload.startHeading });
-        })
-        .catch(() => {
-          editBtn.textContent = '✎ Edit';
-          editBtn.disabled = false;
+      try {
+        const { data } = await resolveData();
+        const payload = JSON.parse(data) as TrackPayload;
+        const entry: TrackEntry = {
+          id: draft.id, name: draft.name, author: '',
+          startX: payload.startX, startY: payload.startY,
+          pieces: payload.pieces, markers: payload.markers,
+        };
+        this.scene.start('TrackEditor', {
+          mineTrackId: draft.id, track: entry, startHeading: payload.startHeading,
         });
+      } catch {
+        editBtn.textContent = '✎ Edit';
+        editBtn.disabled = false;
+      }
     });
 
-    deleteBtn.addEventListener('click', () => {
-      if (!confirm(`Delete "${meta.name}"?`)) return;
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm(`Delete "${draft.name}"?`)) return;
       deleteBtn.textContent = '…';
       deleteBtn.disabled = true;
-      deleteMineTrack(meta.id)
-        .then(() => {
-          this.mineTracks = this.mineTracks.filter(t => t.id !== meta.id);
-          this.buildList();
-        })
-        .catch(() => {
-          deleteBtn.textContent = '✕ Del';
-          deleteBtn.disabled = false;
-        });
+      try {
+        if (draft.local) {
+          deleteLocalDraft(draft.id);
+        } else {
+          await deleteMineTrack(draft.id);
+        }
+        this.drafts = this.drafts.filter(d => d.id !== draft.id);
+        this.buildList();
+      } catch {
+        deleteBtn.textContent = '✕ Del';
+        deleteBtn.disabled = false;
+      }
     });
 
     if (canUpload) {
       uploadBtn.addEventListener('click', () => {
-        // Lock all card actions while upload is in progress.
         const cardBtns = [playBtn, editBtn, deleteBtn, uploadBtn];
         for (const b of cardBtns) b.disabled = true;
 
-        // Replace button content with a CSS spinner.
         uploadBtn.innerHTML = '';
         const spinner = document.createElement('span');
         spinner.style.cssText = [
@@ -473,59 +534,105 @@ export class TrackSelect extends Scene {
         TrackSelect.ensureSpinStyle();
         uploadBtn.appendChild(spinner);
 
-        const restoreOnError = () => {
+        // statusEl shows persistent rejection reasons below the upload button.
+        let statusEl = card.querySelector<HTMLElement>('.upload-status');
+        if (!statusEl) {
+          statusEl = document.createElement('div');
+          statusEl.className = 'upload-status';
+          statusEl.style.cssText = 'font:12px Arial,sans-serif;color:#ff9966;margin-top:4px;display:none;';
+          uploadBtn.insertAdjacentElement('afterend', statusEl);
+        }
+
+        const restoreOnError = async (res?: Response) => {
           for (const b of cardBtns) b.disabled = false;
           uploadBtn.innerHTML = '';
           uploadBtn.textContent = '↑ Upload to Community';
+          if (res) {
+            try {
+              const err = await res.json() as { message?: string };
+              if (err.message && statusEl) {
+                statusEl.textContent = err.message;
+                statusEl.style.display = '';
+              }
+            } catch { /* ignore parse errors */ }
+          }
         };
 
-        fetchMineTrack(meta.id)
-          .then(async ({ meta: m, data }) => {
+        (async () => {
+          let data: string;
+          let serverId: string;
+
+          if (draft.local) {
+            // Sync to server first
+            try {
+              const result = await saveMineTrack(draft.name, draft.data!);
+              deleteLocalDraft(draft.id);
+              serverId = result.id;
+              data = draft.data!;
+            } catch {
+              await restoreOnError(new Response(
+                JSON.stringify({ message: 'Server unavailable — try again later.' }), { status: 503 },
+              ));
+              return;
+            }
+          } else {
+            serverId = draft.id;
+            try {
+              const result = await fetchMineTrack(serverId);
+              data = result.data;
+            } catch {
+              await restoreOnError();
+              return;
+            }
+          }
+
+          try {
             const payload = JSON.parse(data) as TrackPayload;
             const entry: TrackEntry = {
-              id:      '',
-              name:    m.name,
-              author:  '',
-              startX:  payload.startX,
-              startY:  payload.startY,
-              pieces:  payload.pieces,
-              markers: payload.markers,
+              id: '', name: draft.name, author: '',
+              startX: payload.startX, startY: payload.startY,
+              pieces: payload.pieces, markers: payload.markers,
             };
-            const res = await fetch('/api/track', {
-              method:  'POST',
+
+            const uploadRes = await fetch('/api/track', {
+              method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body:    JSON.stringify({ name: entry.name, data }),
+              body: JSON.stringify({ name: entry.name, data }),
             });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const json = await res.json() as { id: string };
+            if (!uploadRes.ok) { await restoreOnError(uploadRes); return; }
+            const json = await uploadRes.json() as { id: string };
             const communityId = json.id;
 
             await generateAndUploadAiGhosts({ ...entry, id: communityId }, ['average', 'rookie']);
-            await publishMineTrack(m.id, communityId);
+            await deleteMineTrack(serverId);
 
-            const idx = this.mineTracks.findIndex(t => t.id === m.id);
-            if (idx !== -1) this.mineTracks[idx] = { ...this.mineTracks[idx], uploadedId: communityId };
+            this.drafts = this.drafts.filter(d => d.id !== draft.id);
             this.buildList();
-          })
-          .catch(restoreOnError);
+          } catch {
+            await restoreOnError();
+          }
+        })();
       });
     }
 
-    // Load thumbnail in background
-    fetchMineTrack(meta.id)
-      .then(({ data }) => {
+    // Load thumbnail
+    (async () => {
+      try {
+        const { data } = await resolveData();
         const payload = JSON.parse(data) as TrackPayload;
         const ctx = canvas.getContext('2d');
         if (ctx) this.drawThumbnail(canvas, {
-          id: meta.id, name: meta.name, author: '',
+          id: draft.id, name: draft.name, author: '',
           startX: payload.startX, startY: payload.startY,
           pieces: payload.pieces, markers: payload.markers,
         });
-      })
-      .catch(() => { /* thumbnail stays blank */ });
+      } catch { /* thumbnail stays blank */ }
+    })();
 
     return card;
   }
+
+  // ── Community card ────────────────────────────────────────────────────────────
 
   private buildCommunityCard(meta: CommunityTrackMeta): HTMLElement {
     const card = document.createElement('div');
@@ -537,7 +644,6 @@ export class TrackSelect extends Scene {
       'user-select:none', '-webkit-user-select:none',
     ].join(';');
 
-    // Placeholder thumbnail (no pieces yet — drawn after fetch)
     const canvas  = document.createElement('canvas');
     canvas.width  = THUMB_W;
     canvas.height = THUMB_H;
@@ -582,7 +688,6 @@ export class TrackSelect extends Scene {
         });
     });
 
-    // Fetch full track data in the background to draw the thumbnail.
     fetchCommunityTrack(meta.id)
       .then(track => {
         const ctx = canvas.getContext('2d');
@@ -592,6 +697,8 @@ export class TrackSelect extends Scene {
 
     return card;
   }
+
+  // ── Utilities ─────────────────────────────────────────────────────────────────
 
   private closeContextMenu(): void {
     this.contextMenuEl?.remove();
@@ -633,16 +740,11 @@ export class TrackSelect extends Scene {
       }
     };
 
-    // Checkpoints — yellow dots
     for (const m of track.markers) {
       if (m.kind === 'checkpoint') dot(m.x, m.y, 2.5, '#ffdd00');
     }
-
-    // Finish — red dot with white ring
     const finish = track.markers.find(m => m.kind === 'finish');
     if (finish) dot(finish.x, finish.y, 3.5, '#ff3333', '#ffffff');
-
-    // Start — cyan dot, drawn last so it's always visible
     dot(track.startX, track.startY, 3, '#00eeff', '#ffffff');
   }
 }

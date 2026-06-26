@@ -9,7 +9,7 @@ import { CORRIDOR } from '../track/TrackGeometry';
 import type { TrackMarker } from '../track/convertGmsTrack';
 import { username, isLoggedIn } from '../devvitContext';
 import { fetchOrGenerateAiGhost, generateAndUploadAiGhosts } from '../track/AiGhost';
-import { verifyMineTrack } from '../track/TrackUpload';
+import { verifyMineTrack, markLocalDraftVerified } from '../track/TrackUpload';
 
 // ── Grid / camera constants ────────────────────────────────────────────────────
 // gridPx is mutable so the debug slider can adjust it at runtime.
@@ -1238,8 +1238,10 @@ export class Game extends Scene {
         } else {
           setStatus(`Your best: ${data.previousBest!.toFixed(2)} · Rank #${data.rank ?? '?'}`, '#8899cc');
         }
-        // Mark the mine track as verified so the user can upload it.
-        if (mineTrackId) verifyMineTrack(mineTrackId).catch(() => {});
+        if (mineTrackId) {
+          if (mineTrackId.startsWith('local-')) markLocalDraftVerified(mineTrackId);
+          else verifyMineTrack(mineTrackId).catch(() => {});
+        }
       })
       .catch((err) => {
         console.error('[ghost upload]', err);

@@ -11,20 +11,13 @@ import {
 } from '../track/TrackGeometry';
 import type { TrackMarker } from '../track/convertGmsTrack';
 import type { TrackEntry } from '../tracks/trackRegistry';
-import { saveMineTrack } from '../track/TrackUpload';
+import { saveDraft } from '../track/TrackUpload';
 import type { TrackPayload } from '../track/TrackUpload';
 
 const BG        = 0x0a0a16;
 const HEADER_H  = 60;
 const PALETTE_H = 246;
-const SNAP_PX   = 24; // grid snap for start position
-
 const DEFAULT_START_X = 0, DEFAULT_START_Y = 0, DEFAULT_START_HEADING = 180;
-
-const HEADING_ARROWS: Record<number, string> = {
-  0: '↑', 45: '↗', 90: '→', 135: '↘',
-  180: '↓', 225: '↙', 270: '←', 315: '↖',
-};
 
 export class TrackEditor extends Scene {
   // Track chain state
@@ -38,10 +31,16 @@ export class TrackEditor extends Scene {
   private curStartY       = DEFAULT_START_Y;
   private curStartHeading = DEFAULT_START_HEADING;
 
-  // Start-dot drag state
-  private isDraggingStart  = false;
-  private startDragInitX   = 0;
-  private startDragInitY   = 0;
+  // Car selection + drag state
+  private isCarSelected  = false;
+  private isDraggingStart = false;
+
+  // Rotate button refs — enabled only when car is selected
+  private rotateCcwBtn: HTMLButtonElement | null = null;
+  private rotateCwBtn:  HTMLButtonElement | null = null;
+
+  // Selection ring (world-space graphics, redrawn when selection changes)
+  private selectionGfx!: GameObjects.Graphics;
 
   // Palette state
   private palTab:    'straight' | 'corner' = 'straight';
@@ -63,6 +62,7 @@ export class TrackEditor extends Scene {
   private markerGfx!:  GameObjects.Graphics;
   private barrierImg:  GameObjects.Image | null = null;
   private finishImg:   GameObjects.Image | null = null;
+  private startCarImg: GameObjects.Image | null = null;
 
   // DOM
   private palEl:  HTMLElement | null = null;
@@ -84,12 +84,17 @@ export class TrackEditor extends Scene {
     this.placed           = [];
     this.finishMarker     = null;
     this.mineTrackId      = data?.mineTrackId ?? null;
-    this.isDraggingStart  = false;
+    this.isCarSelected   = false;
+    this.isDraggingStart = false;
+    this.startCarImg     = null; // Phaser destroys it on shutdown; clear our reference
 
-    this.curStartX        = data?.track?.startX  ?? DEFAULT_START_X;
-    this.curStartY        = data?.track?.startY  ?? DEFAULT_START_Y;
-    this.curStartHeading  = data?.startHeading   ?? DEFAULT_START_HEADING;
-    this.cursor           = { x: this.curStartX, y: this.curStartY, heading: this.curStartHeading };
+    // Car start position — independent of the track-building origin.
+    this.curStartX       = data?.track?.startX ?? DEFAULT_START_X;
+    this.curStartY       = data?.track?.startY ?? DEFAULT_START_Y;
+    this.curStartHeading = data?.startHeading  ?? DEFAULT_START_HEADING;
+
+    // Track always builds from a fixed origin; cursor starts there.
+    this.cursor = { x: DEFAULT_START_X, y: DEFAULT_START_Y, heading: DEFAULT_START_HEADING };
 
     const track = data?.track;
     if (track) {
@@ -100,8 +105,8 @@ export class TrackEditor extends Scene {
         return { type: p.type, angle: (p as CornerDef).angle, walls: p.walls, flip: (p as CornerDef).flip } as PieceDef;
       });
       const result = buildTrackWithCursor({
-        startX: this.curStartX, startY: this.curStartY,
-        startHeading: this.curStartHeading, pieces: this.defs,
+        startX: DEFAULT_START_X, startY: DEFAULT_START_Y,
+        startHeading: DEFAULT_START_HEADING, pieces: this.defs,
       });
       this.placed = result.placed;
       this.cursor = result.cursor;
@@ -113,7 +118,7 @@ export class TrackEditor extends Scene {
     const cam = this.cameras.main;
     cam.setBackgroundColor(BG);
     cam.setZoom(0.65);
-    cam.centerOn(this.curStartX, this.curStartY);
+    cam.centerOn(DEFAULT_START_X, DEFAULT_START_Y);
 
     // ── DOM header (DOM avoids setScrollFactor(0) + camera-zoom scaling issue)
     const hdrEl = document.createElement('div');
@@ -166,7 +171,8 @@ export class TrackEditor extends Scene {
     for (let y = -EXT; y <= EXT; y += CELL) gridGfx.lineBetween(-EXT, y, EXT, y);
 
     // ── World-space markers + cursor (redrawn on track change)
-    this.markerGfx = this.add.graphics().setDepth(5);
+    this.markerGfx    = this.add.graphics().setDepth(5);
+    this.selectionGfx = this.add.graphics().setDepth(7); // above car (6)
 
     // ── Input — identical to GridTest / Game.ts; no DOM canvas, no raw pointer events
     this.input.addPointer(1);
@@ -181,17 +187,16 @@ export class TrackEditor extends Scene {
         this.pinchZoom = cam.zoom;
         return;
       }
-      // Check if pointer is near the start dot in world space
-      const wx = cam.scrollX + ptr.x / cam.zoom;
-      const wy = cam.scrollY + ptr.y / cam.zoom;
-      const distToStart = Math.hypot(wx - this.curStartX, wy - this.curStartY);
-      const hitRadius = Math.max(16, 16 / cam.zoom); // at least 16px screen-space hit area
-      if (distToStart < hitRadius) {
+      // ptr.worldX/Y is Phaser's own camera-corrected world position — always correct.
+      const hitRadius = 48; // world units; ~31 screen px at default zoom 0.65
+      if (Math.hypot(ptr.worldX - this.curStartX, ptr.worldY - this.curStartY) < hitRadius) {
+        // Tap/press on car — select it and begin drag
+        if (!this.isCarSelected) this.selectCar();
         this.isDraggingStart = true;
-        this.startDragInitX  = ptr.x;
-        this.startDragInitY  = ptr.y;
         return;
       }
+      // Tapped elsewhere — deselect car, start camera pan
+      if (this.isCarSelected) this.deselectCar();
       this.isDraggingStart = false;
       this.isDragging      = false;
       this.dragStartX      = ptr.x;
@@ -212,11 +217,9 @@ export class TrackEditor extends Scene {
       }
       if (!ptr.isDown) return;
       if (this.isDraggingStart) {
-        const wx = cam.scrollX + ptr.x / cam.zoom;
-        const wy = cam.scrollY + ptr.y / cam.zoom;
-        this.curStartX = Math.round(wx / SNAP_PX) * SNAP_PX;
-        this.curStartY = Math.round(wy / SNAP_PX) * SNAP_PX;
-        this.rebuildFromStart();
+        this.curStartX = ptr.worldX;
+        this.curStartY = ptr.worldY;
+        this.updateStartCarImg();
         return;
       }
       const dx = ptr.x - this.dragStartX;
@@ -241,18 +244,8 @@ export class TrackEditor extends Scene {
           this.dragScrollY = cam.scrollY;
         }
       }
-      if (this.isDraggingStart) {
-        const totalMove = Math.hypot(ptr.x - this.startDragInitX, ptr.y - this.startDragInitY);
-        if (totalMove < 8) {
-          // Tap on start dot → rotate +45° CW (undo the positional move)
-          this.curStartX = Math.round(this.curStartX / SNAP_PX) * SNAP_PX;
-          this.curStartY = Math.round(this.curStartY / SNAP_PX) * SNAP_PX;
-          this.rotateStartHeading(45);
-        }
-        this.isDraggingStart = false;
-        return;
-      }
-      this.isDragging = false;
+      this.isDraggingStart = false;
+      this.isDragging      = false;
     });
 
     this.input.on('wheel', (ptr: Phaser.Input.Pointer) => {
@@ -266,8 +259,10 @@ export class TrackEditor extends Scene {
     };
     window.addEventListener('keydown', onEsc);
 
+    this.makeEditorCarTexture();
     this.createPalette();
     this.redrawMarkers();
+    this.updateStartCarImg();
     this.updateFinishImg();
     if (this.placed.length > 0) {
       this.updateBarrierImg();
@@ -279,7 +274,9 @@ export class TrackEditor extends Scene {
       hdrEl.remove();
       hintEl.remove();
       this.palEl?.remove();
-      this.palEl = null;
+      this.palEl        = null;
+      this.rotateCcwBtn = null;
+      this.rotateCwBtn  = null;
     });
   }
 
@@ -309,12 +306,9 @@ export class TrackEditor extends Scene {
 
   private redrawMarkers(): void {
     this.markerGfx.clear();
-
-    // Start dot — radius 8 signals it's interactive (tap=rotate, drag=move)
-    this.drawWorldDot(this.curStartX, this.curStartY, this.curStartHeading, 0x00eeff, 8);
-
+    // Near-closed check: cursor approaching the fixed track-building origin.
     const nearClosed = this.defs.length >= 3
-      && Math.hypot(this.cursor.x - this.curStartX, this.cursor.y - this.curStartY) < CORRIDOR * 1.5;
+      && Math.hypot(this.cursor.x - DEFAULT_START_X, this.cursor.y - DEFAULT_START_Y) < CORRIDOR * 1.5;
     this.drawWorldDot(this.cursor.x, this.cursor.y, this.cursor.heading,
       nearClosed ? 0x88ff44 : 0xffee00, 6);
   }
@@ -339,35 +333,114 @@ export class TrackEditor extends Scene {
       .setDepth(4);
   }
 
+  private makeEditorCarTexture(): void {
+    const KEY = 'editor_car';
+    if (this.textures.exists(KEY)) return;
+    const gPx = 36; // slightly larger than gameplay size for editor visibility
+    const HW  = Math.round(gPx * 0.50);
+    const HH  = Math.round(gPx * 0.85);
+    const PAD = Math.round(gPx * 0.45);
+    const W   = (HW + PAD) * 2;
+    const H   = (HH + PAD) * 2;
+    const cx  = W / 2, cy = H / 2;
+    const ct  = this.textures.createCanvas(KEY, W, H)!;
+    const ctx = ct.getContext();
+    ctx.shadowColor = 'hsl(300,100%,60%)';
+    ctx.shadowBlur  = 10;
+    ctx.fillStyle   = 'hsl(300,100%,60%)';
+    ctx.beginPath();
+    ctx.moveTo(cx,      cy - HH);
+    ctx.lineTo(cx + HW, cy + HH);
+    ctx.lineTo(cx,      cy + HH * 0.35);
+    ctx.lineTo(cx - HW, cy + HH);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle  = 'rgba(255,255,255,0.80)';
+    ctx.beginPath();
+    ctx.moveTo(cx,              cy - HH + 3);
+    ctx.lineTo(cx + HW * 0.45, cy + HH * 0.2);
+    ctx.lineTo(cx,              cy + HH * 0.1);
+    ctx.lineTo(cx - HW * 0.45, cy + HH * 0.2);
+    ctx.closePath();
+    ctx.fill();
+    ct.refresh();
+  }
+
+  private updateStartCarImg(): void {
+    this.startCarImg?.destroy();
+    this.startCarImg = this.add.image(this.curStartX, this.curStartY, 'editor_car')
+      .setAngle(this.curStartHeading) // texture points north; heading 0=N, 90=E, 180=S
+      .setOrigin(0.5)
+      .setDepth(6); // above finish (4) and marker gfx (5)
+    this.updateCarSelection();
+  }
+
+  private selectCar(): void {
+    this.isCarSelected = true;
+    if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = false;
+    if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = false;
+    this.updateCarSelection();
+  }
+
+  private deselectCar(): void {
+    this.isCarSelected = false;
+    if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = true;
+    if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = true;
+    this.updateCarSelection();
+  }
+
+  private updateCarSelection(): void {
+    this.selectionGfx.clear();
+    if (!this.isCarSelected) return;
+    // Cyan ring around the car to indicate selection
+    const r = 36;
+    this.selectionGfx.lineStyle(2, 0x00eeff, 0.9);
+    this.selectionGfx.strokeCircle(this.curStartX, this.curStartY, r);
+    // Four small handle dots at cardinal points
+    this.selectionGfx.fillStyle(0x00eeff, 1);
+    for (const [dx, dy] of [[0, -r], [r, 0], [0, r], [-r, 0]] as [number, number][]) {
+      this.selectionGfx.fillCircle(this.curStartX + dx, this.curStartY + dy, 3.5);
+    }
+  }
+
   // ── Track editing ─────────────────────────────────────────────────────────────
 
   private rebuildTrack(): void {
+    // Track always builds from a fixed origin; curStart* is the car position only.
+    const result = buildTrackWithCursor({
+      startX: DEFAULT_START_X, startY: DEFAULT_START_Y,
+      startHeading: DEFAULT_START_HEADING, pieces: this.defs,
+    });
+    this.placed = result.placed;
+    this.cursor = result.cursor;
+  }
+
+  // Preserved for future "move/rotate entire track" feature — not called from car UI.
+  private rebuildFromStart(): void {
     const result = buildTrackWithCursor({
       startX: this.curStartX, startY: this.curStartY,
       startHeading: this.curStartHeading, pieces: this.defs,
     });
     this.placed = result.placed;
     this.cursor = result.cursor;
-  }
-
-  private rebuildFromStart(): void {
-    this.rebuildTrack();
     this.updateBarrierImg();
     this.redrawMarkers();
     this.updateFinishImg();
   }
 
   private rotateStartHeading(delta: number): void {
+    if (!this.isCarSelected) return;
     this.curStartHeading = ((this.curStartHeading + delta) % 360 + 360) % 360;
-    this.rebuildFromStart();
+    this.updateStartCarImg();
     this.updateStartHeadingDisplay();
   }
 
   private updateStartHeadingDisplay(): void {
     const el = document.getElementById('ed-start-heading');
     if (el) {
-      const arrow = HEADING_ARROWS[this.curStartHeading] ?? '?';
-      el.textContent = `${arrow} ${this.curStartHeading}°`;
+      el.innerHTML =
+        `<span style="display:inline-block;transform:rotate(${this.curStartHeading}deg)">↑</span> ${this.curStartHeading}°`;
     }
   }
 
@@ -455,26 +528,30 @@ export class TrackEditor extends Scene {
     const headRow = document.createElement('div');
     headRow.style.cssText = 'display:flex;gap:6px;align-items:center;';
 
-    const ccwBtn = document.createElement('button');
+    const ccwBtn = document.createElement('button') as HTMLButtonElement;
     ccwBtn.textContent = '↶';
-    ccwBtn.title = 'Rotate start CCW 45°';
+    ccwBtn.title    = 'Rotate start CCW 15°';
+    ccwBtn.disabled = true;
     ccwBtn.style.cssText = 'padding:6px 12px;border-radius:5px;border:1px solid #444466;background:#111128;color:#8888ff;font:bold 16px Arial,sans-serif;cursor:pointer;';
-    ccwBtn.addEventListener('click', () => this.rotateStartHeading(-45));
+    ccwBtn.addEventListener('click', () => this.rotateStartHeading(-15));
+    this.rotateCcwBtn = ccwBtn;
 
     const headLabel = document.createElement('span');
     headLabel.id = 'ed-start-heading';
     headLabel.style.cssText = 'flex:1;text-align:center;color:#aaaacc;font:13px Arial,sans-serif;min-width:60px;';
-    const initArrow = HEADING_ARROWS[this.curStartHeading] ?? '?';
-    headLabel.textContent = `${initArrow} ${this.curStartHeading}°`;
+    headLabel.innerHTML =
+      `<span style="display:inline-block;transform:rotate(${this.curStartHeading}deg)">↑</span> ${this.curStartHeading}°`;
 
-    const cwBtn = document.createElement('button');
+    const cwBtn = document.createElement('button') as HTMLButtonElement;
     cwBtn.textContent = '↷';
-    cwBtn.title = 'Rotate start CW 45°';
+    cwBtn.title    = 'Rotate start CW 15°';
+    cwBtn.disabled = true;
     cwBtn.style.cssText = 'padding:6px 12px;border-radius:5px;border:1px solid #444466;background:#111128;color:#8888ff;font:bold 16px Arial,sans-serif;cursor:pointer;';
-    cwBtn.addEventListener('click', () => this.rotateStartHeading(45));
+    cwBtn.addEventListener('click', () => this.rotateStartHeading(15));
+    this.rotateCwBtn = cwBtn;
 
     const hintSpan = document.createElement('span');
-    hintSpan.textContent = 'tap ⊙ to rotate · drag to move';
+    hintSpan.textContent = 'tap car to select';
     hintSpan.style.cssText = 'color:rgba(120,120,180,0.6);font:11px Arial,sans-serif;white-space:nowrap;';
 
     headRow.appendChild(ccwBtn);
@@ -681,11 +758,11 @@ export class TrackEditor extends Scene {
           pieces:       this.placed,
           markers:      [this.finishMarker!],
         };
-        await saveMineTrack(name, JSON.stringify(payload), this.mineTrackId ?? undefined);
+        await saveDraft(name, JSON.stringify(payload), this.mineTrackId ?? undefined);
         overlay.remove();
-        this.scene.start('TrackSelect', { activeTab: 'mine' });
-      } catch {
-        statusEl.textContent = 'Save failed — try again.';
+        this.scene.start('TrackSelect', { activeTab: 'drafts' });
+      } catch (err) {
+        statusEl.textContent = err instanceof Error ? err.message : 'Save failed — try again.';
         saveBtn.disabled   = false;
         cancelBtn.disabled = false;
       }

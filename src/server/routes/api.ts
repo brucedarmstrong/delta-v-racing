@@ -33,6 +33,34 @@ type ErrorResponse = {
   message: string;
 };
 
+// ── Track name validation ─────────────────────────────────────────────────────
+
+const BANNED_WORDS = [
+  'fuck','shit','cunt','cock','dick','pussy','ass','bitch','bastard',
+  'nigger','nigga','faggot','fag','retard','whore','slut','twat',
+  'piss','cum','jizz','rape','porn','nazi',
+];
+
+function normalizeForFilter(s: string): string {
+  return s.toLowerCase()
+    .replace(/0/g, 'o').replace(/1/g, 'i').replace(/3/g, 'e')
+    .replace(/4/g, 'a').replace(/5/g, 's').replace(/@/g, 'a').replace(/\$/g, 's')
+    .replace(/[^a-z]/g, '');
+}
+
+function hasBannedWord(name: string): boolean {
+  const n = normalizeForFilter(name);
+  return BANNED_WORDS.some(w => n.includes(w));
+}
+
+function validateTrackName(name: string): string | null {
+  const trimmed = name.trim();
+  if (trimmed.length < 2)  return 'Track name must be at least 2 characters.';
+  if (trimmed.length > 40) return 'Track name must be 40 characters or fewer.';
+  if (hasBannedWord(trimmed)) return 'Track name contains inappropriate content.';
+  return null;
+}
+
 export const api = new Hono();
 
 api.get('/init', async (c) => {
@@ -293,12 +321,28 @@ api.post('/track', async (c) => {
     return c.json<ErrorResponse>({ status: 'error', message: 'Missing required fields' }, 400);
   }
 
+  const nameError = validateTrackName(name);
+  if (nameError) {
+    return c.json<ErrorResponse>({ status: 'error', message: nameError }, 400);
+  }
+
+  // Block duplicate names from the same author.
+  const nameKey = `track-name:${username}:${name.trim().toLowerCase()}`;
+  const nameTaken = await redis.get(nameKey);
+  if (nameTaken) {
+    return c.json<ErrorResponse>({
+      status: 'error',
+      message: `You already have a community track called "${name.trim()}". Rename your draft before uploading.`,
+    }, 409);
+  }
+
   const uploadedAt = Date.now();
   const id = `${username}_${uploadedAt}`;
 
-  const record = JSON.stringify({ id, name, author: username, uploadedAt, data });
+  const record = JSON.stringify({ id, name: name.trim(), author: username, uploadedAt, data });
   await redis.set(`track:${id}`, record);
   await redis.zAdd('tracks:community', { score: uploadedAt, member: id });
+  await redis.set(nameKey, id);
 
   return c.json<UploadTrackResponse>({ type: 'upload_track', id, author: username, uploadedAt });
 });
@@ -372,6 +416,11 @@ api.post('/mine-track', async (c) => {
   const { name, data } = body;
   if (!name || !data) {
     return c.json<ErrorResponse>({ status: 'error', message: 'Missing required fields' }, 400);
+  }
+
+  const nameError = validateTrackName(name);
+  if (nameError) {
+    return c.json<ErrorResponse>({ status: 'error', message: nameError }, 400);
   }
 
   let id = body.id;

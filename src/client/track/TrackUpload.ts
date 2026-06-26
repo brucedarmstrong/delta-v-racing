@@ -68,7 +68,11 @@ export async function saveMineTrack(
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch {}
+    throw new Error(msg);
+  }
   const json = await res.json() as SaveMineTrackResponse;
   return { id: json.id, createdAt: json.createdAt };
 }
@@ -95,6 +99,64 @@ export async function deleteMineTrack(id: string): Promise<void> {
 export async function verifyMineTrack(id: string): Promise<void> {
   const res = await fetch(`/api/mine-track/${encodeURIComponent(id)}/verify`, { method: 'PATCH' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+// ── Local drafts (localStorage fallback when Devvit save fails) ───────────────
+
+const LOCAL_DRAFTS_KEY = 'dv-drafts';
+
+export type LocalDraft = {
+  id:        string;     // always 'local-{timestamp}'
+  name:      string;
+  createdAt: number;
+  data:      string;     // JSON TrackPayload
+  verified?: boolean;
+};
+
+export function getLocalDrafts(): LocalDraft[] {
+  try { return JSON.parse(localStorage.getItem(LOCAL_DRAFTS_KEY) ?? '[]') as LocalDraft[]; }
+  catch { return []; }
+}
+
+function setLocalDraft(draft: LocalDraft): void {
+  const all = getLocalDrafts().filter(d => d.id !== draft.id);
+  all.unshift(draft);
+  localStorage.setItem(LOCAL_DRAFTS_KEY, JSON.stringify(all));
+}
+
+export function deleteLocalDraft(id: string): void {
+  localStorage.setItem(LOCAL_DRAFTS_KEY,
+    JSON.stringify(getLocalDrafts().filter(d => d.id !== id)));
+}
+
+export function markLocalDraftVerified(id: string): void {
+  const all = getLocalDrafts();
+  const d = all.find(x => x.id === id);
+  if (d) { d.verified = true; localStorage.setItem(LOCAL_DRAFTS_KEY, JSON.stringify(all)); }
+}
+
+export async function saveDraft(
+  name: string,
+  data: string,
+  existingId?: string,
+): Promise<{ id: string; local: boolean }> {
+  const serverId = existingId?.startsWith('local-') ? undefined : existingId;
+  try {
+    const result = await saveMineTrack(name, data, serverId);
+    if (existingId?.startsWith('local-')) deleteLocalDraft(existingId);
+    return { id: result.id, local: false };
+  } catch {
+    const localId  = existingId?.startsWith('local-') ? existingId : `local-${Date.now()}`;
+    const existing = existingId?.startsWith('local-')
+      ? getLocalDrafts().find(d => d.id === existingId)
+      : undefined;
+    setLocalDraft({
+      id: localId, name,
+      createdAt: existing?.createdAt ?? Date.now(),
+      data, verified: existing?.verified,
+    });
+    return { id: localId, local: true };
+  }
 }
 
 export async function publishMineTrack(mineId: string, communityId: string): Promise<void> {
