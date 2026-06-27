@@ -22,9 +22,19 @@ type GmsPoint = {
 };
 
 export type GmsTrack = {
-  points: Record<string, GmsPoint>;
+  points?: Record<string, GmsPoint>;
   info?: Record<string, unknown>;
+  [key: string]: unknown;
 };
+
+// Handles both wrapped format { points: {...} } and raw backup format where
+// instances are top-level keys alongside a string "trackName" field.
+function getPoints(json: GmsTrack): Record<string, GmsPoint> {
+  if (json.points) return json.points;
+  return Object.fromEntries(
+    Object.entries(json).filter(([, v]) => typeof v === 'object' && v !== null),
+  ) as Record<string, GmsPoint>;
+}
 
 /**
  * Convert a GameMaker Studio track JSON to PlacedPiece[].
@@ -43,7 +53,7 @@ export type GmsTrack = {
 export function convertGmsTrack(json: GmsTrack): PlacedPiece[] {
   const pieces: PlacedPiece[] = [];
 
-  for (const pt of Object.values(json.points)) {
+  for (const pt of Object.values(getPoints(json))) {
     if (pt.name !== 'obj_straight' && pt.name !== 'obj_corner') continue;
 
     const { x, y, angle, sprite } = pt;
@@ -67,7 +77,7 @@ export function convertGmsTrack(json: GmsTrack): PlacedPiece[] {
 
 export function convertGmsMarkers(json: GmsTrack): TrackMarker[] {
   const markers: TrackMarker[] = [];
-  for (const pt of Object.values(json.points)) {
+  for (const pt of Object.values(getPoints(json))) {
     if (pt.name !== 'obj_checkpoint' && pt.name !== 'obj_finish') continue;
     const rotation = ((-pt.angle) % 360 + 360) % 360;
     if (pt.name === 'obj_checkpoint') {
