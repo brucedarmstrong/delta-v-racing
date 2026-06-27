@@ -33,9 +33,9 @@ export class ModeSelect extends Scene {
     }).setScrollFactor(0).setOrigin(0.5).setDepth(10);
 
     const defs: BtnDef[] = [
-      { label: 'RACE',    action: () => this.scene.start('TrackSelect') },
-      { label: 'CREATE',  action: () => this.scene.start('TrackEditor') },
-      { label: 'OPTIONS', action: () => this.scene.start('OptionsMenu') },
+      { label: 'COMMUNITY',     action: () => this.scene.start('TrackSelect', { activeTab: 'community' }) },
+      { label: 'LEADERBOARD',   action: () => this.scene.start('Leaderboard') },
+      { label: 'CREATE YOUR OWN', action: () => this.scene.start('TrackEditor') },
     ];
 
     this.btns = defs.map(d => ({
