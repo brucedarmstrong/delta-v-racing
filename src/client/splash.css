@@ -115,6 +115,34 @@
   background: #0f1030;
 }
 
+.secondary-btns {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.sec-btn {
+  background: transparent;
+  color: #5566aa;
+  border: 1px solid #22224a;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-family: Arial, sans-serif;
+  font-size: clamp(11px, 3vw, 13px);
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.sec-btn:hover,
+.sec-btn:focus {
+  color: #99aaff;
+  border-color: #4455aa;
+  outline: none;
+}
+
 .build-stamp {
   font-family: Arial, sans-serif;
   font-size: 11px;

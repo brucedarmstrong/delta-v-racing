@@ -17,6 +17,15 @@ export class ModeSelect extends Scene {
   constructor() { super('ModeSelect'); }
 
   create() {
+    // Deep-link routing: splash screen sets this before calling requestExpandedMode.
+    const route = localStorage.getItem('dv-route');
+    if (route) {
+      localStorage.removeItem('dv-route');
+      if (route === 'community')   { this.scene.start('TrackSelect', { activeTab: 'community' }); return; }
+      if (route === 'leaderboard') { this.scene.start('Leaderboard'); return; }
+      if (route === 'create')      { this.scene.start('TrackEditor'); return; }
+    }
+
     const cam = this.cameras.main;
     cam.setBackgroundColor(BG);
     cam.setScroll(0, 0);
