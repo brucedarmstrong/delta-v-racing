@@ -3,7 +3,7 @@ import { STANDARD_TRACKS, type TrackEntry } from '../tracks/trackRegistry';
 import { trackBounds } from '../track/TrackLayout';
 import { drawBarriersOnCanvas } from '../track/TrackCanvasRenderer';
 import {
-  fetchCommunityTrack, fetchCommunityTracks,
+  fetchCommunityTrack, fetchCommunityTracks, seedCommunityTracks,
   fetchMineTrack, fetchMineTracks, deleteMineTrack, saveMineTrack,
   getLocalDrafts, deleteLocalDraft,
   type TrackPayload, type LocalDraft,
@@ -59,6 +59,9 @@ export class TrackSelect extends Scene {
   private contextMenuEl:   HTMLElement | null = null;
   private communityTracks: CommunityTrackMeta[] = [];
   private communityLoaded  = false;
+  private communityPage    = 0;
+  private communityTotal   = 0;
+  private communityQuery   = '';
   private drafts:          DraftEntry[] = [];
   private draftsLoaded     = false;
   private mineFilter       = false;   // community tab: show only current user's tracks
@@ -68,6 +71,10 @@ export class TrackSelect extends Scene {
   init(data?: { activeTab?: Tab }): void {
     if (data?.activeTab) this.activeTab = data.activeTab;
     this.communityLoaded = false;
+    this.communityPage   = 0;
+    this.communityTotal  = 0;
+    this.communityQuery  = '';
+    this.mineFilter      = false;
     this.draftsLoaded    = false;
     this.drafts          = [];
     this.communityTracks = [];
@@ -198,15 +205,50 @@ export class TrackSelect extends Scene {
       }
 
     } else if (this.activeTab === 'community') {
-      // ── Mine filter toggle row
+      const PAGE_SIZE   = 10;
+      const AUTHOR_MAP: Record<string, string> = {
+        'Boomsmith': 'u/Boomsmith-OG',
+        'Custom':    'u/delta-v-racing',
+        'Player':    'u/MaxDoor',
+      };
+
+      // ── Search input
+      const searchRow = document.createElement('div');
+      searchRow.style.cssText = 'margin-bottom:10px;';
+      const searchInput = document.createElement('input');
+      searchInput.type        = 'text';
+      searchInput.placeholder = 'Search by name or author…';
+      searchInput.value       = this.communityQuery;
+      searchInput.style.cssText = [
+        'width:100%', 'box-sizing:border-box',
+        'padding:9px 12px', 'border-radius:6px',
+        'background:#111128', 'color:#e8e8ff',
+        'border:1px solid #3a3a6a', 'font:14px Arial,sans-serif',
+        'outline:none',
+      ].join(';');
+      let searchTimer: ReturnType<typeof setTimeout> | null = null;
+      searchInput.addEventListener('input', () => {
+        if (searchTimer) clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+          this.communityQuery = searchInput.value.trim();
+          this.communityPage  = 0;
+          this.mineFilter     = false;
+          this.communityLoaded = false;
+          this.buildList();
+        }, 350);
+      });
+      searchRow.appendChild(searchInput);
+      el.appendChild(searchRow);
+
+      // ── Mine filter pills
       if (isLoggedIn) {
         const filterRow = document.createElement('div');
         filterRow.style.cssText = 'display:flex;gap:8px;margin-bottom:12px;';
-        const mkFilter = (label: string, active: boolean, fn: () => void) => {
+        const mkPill = (label: string, active: boolean, fn: () => void) => {
           const b = document.createElement('button');
           b.textContent = label;
           b.style.cssText = [
-            'padding:6px 14px', 'border-radius:16px',
+            'padding:5px 14px', 'border-radius:16px',
             active
               ? 'background:#22224a;color:#ccccff;border:1.5px solid #6666cc;'
               : 'background:#111128;color:#555588;border:1px solid #2a2a44;',
@@ -215,11 +257,13 @@ export class TrackSelect extends Scene {
           b.addEventListener('click', fn);
           return b;
         };
-        filterRow.appendChild(mkFilter('All', !this.mineFilter, () => {
-          this.mineFilter = false; this.buildList();
+        filterRow.appendChild(mkPill('All', !this.mineFilter, () => {
+          this.mineFilter = false; this.communityPage = 0;
+          this.communityQuery = ''; this.communityLoaded = false; this.buildList();
         }));
-        filterRow.appendChild(mkFilter('Mine', this.mineFilter, () => {
-          this.mineFilter = true; this.buildList();
+        filterRow.appendChild(mkPill('Mine', this.mineFilter, () => {
+          this.mineFilter = true; this.communityPage = 0;
+          this.communityQuery = ''; this.communityLoaded = false; this.buildList();
         }));
         el.appendChild(filterRow);
       }
@@ -227,26 +271,104 @@ export class TrackSelect extends Scene {
       if (!this.communityLoaded) {
         const msg = document.createElement('div');
         msg.textContent = 'Loading…';
-        msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:80px;';
+        msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:60px;';
         el.appendChild(msg);
-        fetchCommunityTracks().then(tracks => {
+
+        const params = this.mineFilter && username
+          ? { offset: this.communityPage * PAGE_SIZE, limit: PAGE_SIZE, author: username }
+          : { offset: this.communityPage * PAGE_SIZE, limit: PAGE_SIZE, q: this.communityQuery };
+
+        fetchCommunityTracks(params).then(({ tracks, total }) => {
           this.communityTracks = tracks;
+          this.communityTotal  = total;
           this.communityLoaded = true;
           this.buildList();
         }).catch(() => { msg.textContent = 'Failed to load community tracks.'; });
-      } else {
-        const visible = this.mineFilter
-          ? this.communityTracks.filter(t => t.author === username)
-          : this.communityTracks;
-        if (visible.length === 0) {
-          const msg = document.createElement('div');
-          msg.textContent = this.mineFilter
-            ? 'You haven\'t published any tracks yet.'
-            : 'No community tracks yet.';
-          msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:60px;';
-          el.appendChild(msg);
+
+      } else if (this.communityTracks.length === 0) {
+        const emptyMsg = document.createElement('div');
+        emptyMsg.style.cssText = 'text-align:center;color:#555588;font:16px Arial;margin-top:60px;padding:0 16px;';
+
+        if (this.communityTotal === 0 && !this.communityQuery && !this.mineFilter) {
+          emptyMsg.innerHTML = 'No community tracks yet.';
+          el.appendChild(emptyMsg);
+
+          // ── Seed button: visible when library is empty
+          const seedBtn = document.createElement('button');
+          seedBtn.textContent = 'Seed Standard Library';
+          seedBtn.style.cssText = [
+            'display:block', 'margin:20px auto 0',
+            'padding:10px 24px', 'border-radius:6px',
+            'background:#0a0a22', 'color:#88aaff',
+            'border:1px solid #334488', 'font:bold 14px Arial,sans-serif',
+            'cursor:pointer',
+          ].join(';');
+          seedBtn.addEventListener('click', () => {
+            seedBtn.textContent = 'Seeding…';
+            seedBtn.disabled    = true;
+            const toSeed = STANDARD_TRACKS
+              .filter(t => t.id !== 'tutorial')
+              .map((t, i, arr) => ({
+                id:         t.id,
+                name:       t.name,
+                author:     AUTHOR_MAP[t.author] ?? t.author,
+                data:       JSON.stringify({ startX: t.startX, startY: t.startY, pieces: t.pieces, markers: t.markers }),
+                // Descending timestamps so STANDARD_TRACKS order = top-of-list order
+                uploadedAt: 1_700_000_000_000 + (arr.length - i) * 1000,
+              }));
+            seedCommunityTracks(toSeed)
+              .then(() => { this.communityLoaded = false; this.buildList(); })
+              .catch(() => { seedBtn.textContent = 'Seed failed — try again'; seedBtn.disabled = false; });
+          });
+          el.appendChild(seedBtn);
         } else {
-          for (const meta of visible) el.appendChild(this.buildCommunityCard(meta));
+          emptyMsg.textContent = this.mineFilter
+            ? 'You haven\'t published any tracks yet.'
+            : 'No tracks match your search.';
+          el.appendChild(emptyMsg);
+        }
+
+      } else {
+        for (const meta of this.communityTracks) el.appendChild(this.buildCommunityCard(meta));
+
+        // ── Pagination nav
+        if (this.communityTotal > PAGE_SIZE) {
+          const totalPages = Math.ceil(this.communityTotal / PAGE_SIZE);
+          const curPage    = this.communityPage;
+
+          const nav = document.createElement('div');
+          nav.style.cssText = [
+            'display:flex', 'align-items:center', 'justify-content:space-between',
+            'margin-top:14px', 'padding:8px 0',
+          ].join(';');
+
+          const mkNavBtn = (label: string, enabled: boolean, fn: () => void) => {
+            const b = document.createElement('button');
+            b.textContent = label;
+            b.disabled    = !enabled;
+            b.style.cssText = [
+              'padding:8px 18px', 'border-radius:6px',
+              enabled
+                ? 'background:#12122a;color:#aaaaff;border:1px solid #3a3a6a;cursor:pointer;'
+                : 'background:#0a0a14;color:#333355;border:1px solid #1a1a2a;cursor:default;',
+              'font:bold 14px Arial,sans-serif',
+            ].join(';');
+            if (enabled) b.addEventListener('click', fn);
+            return b;
+          };
+
+          const pageLabel = document.createElement('div');
+          pageLabel.textContent = `Page ${curPage + 1} of ${totalPages}`;
+          pageLabel.style.cssText = 'font:13px Arial,sans-serif;color:#555588;';
+
+          nav.appendChild(mkNavBtn('← Prev', curPage > 0, () => {
+            this.communityPage--; this.communityLoaded = false; this.buildList();
+          }));
+          nav.appendChild(pageLabel);
+          nav.appendChild(mkNavBtn('Next →', curPage < totalPages - 1, () => {
+            this.communityPage++; this.communityLoaded = false; this.buildList();
+          }));
+          el.appendChild(nav);
         }
       }
 

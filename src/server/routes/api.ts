@@ -347,32 +347,69 @@ api.post('/track', async (c) => {
   return c.json<UploadTrackResponse>({ type: 'upload_track', id, author: username, uploadedAt });
 });
 
+api.post('/seed-tracks', async (c) => {
+  let body: { secret: string; tracks: Array<{ id: string; name: string; author: string; data: string; uploadedAt: number }> };
+  try { body = await c.req.json(); } catch {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON' }, 400);
+  }
+  if (body.secret !== 'dv-seed-2026') {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Forbidden' }, 403);
+  }
+  for (const t of body.tracks) {
+    const record = JSON.stringify({ id: t.id, name: t.name, author: t.author, uploadedAt: t.uploadedAt, data: t.data });
+    await redis.set(`track:${t.id}`, record);
+    await redis.zAdd('tracks:community', { score: t.uploadedAt, member: t.id });
+  }
+  return c.json({ type: 'seed_tracks', count: body.tracks.length });
+});
+
 api.get('/tracks/community', async (c) => {
   const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10));
-  const count  = 25;
+  const limit  = Math.min(50, Math.max(1, parseInt(c.req.query('limit') ?? '10', 10)));
+  const q      = (c.req.query('q') ?? '').trim().toLowerCase();
+  const author = (c.req.query('author') ?? '').trim().toLowerCase();
 
-  const ids = await redis.zRange(
-    'tracks:community', offset, offset + count - 1,
-    { by: 'rank', reverse: true },
-  );
-
-  if (ids.length === 0) {
-    return c.json<CommunityTracksResponse>({ type: 'community_tracks', tracks: [] });
+  const total = await redis.zCard('tracks:community');
+  if (total === 0) {
+    return c.json<CommunityTracksResponse>({ type: 'community_tracks', tracks: [], total: 0 });
   }
 
-  const keys    = ids.map(({ member }) => `track:${member}`);
-  const records = await redis.mGet(keys);
+  // Fast path: no filtering — paginate directly in Redis.
+  if (!q && !author) {
+    const ids     = await redis.zRange('tracks:community', offset, offset + limit - 1, { by: 'rank', reverse: true });
+    const records = await redis.mGet(ids.map(({ member }) => `track:${member}`));
+    const tracks: CommunityTrackMeta[] = [];
+    for (const raw of records) {
+      if (!raw) continue;
+      try {
+        const r = JSON.parse(raw) as { id: string; name: string; author: string; uploadedAt: number };
+        tracks.push({ id: r.id, name: r.name, author: r.author, uploadedAt: r.uploadedAt });
+      } catch { /* skip */ }
+    }
+    return c.json<CommunityTracksResponse>({ type: 'community_tracks', tracks, total });
+  }
 
-  const tracks: CommunityTrackMeta[] = [];
-  for (const raw of records) {
+  // Filtered path: fetch all, filter in memory, then paginate.
+  const allIds  = await redis.zRange('tracks:community', 0, total - 1, { by: 'rank', reverse: true });
+  const allRaws = await redis.mGet(allIds.map(({ member }) => `track:${member}`));
+  const all: CommunityTrackMeta[] = [];
+  for (const raw of allRaws) {
     if (!raw) continue;
     try {
       const r = JSON.parse(raw) as { id: string; name: string; author: string; uploadedAt: number };
-      tracks.push({ id: r.id, name: r.name, author: r.author, uploadedAt: r.uploadedAt });
-    } catch { /* skip corrupt entries */ }
+      all.push({ id: r.id, name: r.name, author: r.author, uploadedAt: r.uploadedAt });
+    } catch { /* skip */ }
   }
 
-  return c.json<CommunityTracksResponse>({ type: 'community_tracks', tracks });
+  const filtered = author
+    ? all.filter(t => t.author.toLowerCase() === author)
+    : all.filter(t => t.name.toLowerCase().includes(q) || t.author.toLowerCase().includes(q));
+
+  return c.json<CommunityTracksResponse>({
+    type: 'community_tracks',
+    tracks: filtered.slice(offset, offset + limit),
+    total: filtered.length,
+  });
 });
 
 api.get('/track/:id', async (c) => {

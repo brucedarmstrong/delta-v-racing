@@ -123,6 +123,7 @@ export type UploadTrackResponse = {
 export type CommunityTracksResponse = {
   type: "community_tracks";
   tracks: CommunityTrackMeta[];
+  total: number;
 };
 
 export type CommunityTrackResponse = {

@@ -48,11 +48,35 @@ export async function uploadTrack(
   return { id: json.id, author: json.author, uploadedAt: json.uploadedAt };
 }
 
-export async function fetchCommunityTracks(offset = 0): Promise<CommunityTrackMeta[]> {
-  const res = await fetch(`/api/tracks/community?offset=${offset}`);
+type CommunityFetchParams = {
+  offset?: number;
+  limit?:  number;
+  q?:      string;
+  author?: string;
+};
+
+export async function fetchCommunityTracks(
+  params: CommunityFetchParams = {},
+): Promise<{ tracks: CommunityTrackMeta[]; total: number }> {
+  const { offset = 0, limit = 10, q = '', author = '' } = params;
+  const qs = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  if (q)      qs.set('q', q);
+  if (author) qs.set('author', author);
+  const res = await fetch(`/api/tracks/community?${qs}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json() as CommunityTracksResponse;
-  return json.tracks;
+  return { tracks: json.tracks, total: json.total };
+}
+
+export async function seedCommunityTracks(
+  tracks: Array<{ id: string; name: string; author: string; data: string; uploadedAt: number }>,
+): Promise<void> {
+  const res = await fetch('/api/seed-tracks', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ secret: 'dv-seed-2026', tracks }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 // ── Mine track (user drafts) ──────────────────────────────────────────────────
