@@ -181,11 +181,6 @@ export class TrackSelect extends Scene {
     this.tabGfx.lineStyle(1, BORDER, 0.5);
     this.tabGfx.lineBetween(0, tabY + TAB_H, W, tabY + TAB_H);
 
-    // Skip DOM rebuild when the search input is focused — on Android, the
-    // keyboard opening fires a resize that would destroy the input mid-typing.
-    const searchInput = this.searchBarEl?.querySelector('input');
-    if (searchInput && document.activeElement === searchInput) return;
-
     this.buildList();
   }
 
@@ -193,8 +188,15 @@ export class TrackSelect extends Scene {
 
   private buildList(): void {
     this.listEl?.remove();
-    this.searchBarEl?.remove();
-    this.searchBarEl = null;
+
+    // Remove search bar only when leaving the community tab.
+    // While on community, keep the existing element alive across rebuilds so
+    // the input never loses focus (typing, pagination, pill clicks all rebuild
+    // the list but must not steal keyboard focus on desktop or Android).
+    if (this.activeTab !== 'community') {
+      this.searchBarEl?.remove();
+      this.searchBarEl = null;
+    }
 
     const PAGE_SIZE  = 10;
     const SEED_COUNT = STANDARD_TRACKS.filter(t => t.id !== 'tutorial').length;
@@ -204,52 +206,59 @@ export class TrackSelect extends Scene {
       'Player':    'u/MaxDoor',
     };
 
-    // ── Community tab: search bar lives in its own fixed element ABOVE the
-    // scrollable list so the Android keyboard can't displace it into a scroll.
+    const SEARCH_H = 52;
     let listTop = HEADER_H + TAB_H;
+
     if (this.activeTab === 'community') {
-      const SEARCH_H  = 52;
-      const bar       = document.createElement('div');
-      bar.style.cssText = [
-        'position:fixed',
-        `top:${listTop}px`, 'left:0', 'right:0',
-        `height:${SEARCH_H}px`,
-        'background:#0a0a16', 'z-index:15',
-        'padding:8px 14px', 'box-sizing:border-box',
-        'border-bottom:1px solid #1e1e38',
-      ].join(';');
+      if (!this.searchBarEl) {
+        // First render on this tab — create the fixed search bar.
+        const bar = document.createElement('div');
+        bar.style.cssText = [
+          'position:fixed',
+          `top:${listTop}px`, 'left:0', 'right:0',
+          `height:${SEARCH_H}px`,
+          'background:#0a0a16', 'z-index:15',
+          'padding:8px 14px', 'box-sizing:border-box',
+          'border-bottom:1px solid #1e1e38',
+        ].join(';');
 
-      const inp = document.createElement('input');
-      inp.type        = 'search';
-      inp.placeholder = 'Search by name or author…';
-      inp.value       = this.communityQuery;
-      inp.setAttribute('autocomplete',   'off');
-      inp.setAttribute('autocorrect',    'off');
-      inp.setAttribute('autocapitalize', 'off');
-      inp.setAttribute('spellcheck',     'false');
-      inp.style.cssText = [
-        'width:100%', 'height:100%', 'box-sizing:border-box',
-        'padding:0 12px', 'border-radius:6px',
-        'background:#111128', 'color:#e8e8ff',
-        'border:1px solid #3a3a6a', 'font:14px Arial,sans-serif',
-        'outline:none', '-webkit-appearance:none',
-      ].join(';');
+        const inp = document.createElement('input');
+        inp.type        = 'search';
+        inp.placeholder = 'Search by name or author…';
+        inp.value       = this.communityQuery;
+        inp.setAttribute('autocomplete',   'off');
+        inp.setAttribute('autocorrect',    'off');
+        inp.setAttribute('autocapitalize', 'off');
+        inp.setAttribute('spellcheck',     'false');
+        inp.style.cssText = [
+          'width:100%', 'height:100%', 'box-sizing:border-box',
+          'padding:0 12px', 'border-radius:6px',
+          'background:#111128', 'color:#e8e8ff',
+          'border:1px solid #3a3a6a', 'font:14px Arial,sans-serif',
+          'outline:none', '-webkit-appearance:none',
+        ].join(';');
 
-      let searchTimer: ReturnType<typeof setTimeout> | null = null;
-      inp.addEventListener('input', () => {
-        if (searchTimer) clearTimeout(searchTimer);
-        searchTimer = setTimeout(() => {
-          this.communityQuery  = inp.value.trim();
-          this.communityPage   = 0;
-          this.mineFilter      = false;
-          this.communityLoaded = false;
-          this.buildList();
-        }, 350);
-      });
+        let searchTimer: ReturnType<typeof setTimeout> | null = null;
+        inp.addEventListener('input', () => {
+          if (searchTimer) clearTimeout(searchTimer);
+          searchTimer = setTimeout(() => {
+            this.communityQuery  = inp.value.trim();
+            this.communityPage   = 0;
+            this.mineFilter      = false;
+            this.communityLoaded = false;
+            this.buildList();
+          }, 350);
+        });
 
-      bar.appendChild(inp);
-      document.body.appendChild(bar);
-      this.searchBarEl = bar;
+        bar.appendChild(inp);
+        document.body.appendChild(bar);
+        this.searchBarEl = bar;
+      } else {
+        // Subsequent rebuild — sync value if it was reset externally (pill click,
+        // page nav) without disturbing cursor position when user is typing.
+        const inp = this.searchBarEl.querySelector('input') as HTMLInputElement | null;
+        if (inp && inp.value !== this.communityQuery) inp.value = this.communityQuery;
+      }
       listTop += SEARCH_H;
     }
 
