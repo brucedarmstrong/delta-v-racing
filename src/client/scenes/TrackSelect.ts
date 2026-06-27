@@ -56,6 +56,7 @@ export class TrackSelect extends Scene {
 
   // DOM list — native scroll, no Phaser zoom/coordinate issues
   private listEl:          HTMLElement | null = null;
+  private searchBarEl:     HTMLElement | null = null;  // community search, outside scroll container
   private contextMenuEl:   HTMLElement | null = null;
   private communityTracks: CommunityTrackMeta[] = [];
   private communityLoaded  = false;
@@ -125,6 +126,8 @@ export class TrackSelect extends Scene {
       window.removeEventListener('keydown', onEsc);
       this.listEl?.remove();
       this.listEl = null;
+      this.searchBarEl?.remove();
+      this.searchBarEl = null;
       this.closeContextMenu();
     });
   }
@@ -185,8 +188,65 @@ export class TrackSelect extends Scene {
 
   private buildList(): void {
     this.listEl?.remove();
+    this.searchBarEl?.remove();
+    this.searchBarEl = null;
 
-    const listTop = HEADER_H + TAB_H;
+    const PAGE_SIZE  = 10;
+    const SEED_COUNT = STANDARD_TRACKS.filter(t => t.id !== 'tutorial').length;
+    const AUTHOR_MAP: Record<string, string> = {
+      'Boomsmith': 'u/Boomsmith-OG',
+      'Custom':    'u/delta-v-racing',
+      'Player':    'u/MaxDoor',
+    };
+
+    // ── Community tab: search bar lives in its own fixed element ABOVE the
+    // scrollable list so the Android keyboard can't displace it into a scroll.
+    let listTop = HEADER_H + TAB_H;
+    if (this.activeTab === 'community') {
+      const SEARCH_H  = 52;
+      const bar       = document.createElement('div');
+      bar.style.cssText = [
+        'position:fixed',
+        `top:${listTop}px`, 'left:0', 'right:0',
+        `height:${SEARCH_H}px`,
+        'background:#0a0a16', 'z-index:15',
+        'padding:8px 14px', 'box-sizing:border-box',
+        'border-bottom:1px solid #1e1e38',
+      ].join(';');
+
+      const inp = document.createElement('input');
+      inp.type        = 'search';
+      inp.placeholder = 'Search by name or author…';
+      inp.value       = this.communityQuery;
+      inp.setAttribute('autocomplete',   'off');
+      inp.setAttribute('autocorrect',    'off');
+      inp.setAttribute('autocapitalize', 'off');
+      inp.setAttribute('spellcheck',     'false');
+      inp.style.cssText = [
+        'width:100%', 'height:100%', 'box-sizing:border-box',
+        'padding:0 12px', 'border-radius:6px',
+        'background:#111128', 'color:#e8e8ff',
+        'border:1px solid #3a3a6a', 'font:14px Arial,sans-serif',
+        'outline:none', '-webkit-appearance:none',
+      ].join(';');
+
+      let searchTimer: ReturnType<typeof setTimeout> | null = null;
+      inp.addEventListener('input', () => {
+        if (searchTimer) clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+          this.communityQuery  = inp.value.trim();
+          this.communityPage   = 0;
+          this.mineFilter      = false;
+          this.communityLoaded = false;
+          this.buildList();
+        }, 350);
+      });
+
+      bar.appendChild(inp);
+      document.body.appendChild(bar);
+      this.searchBarEl = bar;
+      listTop += SEARCH_H;
+    }
 
     const el = document.createElement('div');
     el.style.cssText = [
@@ -205,45 +265,11 @@ export class TrackSelect extends Scene {
       }
 
     } else if (this.activeTab === 'community') {
-      const PAGE_SIZE   = 10;
-      const AUTHOR_MAP: Record<string, string> = {
-        'Boomsmith': 'u/Boomsmith-OG',
-        'Custom':    'u/delta-v-racing',
-        'Player':    'u/MaxDoor',
-      };
+      // ── Mine filter pills + seed button row
+      const controlRow = document.createElement('div');
+      controlRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;';
 
-      // ── Search input
-      const searchRow = document.createElement('div');
-      searchRow.style.cssText = 'margin-bottom:10px;';
-      const searchInput = document.createElement('input');
-      searchInput.type        = 'text';
-      searchInput.placeholder = 'Search by name or author…';
-      searchInput.value       = this.communityQuery;
-      searchInput.style.cssText = [
-        'width:100%', 'box-sizing:border-box',
-        'padding:9px 12px', 'border-radius:6px',
-        'background:#111128', 'color:#e8e8ff',
-        'border:1px solid #3a3a6a', 'font:14px Arial,sans-serif',
-        'outline:none',
-      ].join(';');
-      let searchTimer: ReturnType<typeof setTimeout> | null = null;
-      searchInput.addEventListener('input', () => {
-        if (searchTimer) clearTimeout(searchTimer);
-        searchTimer = setTimeout(() => {
-          this.communityQuery = searchInput.value.trim();
-          this.communityPage  = 0;
-          this.mineFilter     = false;
-          this.communityLoaded = false;
-          this.buildList();
-        }, 350);
-      });
-      searchRow.appendChild(searchInput);
-      el.appendChild(searchRow);
-
-      // ── Mine filter pills
       if (isLoggedIn) {
-        const filterRow = document.createElement('div');
-        filterRow.style.cssText = 'display:flex;gap:8px;margin-bottom:12px;';
         const mkPill = (label: string, active: boolean, fn: () => void) => {
           const b = document.createElement('button');
           b.textContent = label;
@@ -257,16 +283,46 @@ export class TrackSelect extends Scene {
           b.addEventListener('click', fn);
           return b;
         };
-        filterRow.appendChild(mkPill('All', !this.mineFilter, () => {
+        controlRow.appendChild(mkPill('All', !this.mineFilter, () => {
           this.mineFilter = false; this.communityPage = 0;
           this.communityQuery = ''; this.communityLoaded = false; this.buildList();
         }));
-        filterRow.appendChild(mkPill('Mine', this.mineFilter, () => {
+        controlRow.appendChild(mkPill('Mine', this.mineFilter, () => {
           this.mineFilter = true; this.communityPage = 0;
           this.communityQuery = ''; this.communityLoaded = false; this.buildList();
         }));
-        el.appendChild(filterRow);
       }
+
+      // Seed button: always visible when library has fewer tracks than the
+      // standard set (handles the case where some tracks exist from testing).
+      if (isLoggedIn && this.communityLoaded && this.communityTotal < SEED_COUNT && !this.communityQuery && !this.mineFilter) {
+        const seedBtn = document.createElement('button');
+        seedBtn.textContent = '⊕ Seed Library';
+        seedBtn.style.cssText = [
+          'margin-left:auto', 'padding:5px 12px', 'border-radius:16px',
+          'background:#0a0a22', 'color:#6688cc',
+          'border:1px solid #2a2a55', 'font:13px Arial,sans-serif', 'cursor:pointer',
+        ].join(';');
+        seedBtn.addEventListener('click', () => {
+          seedBtn.textContent = '…Seeding';
+          seedBtn.disabled    = true;
+          const toSeed = STANDARD_TRACKS
+            .filter(t => t.id !== 'tutorial')
+            .map((t, i, arr) => ({
+              id:         t.id,
+              name:       t.name,
+              author:     AUTHOR_MAP[t.author] ?? t.author,
+              data:       JSON.stringify({ startX: t.startX, startY: t.startY, pieces: t.pieces, markers: t.markers }),
+              uploadedAt: 1_700_000_000_000 + (arr.length - i) * 1000,
+            }));
+          seedCommunityTracks(toSeed)
+            .then(() => { this.communityLoaded = false; this.buildList(); })
+            .catch(() => { seedBtn.textContent = '⊕ Seed Library'; seedBtn.disabled = false; });
+        });
+        controlRow.appendChild(seedBtn);
+      }
+
+      if (isLoggedIn) el.appendChild(controlRow);
 
       if (!this.communityLoaded) {
         const msg = document.createElement('div');
@@ -288,45 +344,12 @@ export class TrackSelect extends Scene {
       } else if (this.communityTracks.length === 0) {
         const emptyMsg = document.createElement('div');
         emptyMsg.style.cssText = 'text-align:center;color:#555588;font:16px Arial;margin-top:60px;padding:0 16px;';
-
-        if (this.communityTotal === 0 && !this.communityQuery && !this.mineFilter) {
-          emptyMsg.innerHTML = 'No community tracks yet.';
-          el.appendChild(emptyMsg);
-
-          // ── Seed button: visible when library is empty
-          const seedBtn = document.createElement('button');
-          seedBtn.textContent = 'Seed Standard Library';
-          seedBtn.style.cssText = [
-            'display:block', 'margin:20px auto 0',
-            'padding:10px 24px', 'border-radius:6px',
-            'background:#0a0a22', 'color:#88aaff',
-            'border:1px solid #334488', 'font:bold 14px Arial,sans-serif',
-            'cursor:pointer',
-          ].join(';');
-          seedBtn.addEventListener('click', () => {
-            seedBtn.textContent = 'Seeding…';
-            seedBtn.disabled    = true;
-            const toSeed = STANDARD_TRACKS
-              .filter(t => t.id !== 'tutorial')
-              .map((t, i, arr) => ({
-                id:         t.id,
-                name:       t.name,
-                author:     AUTHOR_MAP[t.author] ?? t.author,
-                data:       JSON.stringify({ startX: t.startX, startY: t.startY, pieces: t.pieces, markers: t.markers }),
-                // Descending timestamps so STANDARD_TRACKS order = top-of-list order
-                uploadedAt: 1_700_000_000_000 + (arr.length - i) * 1000,
-              }));
-            seedCommunityTracks(toSeed)
-              .then(() => { this.communityLoaded = false; this.buildList(); })
-              .catch(() => { seedBtn.textContent = 'Seed failed — try again'; seedBtn.disabled = false; });
-          });
-          el.appendChild(seedBtn);
-        } else {
-          emptyMsg.textContent = this.mineFilter
-            ? 'You haven\'t published any tracks yet.'
-            : 'No tracks match your search.';
-          el.appendChild(emptyMsg);
-        }
+        emptyMsg.textContent = this.mineFilter
+          ? 'You haven\'t published any tracks yet.'
+          : this.communityQuery
+            ? 'No tracks match your search.'
+            : 'No community tracks yet.';
+        el.appendChild(emptyMsg);
 
       } else {
         for (const meta of this.communityTracks) el.appendChild(this.buildCommunityCard(meta));
