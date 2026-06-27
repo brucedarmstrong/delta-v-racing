@@ -181,6 +181,11 @@ export class TrackSelect extends Scene {
     this.tabGfx.lineStyle(1, BORDER, 0.5);
     this.tabGfx.lineBetween(0, tabY + TAB_H, W, tabY + TAB_H);
 
+    // Skip DOM rebuild when the search input is focused — on Android, the
+    // keyboard opening fires a resize that would destroy the input mid-typing.
+    const searchInput = this.searchBarEl?.querySelector('input');
+    if (searchInput && document.activeElement === searchInput) return;
+
     this.buildList();
   }
 
