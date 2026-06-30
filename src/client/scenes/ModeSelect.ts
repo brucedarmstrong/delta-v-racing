@@ -18,24 +18,24 @@ export class ModeSelect extends Scene {
   constructor() { super('ModeSelect'); }
 
   create() {
-    // Track post: boot directly into race mode — no menu needed.
-    if (postData?.trackId) {
-      fetchCommunityTrack(postData.trackId).then(track => {
-        this.scene.start('Game', { trackEntry: track });
-      }).catch(() => {
-        // Track fetch failed — fall through to normal menu.
-        this.scene.restart();
-      });
-      return;
-    }
-
-    // Deep-link routing: splash screen sets this before calling requestExpandedMode.
+    // Deep-link routing takes priority — splash secondary buttons set this even on track posts.
     const route = localStorage.getItem('dv-route');
     if (route) {
       localStorage.removeItem('dv-route');
       if (route === 'community')   { this.scene.start('TrackSelect', { activeTab: 'community' }); return; }
       if (route === 'leaderboard') { this.scene.start('Leaderboard'); return; }
       if (route === 'create')      { this.scene.start('TrackEditor'); return; }
+    }
+
+    // Track post: boot directly into race mode — no menu needed.
+    if (postData?.trackId) {
+      fetchCommunityTrack(postData.trackId).then(track => {
+        this.scene.start('Game', { track });
+      }).catch(() => {
+        // Track fetch failed — fall through to normal menu.
+        this.scene.restart();
+      });
+      return;
     }
 
     const cam = this.cameras.main;

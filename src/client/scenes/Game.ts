@@ -12,9 +12,7 @@ import { fetchOrGenerateAiGhost, generateAndUploadAiGhosts } from '../track/AiGh
 import { verifyMineTrack, markLocalDraftVerified } from '../track/TrackUpload';
 
 // ── Grid / camera constants ────────────────────────────────────────────────────
-// gridPx is mutable so the debug slider can adjust it at runtime.
-// pickR is always floor(gridPx/2)-1, guaranteeing no circle overlap.
-let gridPx = 24;
+const gridPx = 24;
 
 // Tint + trail colour assigned to each racing ghost slot (up to 3).
 const GHOST_COLORS = [
@@ -41,12 +39,6 @@ const MAX_ZOOM = 5.0;
 // Set to 1 to disable once the animation is tuned.
 const CRASH_SLO = 0.4;
 
-// Last-used track ID persists across grid-slider scene restarts.
-let lastTrackId = 'oval_small';
-
-// Persistent reference to the Phaser game so the slider can restart the scene
-// without capturing a scene-instance `this` that becomes stale after restart.
-let phaserGame: Phaser.Game | null = null;
 
 export class Game extends Scene {
   // Track data set from init()
@@ -136,15 +128,9 @@ export class Game extends Scene {
   constructor() { super('Game'); }
 
   init(data?: { trackId?: string; track?: TrackEntry; ghosts?: GhostData[]; mineTrackId?: string }) {
-    let entry: TrackEntry;
-    if (data?.track) {
-      entry = data.track;
-      lastTrackId = entry.id;
-    } else {
-      const id = data?.trackId ?? lastTrackId;
-      lastTrackId = id;
-      entry = TRACK_REGISTRY.get(id) ?? TRACK_REGISTRY.values().next().value!;
-    }
+    const entry: TrackEntry = data?.track
+      ?? TRACK_REGISTRY.get(data?.trackId ?? '')
+      ?? TRACK_REGISTRY.values().next().value!;
     this.trackEntry    = entry;
     this.trackPieces   = entry.pieces;
     this.trackMarkers  = entry.markers;
@@ -179,8 +165,6 @@ export class Game extends Scene {
   }
 
   private createInner() {
-    phaserGame = this.game;
-
     this.cameras.main.setBackgroundColor(0x0a0a16);
 
     buildTrackTexture(this, this.trackPieces, NEON_GREEN);
@@ -341,7 +325,6 @@ export class Game extends Scene {
     this.addMinimap();
     this.addShiftSlow();
     this.addPauseUI();
-    this.addGridSlider();
 
     // Short delay so the tap that launched this scene isn't treated as a pick.
     this.time.delayedCall(120, () => { this.framePicker(); });
@@ -505,7 +488,7 @@ export class Game extends Scene {
     };
     rafId = requestAnimationFrame(tick);
 
-    // Clean up when the scene restarts (e.g. grid-slider change).
+    // Clean up DOM elements on scene shutdown.
     this.events.once('shutdown', () => {
       cancelAnimationFrame(rafId);
       canvas.remove();
@@ -1036,7 +1019,7 @@ export class Game extends Scene {
     const playAgainBtn = makeBtn('Play Again', '#ccffcc', '#0a2a0a', '#33aa33');
     playAgainBtn.addEventListener('click', () => {
       overlay.remove(); this.finishOverlayEl = null;
-      this.scene.start('Game', { trackId: this.trackEntry.id });
+      this.scene.start('Game', { track: this.trackEntry });
     });
     const exitBtn = makeBtn('Exit', '#aaaacc', '#1a1a2a', '#444466');
     exitBtn.addEventListener('click', () => {
@@ -1812,41 +1795,6 @@ export class Game extends Scene {
     });
   }
 
-  // ── Debug grid-size slider (temporary tuning aid) ─────────────────────────────
-
-  private addGridSlider() {
-    const ID  = 'dv-grid-slider';
-    const existing = document.getElementById(ID);
-
-    if (!existing) {
-      const div = document.createElement('div');
-      div.id    = ID;
-      div.style.cssText = [
-        'position:fixed', 'bottom:12px', 'left:50%', 'transform:translateX(-50%)',
-        'z-index:100', 'background:rgba(0,0,0,0.65)', 'color:#cce',
-        'font:13px/1.6 monospace', 'padding:4px 12px', 'border-radius:6px',
-        'display:flex', 'align-items:center', 'gap:8px', 'pointer-events:auto',
-        'user-select:none',
-      ].join(';');
-      div.innerHTML =
-        `grid <input type="range" id="dv-grid-px" min="12" max="48" step="2" ` +
-        `value="${gridPx}" style="width:120px"> ` +
-        `<span id="dv-grid-val">${gridPx}</span>px`;
-      document.body.appendChild(div);
-
-      document.getElementById('dv-grid-px')!.addEventListener('input', (e) => {
-        gridPx = parseInt((e.target as HTMLInputElement).value, 10);
-        document.getElementById('dv-grid-val')!.textContent = String(gridPx);
-        // Use the module-level game reference so this closure stays valid across restarts.
-        phaserGame?.scene.start('Game');
-      });
-    } else {
-      // Scene restarted: sync the display to the current gridPx.
-      (document.getElementById('dv-grid-px') as HTMLInputElement).value = String(gridPx);
-      document.getElementById('dv-grid-val')!.textContent = String(gridPx);
-    }
-  }
-
   // ── Pause menu ────────────────────────────────────────────────────────────────
 
   private addPauseUI(): void {
@@ -2004,7 +1952,7 @@ export class Game extends Scene {
     dialog.appendChild(title);
     dialog.appendChild(body);
     dialog.appendChild(makeBtn('Continue', '#66ff99', () => this.resumeGame()));
-    dialog.appendChild(makeBtn('Restart',  '#ffcc44', () => this.clearPauseAndGo(() => this.scene.start('Game', { trackId: this.trackEntry.id }))));
+    dialog.appendChild(makeBtn('Restart',  '#ffcc44', () => this.clearPauseAndGo(() => this.scene.start('Game', { track: this.trackEntry }))));
     dialog.appendChild(makeBtn('Exit',     '#ff6666', () => this.clearPauseAndGo(() => this.scene.start('TrackSelect'))));
 
     overlay.appendChild(dialog);

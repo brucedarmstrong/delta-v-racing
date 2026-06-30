@@ -1,5 +1,6 @@
 import { TIGHT, BIG, HALF_TRACK, STRAIGHT_LEN } from './TrackGeometry';
 import type { PlacedPiece, StraightDef, CornerDef } from './TrackLayout';
+import type { TrackMarker } from './convertGmsTrack';
 
 export function addPiecePaths(ctx: CanvasRenderingContext2D, p: PlacedPiece): void {
   ctx.save();
@@ -31,6 +32,45 @@ export function addPiecePaths(ctx: CanvasRenderingContext2D, p: PlacedPiece): vo
   }
 
   ctx.restore();
+}
+
+export function drawMarkersOnCanvas(
+  ctx: CanvasRenderingContext2D,
+  startX: number,
+  startY: number,
+  startHeading: number,
+  markers: TrackMarker[],
+  worldL: number,
+  worldT: number,
+  scaleX: number,
+  scaleY: number,
+  offX = 0,
+  offY = 0,
+): void {
+  const toC = (wx: number, wy: number): [number, number] => [
+    offX + (wx - worldL) * scaleX,
+    offY + (wy - worldT) * scaleY,
+  ];
+
+  const dot = (wx: number, wy: number, r: number, fill: string, stroke?: string) => {
+    const [cx, cy] = toC(wx, wy);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    if (stroke) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 0.75;
+      ctx.stroke();
+    }
+  };
+
+  for (const m of markers) {
+    if (m.kind === 'checkpoint') dot(m.x, m.y, 2.5, '#ffdd00');
+  }
+  const finish = markers.find(m => m.kind === 'finish');
+  if (finish) dot(finish.x, finish.y, 3.5, '#ff3333', '#ffffff');
+  dot(startX, startY, 3, '#00eeff', '#ffffff');
 }
 
 export function drawBarriersOnCanvas(

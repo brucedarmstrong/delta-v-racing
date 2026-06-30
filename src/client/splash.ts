@@ -1,6 +1,6 @@
 import { requestExpandedMode } from '@devvit/web/client';
 import { username, appVersion, postData } from './devvitContext';
-import { drawBarriersOnCanvas } from './track/TrackBarrierCanvas';
+import { drawBarriersOnCanvas, drawMarkersOnCanvas } from './track/TrackBarrierCanvas';
 import { trackBounds } from './track/TrackLayout';
 import type { CommunityTrackResponse } from '../shared/api';
 import type { TrackPayload } from './track/TrackUpload';
@@ -33,7 +33,7 @@ if (postData?.trackId) {
     .then(r => r.json() as Promise<CommunityTrackResponse>)
     .then(json => {
       const payload = JSON.parse(json.data) as TrackPayload;
-      const { pieces } = payload;
+      const { pieces, markers = [], startX = 0, startY = 0, startHeading = 90 } = payload;
       const b = trackBounds(pieces);
       const pad = 16;
       const scaleX = (trackThumb.width  - pad * 2) / b.width;
@@ -41,10 +41,10 @@ if (postData?.trackId) {
       const scale  = Math.min(scaleX, scaleY);
       const ctx = trackThumb.getContext('2d')!;
       ctx.clearRect(0, 0, trackThumb.width, trackThumb.height);
-      // Centre the track in the canvas
       const offX = (trackThumb.width  - b.width  * scale) / 2;
       const offY = (trackThumb.height - b.height * scale) / 2;
       drawBarriersOnCanvas(ctx, pieces, b.x, b.y, scale, scale, offX, offY, '#33bb55', 1.5);
+      drawMarkersOnCanvas(ctx, startX, startY, startHeading, markers, b.x, b.y, scale, scale, offX, offY);
     })
     .catch(() => { /* thumbnail stays blank */ });
 }
