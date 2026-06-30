@@ -28,13 +28,14 @@ import testJson         from './gms/2026_test.json';
 import shortyJson       from './gms/2026_shorty.json';
 
 export type TrackEntry = {
-  id:      string;
-  name:    string;
-  author:  string;
-  startX:  number;
-  startY:  number;
-  pieces:  PlacedPiece[];
-  markers: TrackMarker[];
+  id:           string;
+  name:         string;
+  author:       string;
+  startX:       number;
+  startY:       number;
+  startHeading: number; // degrees CW from north; 0=N, 90=E, 180=S
+  pieces:       PlacedPiece[];
+  markers:      TrackMarker[];
 };
 
 function fromGms(
@@ -46,7 +47,7 @@ function fromGms(
   startY: number,
 ): TrackEntry {
   const g = json as unknown as GmsTrack;
-  return { id, name, author, startX, startY, pieces: convertGmsTrack(g), markers: convertGmsMarkers(g) };
+  return { id, name, author, startX, startY, startHeading: 90, pieces: convertGmsTrack(g), markers: convertGmsMarkers(g) };
 }
 
 export const STANDARD_TRACKS: TrackEntry[] = [

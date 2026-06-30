@@ -1,3 +1,4 @@
+import { navigateTo } from '@devvit/web/client';
 import type { TrackEntry } from '../tracks/trackRegistry';
 import type {
   CommunityTrackResponse,
@@ -24,12 +25,13 @@ export type TrackPayload = {
 
 export async function uploadTrack(
   track: TrackEntry,
-): Promise<{ id: string; author: string; uploadedAt: number }> {
+): Promise<{ id: string; author: string; uploadedAt: number; postUrl: string }> {
   const payload: TrackPayload = {
-    startX:  track.startX,
-    startY:  track.startY,
-    pieces:  track.pieces,
-    markers: track.markers,
+    startX:       track.startX,
+    startY:       track.startY,
+    startHeading: track.startHeading,
+    pieces:       track.pieces,
+    markers:      track.markers,
   };
 
   const body: UploadTrackRequest = {
@@ -45,7 +47,12 @@ export async function uploadTrack(
 
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json() as UploadTrackResponse;
-  return { id: json.id, author: json.author, uploadedAt: json.uploadedAt };
+
+  // Navigate to the new track post — the player lands on the splash screen
+  // where they can race the track, browse community, or create another.
+  navigateTo(json.postUrl);
+
+  return { id: json.id, author: json.author, uploadedAt: json.uploadedAt, postUrl: json.postUrl };
 }
 
 type CommunityFetchParams = {
@@ -202,12 +209,13 @@ export async function fetchCommunityTrack(id: string): Promise<TrackEntry> {
   const payload = JSON.parse(json.data) as TrackPayload;
 
   return {
-    id:      json.meta.id,
-    name:    json.meta.name,
-    author:  json.meta.author,
-    startX:  payload.startX,
-    startY:  payload.startY,
-    pieces:  payload.pieces,
-    markers: payload.markers,
+    id:           json.meta.id,
+    name:         json.meta.name,
+    author:       json.meta.author,
+    startX:       payload.startX,
+    startY:       payload.startY,
+    startHeading: payload.startHeading ?? 90,
+    pieces:       payload.pieces,
+    markers:      payload.markers,
   };
 }

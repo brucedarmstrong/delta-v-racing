@@ -1,5 +1,6 @@
 import { Scene } from 'phaser';
-import { appVersion } from '../devvitContext';
+import { appVersion, postData } from '../devvitContext';
+import { fetchCommunityTrack } from '../track/TrackUpload';
 
 const BG      = 0x0a0a16;
 const SURFACE = 0x12122a;
@@ -17,6 +18,17 @@ export class ModeSelect extends Scene {
   constructor() { super('ModeSelect'); }
 
   create() {
+    // Track post: boot directly into race mode — no menu needed.
+    if (postData?.trackId) {
+      fetchCommunityTrack(postData.trackId).then(track => {
+        this.scene.start('Game', { trackEntry: track });
+      }).catch(() => {
+        // Track fetch failed — fall through to normal menu.
+        this.scene.restart();
+      });
+      return;
+    }
+
     // Deep-link routing: splash screen sets this before calling requestExpandedMode.
     const route = localStorage.getItem('dv-route');
     if (route) {

@@ -105,6 +105,7 @@ export type CommunityTrackMeta = {
   name: string;
   author: string;
   uploadedAt: number; // unix ms
+  postUrl?: string;   // reddit.com permalink; undefined for seeded tracks without a post
 };
 
 export type UploadTrackRequest = {
@@ -118,6 +119,7 @@ export type UploadTrackResponse = {
   id: string;
   author: string;
   uploadedAt: number;
+  postUrl: string; // permalink of the newly created Reddit post
 };
 
 export type CommunityTracksResponse = {

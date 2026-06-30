@@ -10,6 +10,7 @@ import {
 } from '../track/TrackUpload';
 import { fetchRaceGhosts } from '../track/RaceGhosts';
 import { generateAndUploadAiGhosts } from '../track/AiGhost';
+import { navigateTo } from '@devvit/web/client';
 import { username, isLoggedIn } from '../devvitContext';
 import type { CommunityTrackMeta, MineTrackMeta } from '../../shared/api';
 
@@ -630,6 +631,7 @@ export class TrackSelect extends Scene {
         const entry: TrackEntry = {
           id: draft.id, name: draft.name, author: '',
           startX: payload.startX, startY: payload.startY,
+          startHeading: payload.startHeading ?? 90,
           pieces: payload.pieces, markers: payload.markers,
         };
         this.scene.start('Game', { track: entry, mineTrackId: draft.id });
@@ -648,6 +650,7 @@ export class TrackSelect extends Scene {
         const entry: TrackEntry = {
           id: draft.id, name: draft.name, author: '',
           startX: payload.startX, startY: payload.startY,
+          startHeading: payload.startHeading ?? 90,
           pieces: payload.pieces, markers: payload.markers,
         };
         this.scene.start('TrackEditor', {
@@ -750,6 +753,7 @@ export class TrackSelect extends Scene {
             const entry: TrackEntry = {
               id: '', name: draft.name, author: '',
               startX: payload.startX, startY: payload.startY,
+              startHeading: payload.startHeading ?? 90,
               pieces: payload.pieces, markers: payload.markers,
             };
 
@@ -759,14 +763,13 @@ export class TrackSelect extends Scene {
               body: JSON.stringify({ name: entry.name, data }),
             });
             if (!uploadRes.ok) { await restoreOnError(uploadRes); return; }
-            const json = await uploadRes.json() as { id: string };
+            const json = await uploadRes.json() as { id: string; postUrl: string };
             const communityId = json.id;
 
             await generateAndUploadAiGhosts({ ...entry, id: communityId }, ['average', 'rookie']);
             await deleteMineTrack(serverId);
 
-            this.drafts = this.drafts.filter(d => d.id !== draft.id);
-            this.buildList();
+            navigateTo(json.postUrl);
           } catch {
             await restoreOnError();
           }
@@ -831,6 +834,13 @@ export class TrackSelect extends Scene {
     card.appendChild(arrow);
 
     card.addEventListener('click', () => {
+      if (meta.postUrl) {
+        // Track has its own Reddit post — navigate there so the player lands
+        // on the splash screen and can race, browse, or create from that post.
+        navigateTo(meta.postUrl);
+        return;
+      }
+      // Seeded track without a post — load in-place (legacy path).
       arrow.textContent = '…';
       card.style.opacity = '0.6';
       card.style.pointerEvents = 'none';

@@ -339,12 +339,20 @@ api.post('/track', async (c) => {
   const uploadedAt = Date.now();
   const id = `${username}_${uploadedAt}`;
 
-  const record = JSON.stringify({ id, name: name.trim(), author: username, uploadedAt, data });
+  // Create a Reddit post for this track so it can be upvoted individually.
+  const subreddit = await reddit.getSubredditByName(context.subredditName!);
+  const post = await subreddit.submitCustomPost({
+    title:    `${name.trim()} — by u/${username}`,
+    postData: { trackId: id, trackName: name.trim(), author: username },
+  });
+  const postUrl = `https://www.reddit.com${post.permalink}`;
+
+  const record = JSON.stringify({ id, name: name.trim(), author: username, uploadedAt, data, postUrl });
   await redis.set(`track:${id}`, record);
   await redis.zAdd('tracks:community', { score: uploadedAt, member: id });
   await redis.set(nameKey, id);
 
-  return c.json<UploadTrackResponse>({ type: 'upload_track', id, author: username, uploadedAt });
+  return c.json<UploadTrackResponse>({ type: 'upload_track', id, author: username, uploadedAt, postUrl });
 });
 
 api.post('/seed-tracks', async (c) => {
@@ -382,8 +390,8 @@ api.get('/tracks/community', async (c) => {
     for (const raw of records) {
       if (!raw) continue;
       try {
-        const r = JSON.parse(raw) as { id: string; name: string; author: string; uploadedAt: number };
-        tracks.push({ id: r.id, name: r.name, author: r.author, uploadedAt: r.uploadedAt });
+        const r = JSON.parse(raw) as { id: string; name: string; author: string; uploadedAt: number; postUrl?: string };
+        tracks.push({ id: r.id, name: r.name, author: r.author, uploadedAt: r.uploadedAt, postUrl: r.postUrl });
       } catch { /* skip */ }
     }
     return c.json<CommunityTracksResponse>({ type: 'community_tracks', tracks, total });
@@ -396,8 +404,8 @@ api.get('/tracks/community', async (c) => {
   for (const raw of allRaws) {
     if (!raw) continue;
     try {
-      const r = JSON.parse(raw) as { id: string; name: string; author: string; uploadedAt: number };
-      all.push({ id: r.id, name: r.name, author: r.author, uploadedAt: r.uploadedAt });
+      const r = JSON.parse(raw) as { id: string; name: string; author: string; uploadedAt: number; postUrl?: string };
+      all.push({ id: r.id, name: r.name, author: r.author, uploadedAt: r.uploadedAt, postUrl: r.postUrl });
     } catch { /* skip */ }
   }
 

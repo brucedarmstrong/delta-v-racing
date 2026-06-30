@@ -205,7 +205,9 @@ export class Game extends Scene {
     this.makeCarTexture();
     this.makeGhostTextures();
 
-    if (this.pendingGhosts) {
+    if (this.mineTrackId) {
+      // Draft proof-of-solvability run — no ghosts
+    } else if (this.pendingGhosts) {
       this.initGhosts(this.pendingGhosts);
     } else {
       this.fetchPersonalBest();
@@ -216,7 +218,7 @@ export class Game extends Scene {
     const startWX = this.gx * gridPx;
     const startWY = this.gy * gridPx;
 
-    this.carImg  = this.add.image(startWX, startWY, 'car').setAngle(90).setDepth(10);
+    this.carImg  = this.add.image(startWX, startWY, 'car').setAngle(this.trackEntry.startHeading ?? 90).setDepth(10);
     this.velGfx  = this.add.graphics().setDepth(8);
     this.pickGfx = this.add.graphics().setDepth(9);
 
@@ -1087,7 +1089,20 @@ export class Game extends Scene {
     this.renderRaceResults(contentEl, score);
 
     if (isLoggedIn) {
-      this.uploadGhost(statusEl);
+      if (this.mineTrackId) {
+        // Draft proof-of-solvability run — verify but don't record on leaderboard.
+        const id = this.mineTrackId;
+        if (id.startsWith('local-')) {
+          markLocalDraftVerified(id);
+          if (statusEl) statusEl.textContent = 'Track verified ✓';
+        } else {
+          verifyMineTrack(id)
+            .then(() => { if (statusEl) statusEl.textContent = 'Track verified ✓'; })
+            .catch(() => { if (statusEl) statusEl.textContent = 'Verify failed'; });
+        }
+      } else {
+        this.uploadGhost(statusEl);
+      }
     }
   }
 
@@ -1237,10 +1252,6 @@ export class Game extends Scene {
           setStatus(`${label} · Rank #${data.rank ?? '?'}`, '#88ccff');
         } else {
           setStatus(`Your best: ${data.previousBest!.toFixed(2)} · Rank #${data.rank ?? '?'}`, '#8899cc');
-        }
-        if (mineTrackId) {
-          if (mineTrackId.startsWith('local-')) markLocalDraftVerified(mineTrackId);
-          else verifyMineTrack(mineTrackId).catch(() => {});
         }
       })
       .catch((err) => {
@@ -1495,30 +1506,40 @@ export class Game extends Scene {
     const view = cam.worldView;
     const done = () => { this.picking = true; this.drawUI(); };
 
-    // Already fully on screen — no adjustment needed.
+    // Minimap sits at top-right (8px gap, 1px border each side).
+    // Reserve that column as unavailable screen space.
+    const mmPxW     = this.minimapCanvas ? this.mmW + 18 : 0; // minimap + gap + breathing room
+    const mmInset   = mmPxW / cam.zoom;                        // world-space equivalent
+    const safeRight = view.right - mmInset;
+
+    // Already fully in the safe viewport — no adjustment needed.
     const alreadyVisible =
-      view.x <= x0 && view.right  >= x1 &&
+      view.x <= x0 && safeRight >= x1 &&
       view.y <= y0 && view.bottom >= y1;
     if (alreadyVisible) { done(); return; }
 
+    // Pan target: shift camera right so bbox centres in the safe (non-minimap) area.
+    const panX = cx + mmInset / 2;
+
     // Fits at current zoom but is off-screen — pan only.
-    const viewW = cam.width  / cam.zoom;
-    const viewH = cam.height / cam.zoom;
-    if (bboxW <= viewW && bboxH <= viewH) {
-      this.panTo(cx, cy, 240, done);
+    const safeViewW = (cam.width - mmPxW) / cam.zoom;
+    const viewH     = cam.height / cam.zoom;
+    if (bboxW <= safeViewW && bboxH <= viewH) {
+      this.panTo(panX, cy, 240, done);
       return;
     }
 
     // Doesn't fit at current zoom — zoom out to fit while panning.
     const targetZoom = Math.max(
-      Math.min(cam.width / bboxW, cam.height / bboxH) * 0.92,
+      Math.min((cam.width - mmPxW) / bboxW, cam.height / bboxH) * 0.92,
       MIN_ZOOM,
     );
+    const finalPanX = cx + mmPxW / (2 * targetZoom);
     cam.stopFollow();
     const proxy = { x: view.centerX, y: view.centerY, zoom: cam.zoom };
     this.tweens.add({
       targets:    proxy,
-      x: cx, y: cy, zoom: targetZoom,
+      x: finalPanX, y: cy, zoom: targetZoom,
       duration:   300,
       ease:       'Quad.easeOut',
       onUpdate:   () => { cam.setZoom(proxy.zoom); cam.centerOn(proxy.x, proxy.y); },

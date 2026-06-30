@@ -24,7 +24,8 @@ export class TrackEditor extends Scene {
   private defs:         PieceDef[]    = [];
   private placed:       PlacedPiece[] = [];
   private cursor        = { x: DEFAULT_START_X, y: DEFAULT_START_Y, heading: DEFAULT_START_HEADING };
-  private finishMarker: TrackMarker | null = null;
+  private finishMarker:  TrackMarker | null = null;
+  private checkpoints:   TrackMarker[]     = [];
 
   // Mutable start position / heading (editor can change these)
   private curStartX       = DEFAULT_START_X;
@@ -32,10 +33,17 @@ export class TrackEditor extends Scene {
   private curStartHeading = DEFAULT_START_HEADING;
 
   // Car selection + drag state
-  private isCarSelected  = false;
+  private isCarSelected   = false;
   private isDraggingStart = false;
 
-  // Rotate button refs — enabled only when car is selected
+  // Finish line selection + drag state
+  private isFinishSelected   = false;
+  private isDraggingFinish   = false;
+
+  // Dirty flag — true when track has unsaved changes
+  private isDirty = false;
+
+  // Rotate button refs — enabled when car OR finish is selected
   private rotateCcwBtn: HTMLButtonElement | null = null;
   private rotateCwBtn:  HTMLButtonElement | null = null;
 
@@ -59,10 +67,11 @@ export class TrackEditor extends Scene {
   private pinchZoom   = 1;
 
   // Phaser world-space rendering
-  private markerGfx!:  GameObjects.Graphics;
-  private barrierImg:  GameObjects.Image | null = null;
-  private finishImg:   GameObjects.Image | null = null;
-  private startCarImg: GameObjects.Image | null = null;
+  private markerGfx!:     GameObjects.Graphics;
+  private barrierImg:     GameObjects.Image | null = null;
+  private finishImg:      GameObjects.Image | null = null;
+  private checkpointImgs: GameObjects.Image[]      = [];
+  private startCarImg:    GameObjects.Image | null = null;
 
   // DOM
   private palEl:  HTMLElement | null = null;
@@ -74,19 +83,23 @@ export class TrackEditor extends Scene {
   constructor() { super('TrackEditor'); }
 
   preload(): void {
-    if (!this.textures.exists('tile_finish_0')) {
-      this.load.image('tile_finish_0', 'assets/markers/tile_finish_0.png');
+    for (const key of ['tile_finish_0', 'tile_checkpoint_0', 'tile_checkpoint_circle_0']) {
+      if (!this.textures.exists(key)) this.load.image(key, `assets/markers/${key}.png`);
     }
   }
 
   init(data?: { mineTrackId?: string; track?: TrackEntry; startHeading?: number }): void {
-    this.defs             = [];
-    this.placed           = [];
-    this.finishMarker     = null;
-    this.mineTrackId      = data?.mineTrackId ?? null;
-    this.isCarSelected   = false;
-    this.isDraggingStart = false;
-    this.startCarImg     = null; // Phaser destroys it on shutdown; clear our reference
+    this.defs               = [];
+    this.placed             = [];
+    this.finishMarker       = null;
+    this.checkpoints        = [];
+    this.isDirty            = false;
+    this.mineTrackId        = data?.mineTrackId ?? null;
+    this.isCarSelected      = false;
+    this.isDraggingStart    = false;
+    this.isFinishSelected   = false;
+    this.isDraggingFinish   = false;
+    this.startCarImg        = null; // Phaser destroys it on shutdown; clear our reference
 
     // Car start position — independent of the track-building origin.
     this.curStartX       = data?.track?.startX ?? DEFAULT_START_X;
@@ -111,6 +124,7 @@ export class TrackEditor extends Scene {
       this.placed = result.placed;
       this.cursor = result.cursor;
       this.finishMarker = track.markers.find(m => m.kind === 'finish') ?? null;
+      this.checkpoints  = track.markers.filter(m => m.kind === 'checkpoint');
     }
   }
 
@@ -140,15 +154,35 @@ export class TrackEditor extends Scene {
     backBtn.addEventListener('click', () => this.scene.start('ModeSelect'));
 
     const titleEl = document.createElement('span');
-    titleEl.textContent = 'TRACK EDITOR';
+    titleEl.textContent = 'EDITOR';
     titleEl.style.cssText = [
       'position:absolute', 'left:50%', 'transform:translateX(-50%)',
       'color:#e8e8ff', 'font:bold 18px "Arial Black",Arial,sans-serif',
       'pointer-events:none',
     ].join(';');
 
+    const mkHdrBtn = (label: string, clr: string, bg: string, border: string, fn: () => void) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = [
+        'background:' + bg, 'border:1px solid ' + border, 'cursor:pointer',
+        'color:' + clr, 'font:bold 13px Arial,sans-serif',
+        'padding:6px 12px', 'border-radius:6px', 'margin-right:8px',
+        `height:${HEADER_H - 16}px`,
+      ].join(';');
+      b.addEventListener('click', fn);
+      return b;
+    };
+
+    const hdrRight = document.createElement('div');
+    hdrRight.style.cssText = 'margin-left:auto; display:flex; align-items:center;';
+    hdrRight.appendChild(mkHdrBtn('📂', '#aaaaff', '#0a0a22', '#333366', () => this.openDrafts()));
+    hdrRight.appendChild(mkHdrBtn('↩', '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
+    hdrRight.appendChild(mkHdrBtn('✓', '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
+
     hdrEl.appendChild(backBtn);
     hdrEl.appendChild(titleEl);
+    hdrEl.appendChild(hdrRight);
     document.body.appendChild(hdrEl);
 
     // ── Empty-state hint
@@ -191,18 +225,29 @@ export class TrackEditor extends Scene {
       const hitRadius = 48; // world units; ~31 screen px at default zoom 0.65
       if (Math.hypot(ptr.worldX - this.curStartX, ptr.worldY - this.curStartY) < hitRadius) {
         // Tap/press on car — select it and begin drag
+        if (this.isFinishSelected) this.deselectFinish();
         if (!this.isCarSelected) this.selectCar();
         this.isDraggingStart = true;
         return;
       }
-      // Tapped elsewhere — deselect car, start camera pan
-      if (this.isCarSelected) this.deselectCar();
-      this.isDraggingStart = false;
-      this.isDragging      = false;
-      this.dragStartX      = ptr.x;
-      this.dragStartY      = ptr.y;
-      this.dragScrollX     = cam.scrollX;
-      this.dragScrollY     = cam.scrollY;
+      if (this.finishMarker &&
+          Math.hypot(ptr.worldX - this.finishMarker.x, ptr.worldY - this.finishMarker.y) < hitRadius) {
+        // Tap/press on finish line — select it and begin drag
+        if (this.isCarSelected) this.deselectCar();
+        if (!this.isFinishSelected) this.selectFinish();
+        this.isDraggingFinish = true;
+        return;
+      }
+      // Tapped elsewhere — deselect everything, start camera pan
+      if (this.isCarSelected)    this.deselectCar();
+      if (this.isFinishSelected) this.deselectFinish();
+      this.isDraggingStart  = false;
+      this.isDraggingFinish = false;
+      this.isDragging       = false;
+      this.dragStartX       = ptr.x;
+      this.dragStartY       = ptr.y;
+      this.dragScrollX      = cam.scrollX;
+      this.dragScrollY      = cam.scrollY;
     });
 
     this.input.on('pointermove', (ptr: Phaser.Input.Pointer) => {
@@ -220,6 +265,13 @@ export class TrackEditor extends Scene {
         this.curStartX = ptr.worldX;
         this.curStartY = ptr.worldY;
         this.updateStartCarImg();
+        return;
+      }
+      if (this.isDraggingFinish && this.finishMarker) {
+        this.finishMarker.x = ptr.worldX;
+        this.finishMarker.y = ptr.worldY;
+        this.updateFinishImg();
+        this.updateSelectionRing();
         return;
       }
       const dx = ptr.x - this.dragStartX;
@@ -244,8 +296,10 @@ export class TrackEditor extends Scene {
           this.dragScrollY = cam.scrollY;
         }
       }
-      this.isDraggingStart = false;
-      this.isDragging      = false;
+      if (this.isDraggingStart || this.isDraggingFinish) this.isDirty = true;
+      this.isDraggingStart  = false;
+      this.isDraggingFinish = false;
+      this.isDragging       = false;
     });
 
     this.input.on('wheel', (ptr: Phaser.Input.Pointer) => {
@@ -264,6 +318,7 @@ export class TrackEditor extends Scene {
     this.redrawMarkers();
     this.updateStartCarImg();
     this.updateFinishImg();
+    this.updateCheckpointImgs();
     if (this.placed.length > 0) {
       this.updateBarrierImg();
       if (this.hintEl) this.hintEl.style.display = 'none';
@@ -333,6 +388,17 @@ export class TrackEditor extends Scene {
       .setDepth(4);
   }
 
+  private updateCheckpointImgs(): void {
+    for (const img of this.checkpointImgs) img.destroy();
+    this.checkpointImgs = [];
+    for (const cp of this.checkpoints) {
+      const key = cp.shape === 'circle' ? 'tile_checkpoint_circle_0' : 'tile_checkpoint_0';
+      this.checkpointImgs.push(
+        this.add.image(cp.x, cp.y, key).setAngle(cp.rotation).setOrigin(0.5).setDepth(4),
+      );
+    }
+  }
+
   private makeEditorCarTexture(): void {
     const KEY = 'editor_car';
     if (this.textures.exists(KEY)) return;
@@ -373,34 +439,60 @@ export class TrackEditor extends Scene {
       .setAngle(this.curStartHeading) // texture points north; heading 0=N, 90=E, 180=S
       .setOrigin(0.5)
       .setDepth(6); // above finish (4) and marker gfx (5)
-    this.updateCarSelection();
+    this.updateSelectionRing();
   }
 
   private selectCar(): void {
     this.isCarSelected = true;
     if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = false;
     if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = false;
-    this.updateCarSelection();
+    this.updateSelectionRing();
   }
 
   private deselectCar(): void {
     this.isCarSelected = false;
-    if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = true;
-    if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = true;
-    this.updateCarSelection();
+    if (!this.isFinishSelected) {
+      if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = true;
+      if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = true;
+    }
+    this.updateSelectionRing();
   }
 
-  private updateCarSelection(): void {
+  private selectFinish(): void {
+    this.isFinishSelected = true;
+    if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = false;
+    if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = false;
+    this.updateSelectionRing();
+  }
+
+  private deselectFinish(): void {
+    this.isFinishSelected = false;
+    if (!this.isCarSelected) {
+      if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = true;
+      if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = true;
+    }
+    this.updateSelectionRing();
+  }
+
+  private updateSelectionRing(): void {
     this.selectionGfx.clear();
-    if (!this.isCarSelected) return;
-    // Cyan ring around the car to indicate selection
-    const r = 36;
-    this.selectionGfx.lineStyle(2, 0x00eeff, 0.9);
-    this.selectionGfx.strokeCircle(this.curStartX, this.curStartY, r);
-    // Four small handle dots at cardinal points
-    this.selectionGfx.fillStyle(0x00eeff, 1);
-    for (const [dx, dy] of [[0, -r], [r, 0], [0, r], [-r, 0]] as [number, number][]) {
-      this.selectionGfx.fillCircle(this.curStartX + dx, this.curStartY + dy, 3.5);
+    if (this.isCarSelected) {
+      const r = 36;
+      this.selectionGfx.lineStyle(2, 0x00eeff, 0.9);
+      this.selectionGfx.strokeCircle(this.curStartX, this.curStartY, r);
+      this.selectionGfx.fillStyle(0x00eeff, 1);
+      for (const [dx, dy] of [[0, -r], [r, 0], [0, r], [-r, 0]] as [number, number][]) {
+        this.selectionGfx.fillCircle(this.curStartX + dx, this.curStartY + dy, 3.5);
+      }
+    }
+    if (this.isFinishSelected && this.finishMarker) {
+      const r = 36;
+      this.selectionGfx.lineStyle(2, 0xffdd00, 0.9);
+      this.selectionGfx.strokeCircle(this.finishMarker.x, this.finishMarker.y, r);
+      this.selectionGfx.fillStyle(0xffdd00, 1);
+      for (const [dx, dy] of [[0, -r], [r, 0], [0, r], [-r, 0]] as [number, number][]) {
+        this.selectionGfx.fillCircle(this.finishMarker.x + dx, this.finishMarker.y + dy, 3.5);
+      }
     }
   }
 
@@ -430,6 +522,13 @@ export class TrackEditor extends Scene {
   }
 
   private rotateStartHeading(delta: number): void {
+    this.isDirty = true;
+    if (this.isFinishSelected && this.finishMarker) {
+      this.finishMarker.rotation = ((this.finishMarker.rotation + delta) % 360 + 360) % 360;
+      this.updateFinishImg();
+      this.updateSelectionRing();
+      return;
+    }
     if (!this.isCarSelected) return;
     this.curStartHeading = ((this.curStartHeading + delta) % 360 + 360) % 360;
     this.updateStartCarImg();
@@ -445,6 +544,7 @@ export class TrackEditor extends Scene {
   }
 
   private addPiece(def: PieceDef): void {
+    this.isDirty = true;
     this.defs.push(def);
     this.rebuildTrack();
     this.scrollToCursor();
@@ -455,8 +555,10 @@ export class TrackEditor extends Scene {
   }
 
   private undo(): void {
+    this.isDirty = true;
     if (this.finishMarker) {
       this.finishMarker = null;
+      if (this.isFinishSelected) this.deselectFinish();
       this.updateFinishImg();
       this.redrawMarkers();
       return;
@@ -488,6 +590,7 @@ export class TrackEditor extends Scene {
 
   private placeFinish(): void {
     if (this.defs.length === 0) { this.showToast('Add pieces first'); return; }
+    this.isDirty = true;
     this.finishMarker = {
       kind: 'finish', shape: 'gate',
       x: this.cursor.x, y: this.cursor.y,
@@ -496,6 +599,19 @@ export class TrackEditor extends Scene {
     this.updateFinishImg();
     this.redrawMarkers();
     this.showToast('Finish line placed  ⚑');
+  }
+
+  private placeCheckpoint(shape: 'gate' | 'circle'): void {
+    if (this.defs.length === 0) { this.showToast('Add pieces first'); return; }
+    this.isDirty = true;
+    this.checkpoints.push({
+      kind: 'checkpoint', shape,
+      x: this.cursor.x, y: this.cursor.y,
+      rotation: this.cursor.heading,
+    });
+    this.updateCheckpointImgs();
+    this.redrawMarkers();
+    this.showToast(shape === 'gate' ? 'Rect checkpoint placed' : 'Round checkpoint placed');
   }
 
   // ── Palette ───────────────────────────────────────────────────────────────────
@@ -551,7 +667,7 @@ export class TrackEditor extends Scene {
     this.rotateCwBtn = cwBtn;
 
     const hintSpan = document.createElement('span');
-    hintSpan.textContent = 'tap car to select';
+    hintSpan.textContent = 'tap car or finish to select';
     hintSpan.style.cssText = 'color:rgba(120,120,180,0.6);font:11px Arial,sans-serif;white-space:nowrap;';
 
     headRow.appendChild(ccwBtn);
@@ -574,9 +690,44 @@ export class TrackEditor extends Scene {
       b.addEventListener('click', fn);
       return b;
     };
-    actRow.appendChild(mkAct('↩ Undo',   '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
     actRow.appendChild(mkAct('⚑ Finish', '#ff7070', '#1a0005', '#662233', () => this.placeFinish()));
-    actRow.appendChild(mkAct('✓ Save',   '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
+
+    // Checkpoint — expand/collapse to pick shape
+    const cpWrap = document.createElement('div');
+    cpWrap.style.cssText = 'flex:1;display:flex;gap:8px;';
+
+    const collapseCp = () => {
+      cpWrap.innerHTML = '';
+      const b = document.createElement('button');
+      b.textContent = '◎ Checkpoint';
+      b.style.cssText = [
+        'flex:1', 'padding:10px 4px',
+        'color:#00ccff', 'background:#001a1a', 'border:1px solid #005566',
+        'border-radius:6px', 'font:bold 13px Arial,sans-serif', 'cursor:pointer',
+      ].join(';');
+      b.addEventListener('click', expandCp);
+      cpWrap.appendChild(b);
+    };
+
+    const expandCp = () => {
+      cpWrap.innerHTML = '';
+      const mkCp = (label: string, shape: 'gate' | 'circle') => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.style.cssText = [
+          'flex:1', 'padding:10px 4px',
+          'color:#00ccff', 'background:#001a22', 'border:1.5px solid #00aacc',
+          'border-radius:6px', 'font:bold 13px Arial,sans-serif', 'cursor:pointer',
+        ].join(';');
+        b.addEventListener('click', () => { this.placeCheckpoint(shape); collapseCp(); });
+        return b;
+      };
+      cpWrap.appendChild(mkCp('▭ Rect', 'gate'));
+      cpWrap.appendChild(mkCp('⬤ Round', 'circle'));
+    };
+
+    collapseCp();
+    actRow.appendChild(cpWrap);
     el.appendChild(actRow);
 
     document.body.appendChild(el);
@@ -680,6 +831,59 @@ export class TrackEditor extends Scene {
 
   // ── Save ──────────────────────────────────────────────────────────────────────
 
+  private openDrafts(): void {
+    if (!this.isDirty) { this.scene.start('TrackSelect', { activeTab: 'drafts' }); return; }
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:300',
+      'background:rgba(0,0,0,0.78)',
+      'display:flex', 'align-items:center', 'justify-content:center',
+    ].join(';');
+
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'background:#0d0d1e', 'border:1.5px solid #444488', 'border-radius:10px',
+      'padding:20px 18px', 'width:min(300px,calc(100%-32px))',
+      'display:flex', 'flex-direction:column', 'gap:14px',
+    ].join(';');
+
+    const msg = document.createElement('div');
+    msg.textContent = 'Discard unsaved changes?';
+    msg.style.cssText = 'font:bold 17px "Arial Black",Arial,sans-serif;color:#e8e8ff;text-align:center;';
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:10px;';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Keep editing';
+    cancelBtn.style.cssText = [
+      'flex:1', 'padding:10px', 'border-radius:6px',
+      'border:1px solid #444466', 'background:#1a1a2a',
+      'color:#aaaacc', 'font:14px Arial,sans-serif', 'cursor:pointer',
+    ].join(';');
+    cancelBtn.addEventListener('click', () => overlay.remove());
+
+    const discardBtn = document.createElement('button');
+    discardBtn.textContent = 'Discard';
+    discardBtn.style.cssText = [
+      'flex:1', 'padding:10px', 'border-radius:6px',
+      'border:1px solid #663333', 'background:#1a0808',
+      'color:#ff8888', 'font:bold 14px Arial,sans-serif', 'cursor:pointer',
+    ].join(';');
+    discardBtn.addEventListener('click', () => {
+      overlay.remove();
+      this.scene.start('TrackSelect', { activeTab: 'drafts' });
+    });
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(discardBtn);
+    card.appendChild(msg);
+    card.appendChild(btnRow);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+  }
+
   private showSaveDialog(): void {
     if (!this.finishMarker) {
       this.showToast('Place a finish line first  (⚑ button)');
@@ -756,9 +960,10 @@ export class TrackEditor extends Scene {
           startY:       this.curStartY,
           startHeading: this.curStartHeading,
           pieces:       this.placed,
-          markers:      [this.finishMarker!],
+          markers:      [this.finishMarker!, ...this.checkpoints],
         };
         await saveDraft(name, JSON.stringify(payload), this.mineTrackId ?? undefined);
+        this.isDirty = false;
         overlay.remove();
         this.scene.start('TrackSelect', { activeTab: 'drafts' });
       } catch (err) {
