@@ -2103,8 +2103,6 @@ export class Game extends Scene {
   }
 
   private showPreRaceDialog(onStart: () => void): void {
-    // Skip for draft test-runs or when there are no opponents.
-    if (this.mineTrackId || this.ghostStates.length === 0) { onStart(); return; }
 
     const overlay = document.createElement('div');
     overlay.style.cssText = [
@@ -2127,7 +2125,7 @@ export class Game extends Scene {
     card.appendChild(trackNameEl);
 
     const lineupLabel = document.createElement('div');
-    lineupLabel.textContent = 'STARTING LINEUP';
+    lineupLabel.textContent = this.ghostStates.length === 0 ? 'SOLO RUN' : 'STARTING LINEUP';
     lineupLabel.style.cssText = 'font:bold 10px Arial,sans-serif;color:#444466;letter-spacing:0.12em;text-align:center;';
     card.appendChild(lineupLabel);
 
