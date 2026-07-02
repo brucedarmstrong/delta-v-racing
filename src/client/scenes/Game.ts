@@ -86,8 +86,12 @@ export class Game extends Scene {
   private pendingGhosts: GhostData[] | null = null; // set by init(), consumed by createInner()
 
   // DOM HUD — immune to Phaser camera zoom/scroll (setScrollFactor(0) only prevents scroll, not zoom)
-  private hudDiv:      HTMLElement | null = null;
-  private pauseBtnEl:  HTMLElement | null = null;
+  private topBarEl:   HTMLElement | null = null;
+  private hudDiv:     HTMLElement | null = null;
+  private pauseBtnEl: HTMLElement | null = null;
+
+  // Minimap snap position — persisted across sessions
+  private mmSnap: 'top' | 'bottom' = (localStorage.getItem('dv-mm-snap') as 'top' | 'bottom') ?? 'top';
 
   // Checkpoint / finish state
   private markerImgList:     GameObjects.Image[]    = [];
@@ -205,18 +209,6 @@ export class Game extends Scene {
     this.carImg  = this.add.image(startWX, startWY, 'car').setAngle(this.trackEntry.startHeading ?? 90).setDepth(10);
     this.velGfx  = this.add.graphics().setDepth(8);
     this.pickGfx = this.add.graphics().setDepth(9);
-
-    // HUD counter — DOM element so camera zoom can't affect it.
-    const hud = document.createElement('div');
-    hud.style.cssText = [
-      'position:fixed', 'top:12px', 'left:62px',
-      'font:bold 14px/1 monospace', 'color:#ccccff',
-      'text-shadow:-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000',
-      'pointer-events:none', 'user-select:none', 'z-index:999',
-    ].join(';');
-    hud.textContent = this.hudString();
-    document.body.appendChild(hud);
-    this.hudDiv = hud;
 
     this.cameras.main.setZoom(1.2);
     this.cameras.main.centerOn(startWX, startWY);
@@ -390,17 +382,47 @@ export class Game extends Scene {
     canvas.width  = this.mmW;
     canvas.height = this.mmH;
     canvas.style.cssText = [
-      'position:fixed',
-      'top:8px',
-      'right:8px',
-      `width:${this.mmW}px`,
-      `height:${this.mmH}px`,
-      'border:1px solid rgba(102,102,170,0.8)',
-      'border-radius:3px',
-      'pointer-events:none',
-      'z-index:1000',
+      'position:fixed', 'right:8px',
+      `width:${this.mmW}px`, `height:${this.mmH}px`,
+      'border:1px solid rgba(102,102,170,0.8)', 'border-radius:3px',
+      'cursor:grab', 'z-index:1000', 'touch-action:none',
     ].join(';');
+    this.applyMmSnap(canvas);
     document.body.appendChild(canvas);
+
+    // ── Drag-to-snap ──────────────────────────────────────────────────────────
+    let dragging = false;
+    let dragOffX = 0, dragOffY = 0;
+    let hasMoved = false;
+
+    canvas.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      dragging  = true;
+      hasMoved  = false;
+      dragOffX  = e.clientX - canvas.getBoundingClientRect().left;
+      dragOffY  = e.clientY - canvas.getBoundingClientRect().top;
+      canvas.style.cursor = 'grabbing';
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      e.preventDefault();
+      const x = e.clientX - dragOffX;
+      const y = e.clientY - dragOffY;
+      if (Math.abs(y - canvas.getBoundingClientRect().top) > 6) hasMoved = true;
+      canvas.style.top    = `${y}px`;
+      canvas.style.bottom = 'auto';
+    });
+    canvas.addEventListener('pointerup', (e) => {
+      if (!dragging) return;
+      dragging = false;
+      canvas.style.cursor = 'grab';
+      if (!hasMoved) return;
+      const midY = window.innerHeight / 2;
+      this.mmSnap = (canvas.getBoundingClientRect().top + this.mmH / 2) < midY ? 'top' : 'bottom';
+      localStorage.setItem('dv-mm-snap', this.mmSnap);
+      this.applyMmSnap(canvas);
+    });
 
     const ctx = canvas.getContext('2d')!;
 
@@ -1438,10 +1460,8 @@ export class Game extends Scene {
   }
 
   private hudString(): string {
-    const c = this.crashes > 0 ? `  crashes ${this.crashes}` : '';
-    const u = username ? `  u/${username}` : '';
-    const z = `  z:${this.cameras.main.zoom.toFixed(2)}`;
-    return `turn ${this.turn}${c}${u}${z}`;
+    const c = this.crashes > 0 ? `  ·  ${this.crashes} crash${this.crashes > 1 ? 'es' : ''}` : '';
+    return `Turn ${this.turn}${c}`;
   }
 
   // ── Camera framing ────────────────────────────────────────────────────────────
@@ -1505,8 +1525,8 @@ export class Game extends Scene {
     const done = () => { this.picking = true; this.drawUI(); this.updateHud(); };
 
     // Minimap sits at top-right (8px gap, 1px border each side).
-    // Reserve that column as unavailable screen space.
-    const mmPxW     = this.minimapCanvas ? this.mmW + 18 : 0; // minimap + gap + breathing room
+    // Reserve right column only when minimap is at the top (overlaps the picker area).
+    const mmPxW     = (this.minimapCanvas && this.mmSnap === 'top') ? this.mmW + 18 : 0;
     const mmInset   = mmPxW / cam.zoom;                        // world-space equivalent
     const safeRight = view.right - mmInset;
 
@@ -1813,22 +1833,39 @@ export class Game extends Scene {
   // ── Pause menu ────────────────────────────────────────────────────────────────
 
   private addPauseUI(): void {
-    // DOM pause button — immune to camera zoom, always fixed top-left.
+    // ── Top HUD bar ───────────────────────────────────────────────────────────
+    const bar = document.createElement('div');
+    bar.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'right:0', 'height:40px',
+      'display:flex', 'align-items:center', 'gap:8px', 'padding:0 8px',
+      'background:rgba(8,8,20,0.82)', 'border-bottom:1px solid rgba(80,80,140,0.35)',
+      'z-index:999', 'pointer-events:none', 'user-select:none',
+    ].join(';');
+
     const btn = document.createElement('button');
     btn.style.cssText = [
-      'position:fixed', 'top:6px', 'left:6px',
-      'width:46px', 'height:38px',
-      'background:#3355cc', 'border:2px solid #aabbff', 'border-radius:5px',
-      'cursor:pointer', 'z-index:999', 'padding:0',
+      'width:34px', 'height:30px', 'flex-shrink:0',
+      'background:#2244aa', 'border:1.5px solid #6688dd', 'border-radius:5px',
+      'cursor:pointer', 'padding:0', 'pointer-events:auto',
       'display:flex', 'align-items:center', 'justify-content:center',
     ].join(';');
-    btn.innerHTML = `<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
+    btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
       <rect x="3"  y="2" width="6" height="18" rx="1" fill="white"/>
       <rect x="13" y="2" width="6" height="18" rx="1" fill="white"/>
     </svg>`;
     btn.addEventListener('click', () => { if (!this.paused && !this.won) this.showPause(); });
-    document.body.appendChild(btn);
+
+    const hud = document.createElement('span');
+    hud.style.cssText = 'font:bold 13px/1 monospace;color:#ccccff;letter-spacing:0.02em;';
+    hud.textContent = this.hudString();
+
+    bar.appendChild(btn);
+    bar.appendChild(hud);
+    document.body.appendChild(bar);
+
+    this.topBarEl  = bar;
     this.pauseBtnEl = btn;
+    this.hudDiv    = hud;
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -1860,10 +1897,10 @@ export class Game extends Scene {
 
     this.events.once('shutdown', () => {
       window.removeEventListener('keydown', onKey);
-      btn.remove();
+      this.topBarEl?.remove();
+      this.topBarEl  = null;
       this.pauseBtnEl = null;
-      this.hudDiv?.remove();
-      this.hudDiv = null;
+      this.hudDiv    = null;
       this.pauseOverlayEl?.remove();
       this.pauseOverlayEl = null;
       this.finishOverlayEl?.remove();
@@ -1879,6 +1916,16 @@ export class Game extends Scene {
     if (this.hudDiv) this.hudDiv.textContent = this.hudString();
   }
 
+  private applyMmSnap(canvas: HTMLCanvasElement): void {
+    if (this.mmSnap === 'bottom') {
+      canvas.style.top    = 'auto';
+      canvas.style.bottom = '8px';
+    } else {
+      canvas.style.top    = '48px';
+      canvas.style.bottom = 'auto';
+    }
+  }
+
   private showPause(): void {
     this.paused           = true;
     this.savedTweenScale  = this.tweens.timeScale;
@@ -1886,8 +1933,7 @@ export class Game extends Scene {
     this.tweens.timeScale = 0;
     this.time.timeScale   = 0;
     if (this.minimapCanvas) this.minimapCanvas.style.display = 'none';
-    if (this.pauseBtnEl)    this.pauseBtnEl.style.display    = 'none';
-    if (this.hudDiv)        this.hudDiv.style.display        = 'none';
+    if (this.topBarEl)      this.topBarEl.style.display      = 'none';
     this.pauseOverlayEl = this.buildPauseDOM();
     document.body.appendChild(this.pauseOverlayEl);
   }
@@ -1899,8 +1945,7 @@ export class Game extends Scene {
     this.pauseOverlayEl?.remove();
     this.pauseOverlayEl = null;
     if (this.minimapCanvas) this.minimapCanvas.style.display = '';
-    if (this.pauseBtnEl)    this.pauseBtnEl.style.display    = '';
-    if (this.hudDiv)        this.hudDiv.style.display        = '';
+    if (this.topBarEl)      this.topBarEl.style.display      = 'flex';
     if (!this.won && !this.crashing && this.picking) this.drawUI();
   }
 
@@ -1911,8 +1956,7 @@ export class Game extends Scene {
     this.pauseOverlayEl?.remove();
     this.pauseOverlayEl = null;
     if (this.minimapCanvas) this.minimapCanvas.style.display = '';
-    if (this.pauseBtnEl)    this.pauseBtnEl.style.display    = '';
-    if (this.hudDiv)        this.hudDiv.style.display        = '';
+    if (this.topBarEl)      this.topBarEl.style.display      = 'flex';
     fn();
   }
 
