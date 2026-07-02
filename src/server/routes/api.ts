@@ -190,6 +190,159 @@ api.post('/ghost', async (c) => {
   });
 });
 
+// Known startX/startY for all built-in tracks. Multiples of 24 — so startGX === startX/24.
+const STANDARD_TRACK_STARTS: Record<string, { startX: number; startY: number }> = {
+  oval_small:    { startX: 1080, startY:  504 },
+  short_track:   { startX:  432, startY:  216 },
+  track4:        { startX:  216, startY:  672 },
+  canada:        { startX: 1440, startY:  432 },
+  nurburgring:   { startX: 1656, startY:  576 },
+  '532':         { startX: 1176, startY:  744 },
+  acey1:         { startX:  144, startY:  312 },
+  acey2:         { startX:  864, startY:  408 },
+  criss_cross:   { startX: 1296, startY:  504 },
+  rusty_springs: { startX:  696, startY:  120 },
+  spiral:        { startX: 1008, startY:   96 },
+  bigone:        { startX:  240, startY:  240 },
+  '88':          { startX:  240, startY:  528 },
+  pods:          { startX:  504, startY:  192 },
+  circuit_a:     { startX:  864, startY:  408 },
+  speedway:      { startX:  552, startY:  144 },
+  diagonal:      { startX:  408, startY:  168 },
+  '2026_go_getter': { startX: 336, startY: 576 },
+  '2026_mickey': { startX:  336, startY:  504 },
+  '2026_square': { startX:  600, startY:  528 },
+  '2026_test':   { startX:  336, startY:  288 },
+  '2026_shorty': { startX:  336, startY:  432 },
+  tutorial:      { startX:  384, startY:  312 },
+  track3:        { startX:  408, startY:  168 },
+};
+
+api.get('/debug/ghost-grid-check', async (c) => {
+  type GhostRecord = { v: number; trackId: string; startGX: number; startGY: number };
+  type CheckEntry = {
+    trackId:   string;
+    username:  string;
+    startGX:   number;
+    startGY:   number;
+    expectedGX: number | null;
+    expectedGY: number | null;
+    ok:        boolean;
+    note:      string;
+  };
+
+  const trackIds = await redis.hKeys('lb:tracks');
+  const results: CheckEntry[] = [];
+
+  for (const trackId of trackIds) {
+    // Determine expected grid start from built-in table or community Redis record.
+    let expGX: number | null = null;
+    let expGY: number | null = null;
+    let note = '';
+
+    const builtIn = STANDARD_TRACK_STARTS[trackId];
+    if (builtIn) {
+      expGX = builtIn.startX / 24;
+      expGY = builtIn.startY / 24;
+    } else {
+      const raw = await redis.get(`track:${trackId}`);
+      if (raw) {
+        try {
+          const rec = JSON.parse(raw) as { data: string };
+          const payload = JSON.parse(rec.data) as { startX: number; startY: number };
+          expGX = Math.round(payload.startX / 24);
+          expGY = Math.round(payload.startY / 24);
+        } catch { note = 'corrupt community record'; }
+      } else {
+        note = 'community record missing';
+      }
+    }
+
+    const lbKey = `lb:${trackId}`;
+    const total = await redis.zCard(lbKey);
+    if (total === 0) continue;
+    const members = await redis.zRange(lbKey, 0, total - 1, { by: 'rank' });
+
+    for (const { member: uname } of members) {
+      const ghostRaw = await redis.get(`ghost:${trackId}:${uname}`);
+      if (!ghostRaw) continue;
+      let ghost: GhostRecord;
+      try { ghost = JSON.parse(ghostRaw) as GhostRecord; }
+      catch { results.push({ trackId, username: uname, startGX: -1, startGY: -1, expectedGX: expGX, expectedGY: expGY, ok: false, note: 'parse error' }); continue; }
+
+      const ok = expGX !== null && expGY !== null
+        ? ghost.startGX === expGX && ghost.startGY === expGY
+        : false;
+
+      results.push({
+        trackId, username: uname,
+        startGX: ghost.startGX, startGY: ghost.startGY,
+        expectedGX: expGX, expectedGY: expGY,
+        ok,
+        note: note || (expGX === null ? 'no reference' : ok ? 'ok' : `MISMATCH — expected gx=${expGX} gy=${expGY}`),
+      });
+    }
+  }
+
+  const bad = results.filter(r => !r.ok);
+  return c.json({ total: results.length, mismatches: bad.length, bad, all: results });
+});
+
+api.post('/debug/purge-bad-ghosts', async (c) => {
+  type GhostRecord = { startGX: number; startGY: number };
+  const deleted: string[] = [];
+  const kept:    string[] = [];
+
+  const trackIds = await redis.hKeys('lb:tracks');
+
+  for (const trackId of trackIds) {
+    let expGX: number | null = null;
+    let expGY: number | null = null;
+
+    const builtIn = STANDARD_TRACK_STARTS[trackId];
+    if (builtIn) {
+      expGX = builtIn.startX / 24;
+      expGY = builtIn.startY / 24;
+    } else {
+      const raw = await redis.get(`track:${trackId}`);
+      if (raw) {
+        try {
+          const rec = JSON.parse(raw) as { data: string };
+          const payload = JSON.parse(rec.data) as { startX: number; startY: number };
+          expGX = Math.round(payload.startX / 24);
+          expGY = Math.round(payload.startY / 24);
+        } catch { /* skip — can't verify */ }
+      }
+    }
+
+    if (expGX === null) continue; // can't verify this track, leave it alone
+
+    const lbKey = `lb:${trackId}`;
+    const total = await redis.zCard(lbKey);
+    if (total === 0) continue;
+    const members = await redis.zRange(lbKey, 0, total - 1, { by: 'rank' });
+
+    for (const { member: uname } of members) {
+      const ghostRaw = await redis.get(`ghost:${trackId}:${uname}`);
+      if (!ghostRaw) continue;
+      let ghost: GhostRecord;
+      try { ghost = JSON.parse(ghostRaw) as GhostRecord; }
+      catch { continue; }
+
+      if (ghost.startGX !== expGX || ghost.startGY !== expGY) {
+        await redis.del(`ghost:${trackId}:${uname}`);
+        await redis.zRem(lbKey, [uname]);
+        deleted.push(`${trackId}/${uname} (gx=${ghost.startGX} gy=${ghost.startGY}, expected ${expGX}/${expGY})`);
+        console.log(`[purge] deleted ghost ${trackId}/${uname}: gx=${ghost.startGX} vs expected ${expGX}`);
+      } else {
+        kept.push(`${trackId}/${uname}`);
+      }
+    }
+  }
+
+  return c.json({ deleted: deleted.length, kept: kept.length, deletedList: deleted });
+});
+
 api.delete('/debug/ghost/:trackId/:username', async (c) => {
   const { trackId, username } = c.req.param();
   await redis.del(`ghost:${trackId}:${username}`);
@@ -351,6 +504,7 @@ api.post('/track', async (c) => {
   await redis.set(`track:${id}`, record);
   await redis.zAdd('tracks:community', { score: uploadedAt, member: id });
   await redis.set(nameKey, id);
+  await redis.set(`track-post:${post.id}`, id);
 
   return c.json<UploadTrackResponse>({ type: 'upload_track', id, author: username, uploadedAt, postUrl });
 });

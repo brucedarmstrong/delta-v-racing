@@ -32,6 +32,14 @@
         "location": "subreddit",
         "forUserType": "moderator",
         "endpoint": "/internal/menu/example-form"
+      },
+      {
+        "label": "Remove from Track List",
+        "description": "Remove this track from the community racing list",
+        "location": "post",
+        "forUserType": "moderator",
+        "postFilter": "currentApp",
+        "endpoint": "/internal/menu/remove-track"
       }
     ]
   },
@@ -40,6 +48,14 @@
   },
   "triggers": {
     "onAppInstall": "/internal/triggers/on-app-install"
+  },
+  "scheduler": {
+    "tasks": {
+      "cleanup-deleted-posts": {
+        "endpoint": "/internal/triggers/cleanup-deleted-posts",
+        "cron": "0 4 * * *"
+      }
+    }
   },
   "scripts": {
     "build": "vite build",

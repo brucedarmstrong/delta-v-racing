@@ -218,8 +218,9 @@ export class Game extends Scene {
     document.body.appendChild(hud);
     this.hudDiv = hud;
 
-    this.cameras.main.setZoom(2.5);
+    this.cameras.main.setZoom(1.2);
     this.cameras.main.centerOn(startWX, startWY);
+    this.updateHud();
 
     // Enable a second pointer so Phaser tracks two simultaneous touches for pinch.
     this.input.addPointer(1);
@@ -230,6 +231,7 @@ export class Game extends Scene {
       const z    = this.cameras.main.zoom;
       const next = z * (ptr.deltaY > 0 ? 1 / 1.12 : 1.12);
       this.cameras.main.setZoom(Math.min(Math.max(next, MIN_ZOOM), MAX_ZOOM));
+      this.updateHud();
     });
 
     // pointerdown: start pinch (2 fingers) or record drag origin (1 finger).
@@ -269,6 +271,7 @@ export class Game extends Scene {
         } else {
           const next = this.pinchStartZoom * dist / this.pinchStartDist;
           this.cameras.main.setZoom(Math.min(Math.max(next, MIN_ZOOM), MAX_ZOOM));
+          this.updateHud();
         }
         return;
       }
@@ -957,7 +960,7 @@ export class Game extends Scene {
     overlay.style.cssText = [
       'position:fixed', 'inset:0', 'z-index:1002',
       'display:flex', 'align-items:center', 'justify-content:center',
-      'background:rgba(0,0,0,0.6)', 'overflow-y:auto', 'padding:16px',
+      'background:rgba(0,0,0,0.6)', 'overflow-y:auto', 'overflow-x:hidden', 'padding:16px',
       'box-sizing:border-box',
     ].join(';');
 
@@ -1048,6 +1051,7 @@ export class Game extends Scene {
         backBtn.remove();
         this.viewTrackBackBtn = null;
         overlay.style.display = '';
+        overlay.scrollTop = 0;
         if (this.minimapCanvas) this.minimapCanvas.style.display = '';
         const cam   = this.cameras.main;
         const proxy = { x: cam.worldView.centerX, y: cam.worldView.centerY, zoom: cam.zoom };
@@ -1426,7 +1430,8 @@ export class Game extends Scene {
   private hudString(): string {
     const c = this.crashes > 0 ? `  crashes ${this.crashes}` : '';
     const u = username ? `  u/${username}` : '';
-    return `turn ${this.turn}${c}${u}`;
+    const z = `  z:${this.cameras.main.zoom.toFixed(2)}`;
+    return `turn ${this.turn}${c}${u}${z}`;
   }
 
   // ── Camera framing ────────────────────────────────────────────────────────────
@@ -1463,7 +1468,7 @@ export class Game extends Scene {
       x: cx, y: cy, zoom,
       duration: 700,
       ease:     'Quad.easeInOut',
-      onUpdate: () => { cam.setZoom(proxy.zoom); cam.centerOn(proxy.x, proxy.y); },
+      onUpdate: () => { cam.setZoom(proxy.zoom); cam.centerOn(proxy.x, proxy.y); this.updateHud(); },
     });
   }
 
@@ -1487,7 +1492,7 @@ export class Game extends Scene {
 
     const cam  = this.cameras.main;
     const view = cam.worldView;
-    const done = () => { this.picking = true; this.drawUI(); };
+    const done = () => { this.picking = true; this.drawUI(); this.updateHud(); };
 
     // Minimap sits at top-right (8px gap, 1px border each side).
     // Reserve that column as unavailable screen space.
@@ -1525,7 +1530,7 @@ export class Game extends Scene {
       x: finalPanX, y: cy, zoom: targetZoom,
       duration:   300,
       ease:       'Quad.easeOut',
-      onUpdate:   () => { cam.setZoom(proxy.zoom); cam.centerOn(proxy.x, proxy.y); },
+      onUpdate:   () => { cam.setZoom(proxy.zoom); cam.centerOn(proxy.x, proxy.y); this.updateHud(); },
       onComplete: () => done(),
     });
   }

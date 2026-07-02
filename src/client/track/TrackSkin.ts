@@ -9,7 +9,7 @@ function hsl(h: number, s: number, l: number): string {
   return `hsl(${h},${s}%,${l}%)`;
 }
 
-export function fromHue(hue: number, wallWidth = 2, glowBlur = 14): TrackSkin {
+export function fromHue(hue: number, wallWidth = 4, glowBlur = 18): TrackSkin {
   return {
     wallColor: hsl(hue, 100, 60),
     glowColor: hsl(hue, 100, 12),
