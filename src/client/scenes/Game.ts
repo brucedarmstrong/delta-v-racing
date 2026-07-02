@@ -90,8 +90,12 @@ export class Game extends Scene {
   private hudDiv:     HTMLElement | null = null;
   private pauseBtnEl: HTMLElement | null = null;
 
-  // Minimap snap position — persisted across sessions
-  private mmSnap: 'top' | 'bottom' = (localStorage.getItem('dv-mm-snap') as 'top' | 'bottom') ?? 'top';
+  // Minimap state — persisted across sessions
+  private mmSnap:       'top' | 'bottom' | 'minimized' =
+    (localStorage.getItem('dv-mm-snap') as 'top' | 'bottom' | 'minimized') ?? 'top';
+  private mmLastVisible: 'top' | 'bottom' = 'top';
+  private mmContainer:   HTMLElement | null = null;
+  private mmRestoreBtn:  HTMLElement | null = null;
 
   // Checkpoint / finish state
   private markerImgList:     GameObjects.Image[]    = [];
@@ -317,9 +321,9 @@ export class Game extends Scene {
       this.isDragging = false;
     });
 
+    this.addPauseUI();
     this.addMinimap();
     this.addShiftSlow();
-    this.addPauseUI();
 
     // Short delay so the tap that launched this scene isn't treated as a pick.
     this.time.delayedCall(120, () => { this.framePicker(); });
@@ -376,53 +380,127 @@ export class Game extends Scene {
     this.mmW = Math.round(this.mmWW * scaleToFit);
     this.mmH = Math.round(this.mmWH * scaleToFit);
 
-    // Create a plain HTML canvas fixed to the top-right of the viewport.
-    // This is entirely outside Phaser so camera zoom/scroll cannot affect it.
+    // ── Container (positions the minimap; canvas + controls live inside) ────────
+    this.mmLastVisible = this.mmSnap === 'minimized' ? 'top' : this.mmSnap;
+
+    const container = document.createElement('div');
+    container.style.cssText = [
+      'position:fixed', 'right:8px', 'z-index:1000',
+      'border:1px solid rgba(102,102,170,0.8)', 'border-radius:4px',
+      'overflow:hidden',
+    ].join(';');
+
     const canvas = document.createElement('canvas');
     canvas.width  = this.mmW;
     canvas.height = this.mmH;
-    canvas.style.cssText = [
-      'position:fixed', 'right:8px',
-      `width:${this.mmW}px`, `height:${this.mmH}px`,
-      'border:1px solid rgba(102,102,170,0.8)', 'border-radius:3px',
-      'cursor:grab', 'z-index:1000', 'touch-action:none',
+    canvas.style.cssText = `display:block;width:${this.mmW}px;height:${this.mmH}px;`;
+
+    // ── Controls strip ────────────────────────────────────────────────────────
+    const ctrlStrip = document.createElement('div');
+    ctrlStrip.style.cssText = [
+      'position:absolute', 'top:0', 'left:0', 'right:0', 'height:20px',
+      'display:flex', 'align-items:center', 'justify-content:flex-end', 'gap:1px',
+      'background:rgba(0,0,0,0.55)', 'padding:0 2px', 'pointer-events:auto',
     ].join(';');
-    this.applyMmSnap(canvas);
-    document.body.appendChild(canvas);
 
-    // ── Drag-to-snap ──────────────────────────────────────────────────────────
-    let dragging = false;
-    let dragOffX = 0, dragOffY = 0;
-    let hasMoved = false;
+    const mkCtrlBtn = (label: string, title: string) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.title = title;
+      b.style.cssText = [
+        'width:18px', 'height:18px', 'padding:0', 'background:transparent', 'border:none',
+        'color:rgba(200,200,255,0.85)', 'font-size:11px', 'line-height:1',
+        'cursor:pointer', 'display:flex', 'align-items:center', 'justify-content:center',
+      ].join(';');
+      return b;
+    };
+    const settingsBtn = mkCtrlBtn('⚙', 'Minimap position');
+    const minimizeBtn = mkCtrlBtn('▭', 'Minimize minimap');
 
-    canvas.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      canvas.setPointerCapture(e.pointerId);
-      dragging  = true;
-      hasMoved  = false;
-      dragOffX  = e.clientX - canvas.getBoundingClientRect().left;
-      dragOffY  = e.clientY - canvas.getBoundingClientRect().top;
-      canvas.style.cursor = 'grabbing';
-    });
-    canvas.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      e.preventDefault();
-      const x = e.clientX - dragOffX;
-      const y = e.clientY - dragOffY;
-      if (Math.abs(y - canvas.getBoundingClientRect().top) > 6) hasMoved = true;
-      canvas.style.top    = `${y}px`;
-      canvas.style.bottom = 'auto';
-    });
-    canvas.addEventListener('pointerup', (e) => {
-      if (!dragging) return;
-      dragging = false;
-      canvas.style.cursor = 'grab';
-      if (!hasMoved) return;
-      const midY = window.innerHeight / 2;
-      this.mmSnap = (canvas.getBoundingClientRect().top + this.mmH / 2) < midY ? 'top' : 'bottom';
+    ctrlStrip.appendChild(settingsBtn);
+    ctrlStrip.appendChild(minimizeBtn);
+    container.appendChild(canvas);
+    container.appendChild(ctrlStrip);
+
+    // ── Restore button (in top bar, shown only when minimized) ────────────────
+    const restoreBtn = document.createElement('button');
+    restoreBtn.title = 'Show minimap';
+    restoreBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="1" y="1" width="14" height="14" rx="2" stroke="rgba(160,160,255,0.8)" stroke-width="1.5"/>
+      <rect x="3" y="3" width="4" height="3" rx="0.5" fill="rgba(60,200,100,0.9)"/>
+      <circle cx="11" cy="10" r="2.5" fill="rgba(255,80,255,0.9)"/>
+    </svg>`;
+    restoreBtn.style.cssText = [
+      'width:28px', 'height:28px', 'padding:0', 'margin:0 2px',
+      'background:rgba(20,20,50,0.7)', 'border:1px solid rgba(80,80,140,0.5)',
+      'border-radius:4px', 'cursor:pointer', 'pointer-events:auto',
+      'display:none', 'align-items:center', 'justify-content:center', 'flex-shrink:0',
+    ].join(';');
+    restoreBtn.addEventListener('click', () => {
+      this.mmSnap = this.mmLastVisible;
       localStorage.setItem('dv-mm-snap', this.mmSnap);
-      this.applyMmSnap(canvas);
+      this.applyMmSnap(container, restoreBtn);
     });
+    this.topBarEl?.appendChild(restoreBtn);
+    this.mmRestoreBtn = restoreBtn;
+
+    // ── Settings popover ──────────────────────────────────────────────────────
+    let settingsDlg: HTMLElement | null = null;
+    const closeSettingsDlg = () => { settingsDlg?.remove(); settingsDlg = null; };
+
+    settingsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (settingsDlg) { closeSettingsDlg(); return; }
+      const dlg = document.createElement('div');
+      dlg.style.cssText = [
+        'position:fixed', 'z-index:1002',
+        'background:#0d0d1e', 'border:1px solid #444488', 'border-radius:6px',
+        'padding:6px 4px', 'display:flex', 'flex-direction:column', 'gap:2px',
+      ].join(';');
+      const rect = container.getBoundingClientRect();
+      dlg.style.right = `${window.innerWidth - rect.right}px`;
+      if (this.mmSnap === 'bottom') {
+        dlg.style.bottom = `${window.innerHeight - rect.top + 4}px`;
+      } else {
+        dlg.style.top = `${rect.bottom + 4}px`;
+      }
+      const options: Array<{ label: string; value: 'top' | 'bottom' | 'minimized' }> = [
+        { label: 'Top',       value: 'top'       },
+        { label: 'Bottom',    value: 'bottom'    },
+        { label: 'Minimized', value: 'minimized' },
+      ];
+      for (const opt of options) {
+        const row = document.createElement('button');
+        const active = this.mmSnap === opt.value;
+        row.textContent = (active ? '● ' : '○ ') + opt.label;
+        row.style.cssText = [
+          'background:transparent', 'border:none', 'text-align:left',
+          `color:${active ? '#aaccff' : '#8888aa'}`,
+          'font:13px Arial,sans-serif', 'cursor:pointer',
+          'padding:5px 10px', 'border-radius:4px', 'white-space:nowrap',
+        ].join(';');
+        row.addEventListener('click', () => {
+          this.mmSnap = opt.value;
+          localStorage.setItem('dv-mm-snap', this.mmSnap);
+          this.applyMmSnap(container, restoreBtn);
+          closeSettingsDlg();
+        });
+        dlg.appendChild(row);
+      }
+      settingsDlg = dlg;
+      document.body.appendChild(dlg);
+      setTimeout(() => document.addEventListener('pointerdown', closeSettingsDlg, { once: true }), 0);
+    });
+
+    minimizeBtn.addEventListener('click', () => {
+      this.mmSnap = 'minimized';
+      localStorage.setItem('dv-mm-snap', this.mmSnap);
+      this.applyMmSnap(container, restoreBtn);
+    });
+
+    this.applyMmSnap(container, restoreBtn);
+    document.body.appendChild(container);
+    this.mmContainer = container;
 
     const ctx = canvas.getContext('2d')!;
 
@@ -516,7 +594,10 @@ export class Game extends Scene {
     // Clean up DOM elements on scene shutdown.
     this.events.once('shutdown', () => {
       cancelAnimationFrame(rafId);
-      canvas.remove();
+      closeSettingsDlg();
+      container.remove();
+      this.mmContainer     = null;
+      this.mmRestoreBtn    = null;
       this.minimapCtx      = null;
       this.minimapTrackImg = null;
       this.minimapCanvas   = null;
@@ -1058,7 +1139,7 @@ export class Game extends Scene {
       const prevY    = this.cameras.main.worldView.centerY;
 
       overlay.style.display = 'none';
-      if (this.minimapCanvas) this.minimapCanvas.style.display = 'none';
+      if (this.mmContainer) this.mmContainer.style.display = 'none';
       this.zoomToFitTrack();
 
       const backBtn = document.createElement('button');
@@ -1074,7 +1155,7 @@ export class Game extends Scene {
         this.viewTrackBackBtn = null;
         overlay.style.display = 'flex';
         overlay.scrollTop = 0;
-        if (this.minimapCanvas) this.minimapCanvas.style.display = '';
+        if (this.mmContainer) this.applyMmSnap(this.mmContainer);
         const cam   = this.cameras.main;
         const proxy = { x: cam.worldView.centerX, y: cam.worldView.centerY, zoom: cam.zoom };
         this.tweens.add({
@@ -1916,13 +1997,22 @@ export class Game extends Scene {
     if (this.hudDiv) this.hudDiv.textContent = this.hudString();
   }
 
-  private applyMmSnap(canvas: HTMLCanvasElement): void {
-    if (this.mmSnap === 'bottom') {
-      canvas.style.top    = 'auto';
-      canvas.style.bottom = '8px';
+  private applyMmSnap(container: HTMLElement, restoreBtn?: HTMLElement): void {
+    const rb = restoreBtn ?? this.mmRestoreBtn;
+    if (this.mmSnap === 'minimized') {
+      container.style.display = 'none';
+      if (rb) { rb.style.display = 'flex'; }
     } else {
-      canvas.style.top    = '48px';
-      canvas.style.bottom = 'auto';
+      container.style.display = 'block';
+      if (rb) { rb.style.display = 'none'; }
+      if (this.mmSnap === 'bottom') {
+        container.style.top    = 'auto';
+        container.style.bottom = '8px';
+      } else {
+        container.style.top    = '48px';
+        container.style.bottom = 'auto';
+      }
+      this.mmLastVisible = this.mmSnap;
     }
   }
 
@@ -1932,7 +2022,7 @@ export class Game extends Scene {
     this.savedTimeScale   = this.time.timeScale;
     this.tweens.timeScale = 0;
     this.time.timeScale   = 0;
-    if (this.minimapCanvas) this.minimapCanvas.style.display = 'none';
+    if (this.mmContainer)   this.mmContainer.style.display   = 'none';
     if (this.topBarEl)      this.topBarEl.style.display      = 'none';
     this.pauseOverlayEl = this.buildPauseDOM();
     document.body.appendChild(this.pauseOverlayEl);
@@ -1944,7 +2034,7 @@ export class Game extends Scene {
     this.time.timeScale   = this.savedTimeScale;
     this.pauseOverlayEl?.remove();
     this.pauseOverlayEl = null;
-    if (this.minimapCanvas) this.minimapCanvas.style.display = '';
+    if (this.mmContainer)   this.applyMmSnap(this.mmContainer);
     if (this.topBarEl)      this.topBarEl.style.display      = 'flex';
     if (!this.won && !this.crashing && this.picking) this.drawUI();
   }
@@ -1955,7 +2045,7 @@ export class Game extends Scene {
     this.time.timeScale   = 1;
     this.pauseOverlayEl?.remove();
     this.pauseOverlayEl = null;
-    if (this.minimapCanvas) this.minimapCanvas.style.display = '';
+    if (this.mmContainer)   this.applyMmSnap(this.mmContainer);
     if (this.topBarEl)      this.topBarEl.style.display      = 'flex';
     fn();
   }
