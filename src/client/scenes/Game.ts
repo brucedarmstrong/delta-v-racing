@@ -2167,6 +2167,9 @@ export class Game extends Scene {
       'color:#00ff88', 'background:#0a2a16', 'border:2px solid #00cc66',
       'border-radius:8px', 'cursor:pointer', 'letter-spacing:0.08em', 'margin-top:4px',
     ].join(';');
+    // Block input briefly so the tap that opened this scene can't bleed through.
+    raceBtn.style.pointerEvents = 'none';
+    setTimeout(() => { raceBtn.style.pointerEvents = 'auto'; }, 400);
     raceBtn.addEventListener('click', () => { overlay.remove(); onStart(); });
     card.appendChild(raceBtn);
 

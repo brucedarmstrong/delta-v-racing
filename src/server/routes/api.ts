@@ -869,16 +869,18 @@ api.get('/race-ghosts/:trackId', async (c) => {
       const j = Math.floor(Math.random() * (i + 1));
       [members[i], members[j]] = [members[j], members[i]];
     }
-    const selected = members.slice(0, 3);
-    const raws     = await redis.mGet(selected.map(u => `ghost:${trackId}:${u}`));
-    raws.forEach((raw, i) => {
-      if (!raw) return;
+    // Batch-fetch all candidates; take first 3 that actually have ghost data.
+    // (A leaderboard entry may exist without ghost data if the upload failed.)
+    const raws = await redis.mGet(members.map(u => `ghost:${trackId}:${u}`));
+    for (let i = 0; i < raws.length && ghosts.length < 3; i++) {
+      const raw = raws[i];
+      if (!raw) continue;
       try {
         const g = JSON.parse(raw) as Record<string, unknown>;
-        g.author = selected[i];
+        g.author = members[i];
         ghosts.push(JSON.stringify(g));
-      } catch { ghosts.push(raw); }
-    });
+      } catch { /* skip malformed */ }
+    }
   }
 
   // Fill remaining slots from cached AI ghosts.
