@@ -85,7 +85,8 @@ export class TrackEditor extends Scene {
   private hintEl: HTMLElement | null = null;
 
   // Mine track context (set when editing an existing draft)
-  private mineTrackId: string | null = null;
+  private mineTrackId:   string | null = null;
+  private existingName:  string        = '';
 
   constructor() { super('TrackEditor'); }
 
@@ -102,6 +103,7 @@ export class TrackEditor extends Scene {
     this.checkpoints        = [];
     this.isDirty            = false;
     this.mineTrackId        = data?.mineTrackId ?? null;
+    this.existingName       = data?.track?.name ?? '';
     this.isCarSelected         = false;
     this.isDraggingStart       = false;
     this.isFinishSelected      = false;
@@ -1005,6 +1007,7 @@ export class TrackEditor extends Scene {
     input.type        = 'text';
     input.placeholder = 'Track name…';
     input.maxLength   = 40;
+    input.value       = this.existingName;
     input.style.cssText = [
       'padding:10px', 'border-radius:6px',
       'border:1px solid #444488', 'background:#1a1a36',
