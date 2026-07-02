@@ -500,6 +500,7 @@ export class Game extends Scene {
           this.mmSnap = opt.value;
           localStorage.setItem('dv-mm-snap', this.mmSnap);
           this.applyMmSnap(container, restoreBtn);
+          if (opt.value !== 'minimized') showStrip();
           closeSettingsDlg();
         });
         dlg.appendChild(row);
@@ -544,6 +545,7 @@ export class Game extends Scene {
       this.mmSnap = (container.getBoundingClientRect().top + this.mmH / 2) < midY ? 'top' : 'bottom';
       localStorage.setItem('dv-mm-snap', this.mmSnap);
       this.applyMmSnap(container, restoreBtn);
+      showStrip();
     });
 
     this.applyMmSnap(container, restoreBtn);
