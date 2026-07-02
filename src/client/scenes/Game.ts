@@ -400,8 +400,24 @@ export class Game extends Scene {
     ctrlStrip.style.cssText = [
       'position:absolute', 'top:0', 'left:0', 'right:0', 'height:20px',
       'display:flex', 'align-items:center', 'justify-content:flex-end', 'gap:1px',
-      'background:rgba(0,0,0,0.55)', 'padding:0 2px', 'pointer-events:auto',
+      'background:rgba(0,0,0,0.55)', 'padding:0 2px',
+      'transition:opacity 0.4s', 'opacity:1', 'pointer-events:auto',
     ].join(';');
+
+    // Auto-hide: show on creation and on any minimap touch; hide after 3s.
+    let stripTimer: ReturnType<typeof setTimeout> | null = null;
+    const showStrip = () => {
+      ctrlStrip.style.opacity       = '1';
+      ctrlStrip.style.pointerEvents = 'auto';
+      if (stripTimer) clearTimeout(stripTimer);
+      stripTimer = setTimeout(() => {
+        ctrlStrip.style.opacity       = '0';
+        ctrlStrip.style.pointerEvents = 'none';
+        stripTimer = null;
+      }, 3000);
+    };
+    showStrip();
+    container.addEventListener('pointerdown', showStrip);
 
     const mkCtrlBtn = (label: string, title: string) => {
       const b = document.createElement('button');
@@ -440,6 +456,7 @@ export class Game extends Scene {
       this.mmSnap = this.mmLastVisible;
       localStorage.setItem('dv-mm-snap', this.mmSnap);
       this.applyMmSnap(container, restoreBtn);
+      showStrip();
     });
     this.topBarEl?.appendChild(restoreBtn);
     this.mmRestoreBtn = restoreBtn;
@@ -487,6 +504,7 @@ export class Game extends Scene {
         });
         dlg.appendChild(row);
       }
+      dlg.addEventListener('pointerdown', (e) => e.stopPropagation());
       settingsDlg = dlg;
       document.body.appendChild(dlg);
       setTimeout(() => document.addEventListener('pointerdown', closeSettingsDlg, { once: true }), 0);
@@ -494,6 +512,36 @@ export class Game extends Scene {
 
     minimizeBtn.addEventListener('click', () => {
       this.mmSnap = 'minimized';
+      localStorage.setItem('dv-mm-snap', this.mmSnap);
+      this.applyMmSnap(container, restoreBtn);
+    });
+
+    // ── Drag-to-snap on canvas ────────────────────────────────────────────────
+    // (strip buttons stop propagation so they never start a drag)
+    ctrlStrip.addEventListener('pointerdown', (e) => e.stopPropagation());
+    let dragging = false, dragOffY = 0, hasMoved = false;
+    canvas.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      dragging = true; hasMoved = false;
+      dragOffY = e.clientY - container.getBoundingClientRect().top;
+      container.style.cursor = 'grabbing';
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      e.preventDefault();
+      const newTop = e.clientY - dragOffY;
+      if (Math.abs(newTop - container.getBoundingClientRect().top) > 5) hasMoved = true;
+      container.style.top    = `${newTop}px`;
+      container.style.bottom = 'auto';
+    });
+    canvas.addEventListener('pointerup', () => {
+      if (!dragging) return;
+      dragging = false;
+      container.style.cursor = '';
+      if (!hasMoved) return;
+      const midY = window.innerHeight / 2;
+      this.mmSnap = (container.getBoundingClientRect().top + this.mmH / 2) < midY ? 'top' : 'bottom';
       localStorage.setItem('dv-mm-snap', this.mmSnap);
       this.applyMmSnap(container, restoreBtn);
     });
