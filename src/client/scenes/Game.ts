@@ -1050,7 +1050,7 @@ export class Game extends Scene {
       backBtn.addEventListener('click', () => {
         backBtn.remove();
         this.viewTrackBackBtn = null;
-        overlay.style.display = '';
+        overlay.style.display = 'flex';
         overlay.scrollTop = 0;
         if (this.minimapCanvas) this.minimapCanvas.style.display = '';
         const cam   = this.cameras.main;
