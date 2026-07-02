@@ -457,10 +457,22 @@ export class TrackSelect extends Scene {
             this.buildList();
           });
       } else if (this.drafts.length === 0) {
-        const msg = document.createElement('div');
-        msg.innerHTML = 'No drafts yet.<br><br>Tap CREATE to build a track!';
-        msg.style.cssText = 'text-align:center;color:#555588;font:16px Arial;margin-top:80px;padding:0 24px;line-height:1.5;';
-        el.appendChild(msg);
+        const emptyWrap = document.createElement('div');
+        emptyWrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:16px;margin-top:80px;padding:0 24px;';
+        const emptyMsg = document.createElement('div');
+        emptyMsg.textContent = 'No drafts yet.';
+        emptyMsg.style.cssText = 'text-align:center;color:#555588;font:16px Arial;';
+        const createBtn = document.createElement('button');
+        createBtn.textContent = '+ Create a track';
+        createBtn.style.cssText = [
+          'padding:10px 28px', 'font:bold 15px Arial,sans-serif',
+          'color:#88ffaa', 'background:#0a2a0a', 'border:1px solid #33aa33',
+          'border-radius:6px', 'cursor:pointer',
+        ].join(';');
+        createBtn.addEventListener('click', () => this.scene.start('TrackEditor'));
+        emptyWrap.appendChild(emptyMsg);
+        emptyWrap.appendChild(createBtn);
+        el.appendChild(emptyWrap);
       } else {
         for (const draft of this.drafts) el.appendChild(this.buildDraftCard(draft));
       }
