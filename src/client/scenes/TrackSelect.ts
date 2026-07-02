@@ -5,12 +5,13 @@ import { drawBarriersOnCanvas } from '../track/TrackCanvasRenderer';
 import {
   fetchCommunityTrack, fetchCommunityTracks, seedCommunityTracks,
   fetchMineTrack, fetchMineTracks, deleteMineTrack, saveMineTrack,
-  getLocalDrafts, deleteLocalDraft,
+  getLocalDrafts, deleteLocalDraft, markLocalDraftVerified, verifyMineTrack,
   fetchIsMod, deleteCommunityTrack,
   type TrackPayload, type LocalDraft,
 } from '../track/TrackUpload';
 import { fetchRaceGhosts } from '../track/RaceGhosts';
 import { generateAndUploadAiGhosts } from '../track/AiGhost';
+import { solveTrack } from '../track/GhostSolver';
 import { navigateTo } from '@devvit/web/client';
 import { username, isLoggedIn } from '../devvitContext';
 import type { CommunityTrackMeta, MineTrackMeta } from '../../shared/api';
@@ -619,9 +620,10 @@ export class TrackSelect extends Scene {
       return b;
     };
 
-    const playBtn   = mkBtn('▶ Play',   '#88ffaa', '#001a08', '#226633');
-    const editBtn   = mkBtn('✎ Edit',   '#aaaaff', '#0a0a22', '#333366');
-    const deleteBtn = mkBtn('✕ Del',    '#ff8888', '#1a0808', '#663333');
+    const playBtn     = mkBtn('▶ Play',      '#88ffaa', '#001a08', '#226633');
+    const editBtn     = mkBtn('✎ Edit',      '#aaaaff', '#0a0a22', '#333366');
+    const deleteBtn   = mkBtn('✕ Del',       '#ff8888', '#1a0808', '#663333');
+    const aiVerifyBtn = draft.verified ? null : mkBtn('🤖 AI', '#ffcc44', '#1a1400', '#665500');
 
     const canUpload = draft.verified;
     const uploadBtn = document.createElement('button');
@@ -636,14 +638,19 @@ export class TrackSelect extends Scene {
       `cursor:${canUpload ? 'pointer' : 'default'}`,
     ].join(';');
 
+    const aiStatusEl = document.createElement('div');
+    aiStatusEl.style.cssText = 'font:11px Arial,sans-serif;color:#ffaa44;display:none;margin-top:2px;';
+
     btnRow.appendChild(playBtn);
     btnRow.appendChild(editBtn);
     btnRow.appendChild(deleteBtn);
+    if (aiVerifyBtn) btnRow.appendChild(aiVerifyBtn);
 
     info.appendChild(nameRow);
     info.appendChild(date);
     info.appendChild(btnRow);
     info.appendChild(uploadBtn);
+    info.appendChild(aiStatusEl);
 
     card.appendChild(canvas);
     card.appendChild(info);
@@ -715,8 +722,61 @@ export class TrackSelect extends Scene {
       }
     });
 
-    if (canUpload) {
+    if (aiVerifyBtn) {
+      aiVerifyBtn.addEventListener('click', async () => {
+        aiVerifyBtn.textContent = '…';
+        aiVerifyBtn.disabled = true;
+        aiStatusEl.style.display = 'none';
+        try {
+          const { data, serverId } = await resolveData();
+          const payload = JSON.parse(data) as TrackPayload;
+          const entry: TrackEntry = {
+            id: serverId ?? draft.id, name: draft.name, author: '',
+            startX: payload.startX, startY: payload.startY,
+            startHeading: payload.startHeading ?? 90,
+            pieces: payload.pieces, markers: payload.markers,
+          };
+          const ghost = solveTrack(entry, 'average', 24);
+          if (!ghost) {
+            aiStatusEl.textContent = 'AI couldn\'t complete this track.';
+            aiStatusEl.style.color = '#ffaa44';
+            aiStatusEl.style.display = '';
+            aiVerifyBtn.textContent = '🤖 AI';
+            aiVerifyBtn.disabled = false;
+            return;
+          }
+          // Mark verified
+          if (draft.local) {
+            markLocalDraftVerified(draft.id);
+          } else {
+            await verifyMineTrack(draft.id);
+          }
+          draft.verified = true;
+          // Unlock upload button
+          uploadBtn.disabled = false;
+          uploadBtn.textContent = '↑ Upload to Community';
+          uploadBtn.style.cssText = [
+            'width:100%', 'padding:8px 4px',
+            'color:#88aaff', 'background:#0a0a22', 'border:1px solid #334488',
+            'border-radius:5px', 'font:bold 12px Arial,sans-serif', 'cursor:pointer',
+          ].join(';');
+          aiVerifyBtn.remove();
+          aiStatusEl.textContent = 'AI verified ✓';
+          aiStatusEl.style.color = '#66ff88';
+          aiStatusEl.style.display = '';
+        } catch {
+          aiStatusEl.textContent = 'Verification failed — try again.';
+          aiStatusEl.style.color = '#ffaa44';
+          aiStatusEl.style.display = '';
+          aiVerifyBtn.textContent = '🤖 AI';
+          aiVerifyBtn.disabled = false;
+        }
+      });
+    }
+
+    if (canUpload || !canUpload) { // always wire — upload btn may be unlocked later by AI verify
       uploadBtn.addEventListener('click', () => {
+        if (uploadBtn.disabled) return;
         const cardBtns = [playBtn, editBtn, deleteBtn, uploadBtn];
         for (const b of cardBtns) b.disabled = true;
 
@@ -810,7 +870,7 @@ export class TrackSelect extends Scene {
           }
         })();
       });
-    }
+    }  // end upload listener
 
     // Load thumbnail
     (async () => {
