@@ -447,7 +447,7 @@ export class Game extends Scene {
       <circle cx="11" cy="10" r="2.5" fill="rgba(255,80,255,0.9)"/>
     </svg>`;
     restoreBtn.style.cssText = [
-      'width:28px', 'height:28px', 'padding:0', 'margin:0 2px',
+      'width:34px', 'height:30px', 'padding:0', 'margin:0 2px',
       'background:rgba(20,20,50,0.7)', 'border:1px solid rgba(80,80,140,0.5)',
       'border-radius:4px', 'cursor:pointer', 'pointer-events:auto',
       'display:none', 'align-items:center', 'justify-content:center', 'flex-shrink:0',
