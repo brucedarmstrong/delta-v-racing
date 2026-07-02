@@ -387,7 +387,7 @@ export class Game extends Scene {
     container.style.cssText = [
       'position:fixed', 'right:8px', 'z-index:1000',
       'border:1px solid rgba(102,102,170,0.8)', 'border-radius:4px',
-      'overflow:hidden',
+      'overflow:hidden', 'touch-action:none',
     ].join(';');
 
     const canvas = document.createElement('canvas');
@@ -398,9 +398,9 @@ export class Game extends Scene {
     // ── Controls strip ────────────────────────────────────────────────────────
     const ctrlStrip = document.createElement('div');
     ctrlStrip.style.cssText = [
-      'position:absolute', 'top:0', 'left:0', 'right:0', 'height:20px',
-      'display:flex', 'align-items:center', 'justify-content:flex-end', 'gap:1px',
-      'background:rgba(0,0,0,0.55)', 'padding:0 2px',
+      'position:absolute', 'top:0', 'left:0', 'right:0', 'height:28px',
+      'display:flex', 'align-items:center', 'justify-content:flex-end', 'gap:2px',
+      'background:rgba(0,0,0,0.55)', 'padding:0 4px',
       'transition:opacity 0.4s', 'opacity:1', 'pointer-events:auto',
     ].join(';');
 
@@ -424,8 +424,8 @@ export class Game extends Scene {
       b.textContent = label;
       b.title = title;
       b.style.cssText = [
-        'width:18px', 'height:18px', 'padding:0', 'background:transparent', 'border:none',
-        'color:rgba(200,200,255,0.85)', 'font-size:11px', 'line-height:1',
+        'width:26px', 'height:26px', 'padding:0', 'background:transparent', 'border:none',
+        'color:rgba(200,200,255,0.9)', 'font-size:15px', 'line-height:1',
         'cursor:pointer', 'display:flex', 'align-items:center', 'justify-content:center',
       ].join(';');
       return b;
