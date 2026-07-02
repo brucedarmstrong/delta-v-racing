@@ -14,7 +14,7 @@ import { generateAndUploadAiGhosts } from '../track/AiGhost';
 import { solveTrack } from '../track/GhostSolver';
 import { navigateTo } from '@devvit/web/client';
 import { username, isLoggedIn } from '../devvitContext';
-import type { CommunityTrackMeta, MineTrackMeta } from '../../shared/api';
+import type { CommunityTrackMeta, MineTrackMeta, LeaderboardEntry, LeaderboardResponse } from '../../shared/api';
 
 const BG         = 0x0a0a16;
 const SURFACE    = 0x12122a;
@@ -551,6 +551,74 @@ export class TrackSelect extends Scene {
     document.head.appendChild(s);
   }
 
+  private static showLeaderboard(trackName: string, entries: LeaderboardEntry[]): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:1100',
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'background:rgba(0,0,0,0.75)',
+    ].join(';');
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'background:#0d0d1e', 'border:1.5px solid #444488', 'border-radius:10px',
+      'padding:16px', 'width:min(340px,calc(100% - 32px))',
+      'display:flex', 'flex-direction:column', 'gap:8px',
+      'max-height:80vh', 'box-sizing:border-box',
+    ].join(';');
+
+    const title = document.createElement('div');
+    title.textContent = trackName;
+    title.style.cssText = 'font:bold 15px "Arial Black",Arial,sans-serif;color:#aaccff;text-align:center;';
+
+    const subtitle = document.createElement('div');
+    subtitle.textContent = entries.length === 0
+      ? 'No entries yet'
+      : `${entries.length} player${entries.length !== 1 ? 's' : ''}`;
+    subtitle.style.cssText = 'font:12px Arial,sans-serif;color:#555588;text-align:center;margin-top:-2px;';
+
+    const list = document.createElement('div');
+    list.style.cssText = 'overflow-y:auto;display:flex;flex-direction:column;gap:3px;flex:1;min-height:0;';
+
+    const rankColors = ['#ffdd44', '#bbbbbb', '#cc8844'];
+    entries.forEach((entry, i) => {
+      const row = document.createElement('div');
+      row.style.cssText = [
+        'display:flex', 'align-items:center', 'gap:8px',
+        'padding:6px 8px', 'border-radius:4px',
+        `background:${i < 3 ? 'rgba(60,60,120,0.3)' : 'transparent'}`,
+      ].join(';');
+      const rankEl = document.createElement('span');
+      rankEl.textContent = `#${i + 1}`;
+      rankEl.style.cssText = `font:bold 13px monospace;color:${i < 3 ? rankColors[i] : '#555577'};width:30px;flex-shrink:0;`;
+      const nameEl = document.createElement('span');
+      nameEl.textContent = entry.username;
+      nameEl.style.cssText = 'font:13px Arial,sans-serif;color:#ccccee;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      const scoreEl = document.createElement('span');
+      scoreEl.textContent = `${entry.score} turns`;
+      scoreEl.style.cssText = 'font:12px monospace;color:#6666aa;flex-shrink:0;';
+      row.appendChild(rankEl); row.appendChild(nameEl); row.appendChild(scoreEl);
+      list.appendChild(row);
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Close';
+    closeBtn.style.cssText = [
+      'padding:10px', 'font:bold 14px Arial,sans-serif',
+      'color:#aaaacc', 'background:#1a1a2a', 'border:1px solid #444466',
+      'border-radius:6px', 'cursor:pointer',
+    ].join(';');
+    closeBtn.addEventListener('click', () => overlay.remove());
+
+    card.appendChild(title);
+    card.appendChild(subtitle);
+    card.appendChild(list);
+    card.appendChild(closeBtn);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+  }
+
   private static showToast(msg: string, duration = 3000): void {
     const t = document.createElement('div');
     t.textContent = msg;
@@ -940,6 +1008,36 @@ export class TrackSelect extends Scene {
     card.appendChild(info);
 
     if (this.isMod) {
+      const lbBtn = document.createElement('button');
+      lbBtn.textContent = '≡';
+      lbBtn.title = 'View leaderboard';
+      lbBtn.style.cssText = [
+        'flex-shrink:0', 'width:36px', 'height:36px',
+        'background:#0a1628', 'color:#6688cc',
+        'border:1px solid #334466', 'border-radius:5px',
+        'font:bold 18px Arial,sans-serif', 'cursor:pointer',
+        'text-align:center', 'line-height:36px', 'padding:0',
+        'pointer-events:auto',
+      ].join(';');
+      lbBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        lbBtn.textContent = '…';
+        lbBtn.disabled = true;
+        try {
+          const res = await fetch(`/api/leaderboard/${encodeURIComponent(meta.id)}?limit=50`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json() as LeaderboardResponse;
+          TrackSelect.showLeaderboard(meta.name, data.entries);
+        } catch (err) {
+          TrackSelect.showToast(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        } finally {
+          lbBtn.textContent = '≡';
+          lbBtn.disabled = false;
+        }
+      });
+      card.appendChild(lbBtn);
+
       const delBtn = document.createElement('button');
       delBtn.textContent = '✕';
       delBtn.title = 'Remove track';
