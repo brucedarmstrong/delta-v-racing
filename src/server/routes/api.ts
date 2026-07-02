@@ -8,9 +8,11 @@ import type {
   CommunityTrackMeta,
   CommunityTrackResponse,
   CommunityTracksResponse,
+  DeleteCommunityTrackResponse,
   DecrementResponse,
   IncrementResponse,
   InitResponse,
+  IsModResponse,
   LeaderboardAroundEntry,
   LeaderboardAroundResponse,
   LeaderboardEntry,
@@ -572,6 +574,60 @@ api.get('/tracks/community', async (c) => {
     tracks: filtered.slice(offset, offset + limit),
     total: filtered.length,
   });
+});
+
+// ── Mod endpoints ─────────────────────────────────────────────────────────────
+
+api.get('/user/is-mod', async (c) => {
+  const uname = context.username;
+  if (!uname) return c.json<IsModResponse>({ type: 'is_mod', isMod: false });
+  try {
+    const mods = await reddit.getModerators({ subredditName: context.subredditName!, username: uname }).all();
+    return c.json<IsModResponse>({ type: 'is_mod', isMod: mods.length > 0 });
+  } catch {
+    return c.json<IsModResponse>({ type: 'is_mod', isMod: false });
+  }
+});
+
+api.delete('/community-track/:id', async (c) => {
+  const uname = context.username;
+  if (!uname) return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+
+  // Gate on mod status
+  let isMod = false;
+  try {
+    const mods = await reddit.getModerators({ subredditName: context.subredditName!, username: uname }).all();
+    isMod = mods.length > 0;
+  } catch { /* treat as not-mod */ }
+  if (!isMod) return c.json<ErrorResponse>({ status: 'error', message: 'Moderators only' }, 403);
+
+  const { id } = c.req.param();
+  const raw = await redis.get(`track:${id}`);
+  if (!raw) return c.json<ErrorResponse>({ status: 'error', message: 'Track not found' }, 404);
+
+  let postUrl: string | undefined;
+  try {
+    const rec = JSON.parse(raw) as { name: string; author: string; postUrl?: string };
+    postUrl = rec.postUrl;
+    await redis.del(`track-name:${rec.author}:${rec.name.trim().toLowerCase()}`);
+  } catch { /* skip name key on corrupt record */ }
+
+  await redis.del(`track:${id}`);
+  await redis.zRem('tracks:community', [id]);
+
+  if (postUrl) {
+    try {
+      const pathParts = new URL(postUrl).pathname.split('/').filter(Boolean);
+      const shortId = pathParts[3]; // /r/sub/comments/SHORT_ID/title
+      if (shortId) {
+        await redis.del(`track-post:t3_${shortId}`);
+        await reddit.remove(`t3_${shortId}` as `t3_${string}`, false);
+      }
+    } catch { /* post may already be gone */ }
+  }
+
+  console.log(`[mod delete] trackId=${id} by ${uname}`);
+  return c.json<DeleteCommunityTrackResponse>({ type: 'delete_community_track', trackId: id });
 });
 
 api.get('/track/:id', async (c) => {

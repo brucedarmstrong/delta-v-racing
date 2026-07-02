@@ -166,3 +166,15 @@ export type MineTrackResponse = {
   meta: MineTrackMeta;
   data: string; // serialized TrackPayload JSON
 };
+
+// ── Mod actions ───────────────────────────────────────────────────────────────
+
+export type IsModResponse = {
+  type: 'is_mod';
+  isMod: boolean;
+};
+
+export type DeleteCommunityTrackResponse = {
+  type: 'delete_community_track';
+  trackId: string;
+};

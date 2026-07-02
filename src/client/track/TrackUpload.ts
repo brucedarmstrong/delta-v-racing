@@ -4,6 +4,7 @@ import type {
   CommunityTrackResponse,
   CommunityTracksResponse,
   CommunityTrackMeta,
+  IsModResponse,
   MineTrackMeta,
   MineTrackResponse,
   MineTracksResponse,
@@ -200,6 +201,24 @@ export async function publishMineTrack(mineId: string, communityId: string): Pro
 }
 
 // ── Community ─────────────────────────────────────────────────────────────────
+
+export async function fetchIsMod(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/user/is-mod');
+    if (!res.ok) return false;
+    const json = await res.json() as IsModResponse;
+    return json.isMod;
+  } catch { return false; }
+}
+
+export async function deleteCommunityTrack(id: string): Promise<void> {
+  const res = await fetch(`/api/community-track/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch {}
+    throw new Error(msg);
+  }
+}
 
 export async function fetchCommunityTrack(id: string): Promise<TrackEntry> {
   const res = await fetch(`/api/track/${encodeURIComponent(id)}`);

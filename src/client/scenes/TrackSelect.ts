@@ -6,6 +6,7 @@ import {
   fetchCommunityTrack, fetchCommunityTracks, seedCommunityTracks,
   fetchMineTrack, fetchMineTracks, deleteMineTrack, saveMineTrack,
   getLocalDrafts, deleteLocalDraft,
+  fetchIsMod, deleteCommunityTrack,
   type TrackPayload, type LocalDraft,
 } from '../track/TrackUpload';
 import { fetchRaceGhosts } from '../track/RaceGhosts';
@@ -67,6 +68,8 @@ export class TrackSelect extends Scene {
   private drafts:          DraftEntry[] = [];
   private draftsLoaded     = false;
   private mineFilter       = false;   // community tab: show only current user's tracks
+  private isMod            = false;
+  private isModChecked     = false;
 
   constructor() { super('TrackSelect'); }
 
@@ -80,6 +83,8 @@ export class TrackSelect extends Scene {
     this.draftsLoaded    = false;
     this.drafts          = [];
     this.communityTracks = [];
+    this.isMod           = false;
+    this.isModChecked    = false;
   }
 
   create() {
@@ -349,10 +354,16 @@ export class TrackSelect extends Scene {
           ? { offset: this.communityPage * PAGE_SIZE, limit: PAGE_SIZE, author: username }
           : { offset: this.communityPage * PAGE_SIZE, limit: PAGE_SIZE, q: this.communityQuery };
 
-        fetchCommunityTracks(params).then(({ tracks, total }) => {
+        const tracksPromise = fetchCommunityTracks(params);
+        const modPromise = this.isModChecked
+          ? Promise.resolve(this.isMod)
+          : fetchIsMod();
+
+        Promise.all([tracksPromise, modPromise]).then(([{ tracks, total }, isMod]) => {
           this.communityTracks = tracks;
           this.communityTotal  = total;
           this.communityLoaded = true;
+          if (!this.isModChecked) { this.isMod = isMod; this.isModChecked = true; }
           this.buildList();
         }).catch(() => { msg.textContent = 'Failed to load community tracks.'; });
 
@@ -831,6 +842,36 @@ export class TrackSelect extends Scene {
 
     card.appendChild(canvas);
     card.appendChild(info);
+
+    if (this.isMod) {
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '✕';
+      delBtn.title = 'Remove track';
+      delBtn.style.cssText = [
+        'flex-shrink:0', 'width:34px', 'height:34px',
+        'background:#1a0808', 'color:#ff6666',
+        'border:1px solid #663333', 'border-radius:5px',
+        'font:bold 15px Arial,sans-serif', 'cursor:pointer',
+        'display:flex', 'align-items:center', 'justify-content:center',
+      ].join(';');
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Remove "${meta.name}" from the community list?${meta.postUrl ? '\n\nThe associated Reddit post will also be removed.' : ''}`)) return;
+        delBtn.textContent = '…';
+        delBtn.disabled = true;
+        try {
+          await deleteCommunityTrack(meta.id);
+          this.communityTracks = this.communityTracks.filter(t => t.id !== meta.id);
+          this.communityTotal  = Math.max(0, this.communityTotal - 1);
+          card.remove();
+        } catch {
+          delBtn.textContent = '✕';
+          delBtn.disabled = false;
+        }
+      });
+      card.appendChild(delBtn);
+    }
+
     card.appendChild(arrow);
 
     card.addEventListener('click', () => {
