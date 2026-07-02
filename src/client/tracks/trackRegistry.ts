@@ -36,6 +36,7 @@ export type TrackEntry = {
   startHeading: number; // degrees CW from north; 0=N, 90=E, 180=S
   pieces:       PlacedPiece[];
   markers:      TrackMarker[];
+  postUrl?:     string; // Reddit post permalink; community tracks only
 };
 
 function fromGms(

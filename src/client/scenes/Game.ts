@@ -1069,6 +1069,16 @@ export class Game extends Scene {
     actions.appendChild(viewBtn);
     card.appendChild(actions);
 
+    if (isLoggedIn && this.trackEntry.postUrl) {
+      const upvoteHint = document.createElement('div');
+      upvoteHint.textContent = 'Enjoyed this track? Upvote the post to help it get noticed.';
+      upvoteHint.style.cssText = [
+        'font:12px Arial,sans-serif', 'color:#666699', 'text-align:center',
+        'border-top:1px solid #222244', 'padding-top:8px', 'line-height:1.4',
+      ].join(';');
+      card.appendChild(upvoteHint);
+    }
+
     overlay.appendChild(card);
     document.body.appendChild(overlay);
     this.finishOverlayEl = overlay;

@@ -236,5 +236,6 @@ export async function fetchCommunityTrack(id: string): Promise<TrackEntry> {
     startHeading: payload.startHeading ?? 90,
     pieces:       payload.pieces,
     markers:      payload.markers,
+    postUrl:      json.meta.postUrl,
   };
 }
