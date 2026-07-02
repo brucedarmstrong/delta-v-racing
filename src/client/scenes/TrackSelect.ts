@@ -880,10 +880,33 @@ export class TrackSelect extends Scene {
         'pointer-events:auto',
         '-webkit-tap-highlight-color:rgba(255,80,80,0.3)',
       ].join(';');
+      let confirmTimer: ReturnType<typeof setTimeout> | null = null;
+      const resetDelBtn = () => {
+        confirmTimer = null;
+        delBtn.textContent = '✕';
+        delBtn.style.background = '#1a0808';
+        delBtn.style.color = '#ff6666';
+        delBtn.style.borderColor = '#663333';
+      };
       delBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         e.preventDefault();
         if (delBtn.disabled) return;
+
+        if (!confirmTimer) {
+          // First tap — enter confirm state
+          delBtn.textContent = '?';
+          delBtn.style.background = '#1a1000';
+          delBtn.style.color = '#ffcc44';
+          delBtn.style.borderColor = '#665500';
+          TrackSelect.showToast('Tap again to confirm removal', 2500);
+          confirmTimer = setTimeout(resetDelBtn, 3000);
+          return;
+        }
+
+        // Second tap — confirmed
+        clearTimeout(confirmTimer);
+        confirmTimer = null;
         delBtn.textContent = '…';
         delBtn.disabled = true;
         TrackSelect.showToast(`Removing "${meta.name}"…`);
@@ -894,8 +917,7 @@ export class TrackSelect extends Scene {
           card.remove();
           TrackSelect.showToast('Track removed');
         } catch (err) {
-          delBtn.textContent = '✕';
-          delBtn.disabled = false;
+          resetDelBtn();
           const msg = err instanceof Error ? err.message : 'Unknown error';
           TrackSelect.showToast(`Failed: ${msg}`);
         }
