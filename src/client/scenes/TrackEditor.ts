@@ -37,8 +37,15 @@ export class TrackEditor extends Scene {
   private isDraggingStart = false;
 
   // Finish line selection + drag state
-  private isFinishSelected   = false;
-  private isDraggingFinish   = false;
+  private isFinishSelected      = false;
+  private isDraggingFinish      = false;
+
+  // Checkpoint selection + drag state
+  private selectedCheckpointIdx = -1;
+  private isDraggingCheckpoint  = false;
+
+  // Ordered undo stack — tracks the sequence in which pieces/markers were added
+  private undoStack: Array<'piece' | 'finish' | 'checkpoint'> = [];
 
   // Dirty flag — true when track has unsaved changes
   private isDirty = false;
@@ -95,10 +102,13 @@ export class TrackEditor extends Scene {
     this.checkpoints        = [];
     this.isDirty            = false;
     this.mineTrackId        = data?.mineTrackId ?? null;
-    this.isCarSelected      = false;
-    this.isDraggingStart    = false;
-    this.isFinishSelected   = false;
-    this.isDraggingFinish   = false;
+    this.isCarSelected         = false;
+    this.isDraggingStart       = false;
+    this.isFinishSelected      = false;
+    this.isDraggingFinish      = false;
+    this.selectedCheckpointIdx = -1;
+    this.isDraggingCheckpoint  = false;
+    this.undoStack             = [];
     this.startCarImg        = null; // Phaser destroys it on shutdown; clear our reference
 
     // Car start position — independent of the track-building origin.
@@ -125,6 +135,10 @@ export class TrackEditor extends Scene {
       this.cursor = result.cursor;
       this.finishMarker = track.markers.find(m => m.kind === 'finish') ?? null;
       this.checkpoints  = track.markers.filter(m => m.kind === 'checkpoint');
+      // Rebuild undo stack from loaded state (pieces first, then finish, then checkpoints)
+      for (let i = 0; i < this.defs.length; i++) this.undoStack.push('piece');
+      if (this.finishMarker) this.undoStack.push('finish');
+      for (const _ of this.checkpoints) this.undoStack.push('checkpoint');
     }
   }
 
@@ -215,7 +229,8 @@ export class TrackEditor extends Scene {
       if (ptr.y > this.scale.height - PALETTE_H) return;
       this.touches.set(ptr.id, { x: ptr.x, y: ptr.y });
       if (this.touches.size >= 2) {
-        this.isDraggingStart = false;
+        this.isDraggingStart      = false;
+        this.isDraggingCheckpoint = false;
         const [a, b] = [...this.touches.values()];
         this.pinchDist = Math.hypot(b.x - a.x, b.y - a.y);
         this.pinchZoom = cam.zoom;
@@ -225,29 +240,44 @@ export class TrackEditor extends Scene {
       const hitRadius = 48; // world units; ~31 screen px at default zoom 0.65
       if (Math.hypot(ptr.worldX - this.curStartX, ptr.worldY - this.curStartY) < hitRadius) {
         // Tap/press on car — select it and begin drag
-        if (this.isFinishSelected) this.deselectFinish();
-        if (!this.isCarSelected) this.selectCar();
+        if (this.isFinishSelected)           this.deselectFinish();
+        if (this.selectedCheckpointIdx >= 0) this.deselectCheckpoint();
+        if (!this.isCarSelected)             this.selectCar();
         this.isDraggingStart = true;
         return;
       }
       if (this.finishMarker &&
           Math.hypot(ptr.worldX - this.finishMarker.x, ptr.worldY - this.finishMarker.y) < hitRadius) {
         // Tap/press on finish line — select it and begin drag
-        if (this.isCarSelected) this.deselectCar();
-        if (!this.isFinishSelected) this.selectFinish();
+        if (this.isCarSelected)              this.deselectCar();
+        if (this.selectedCheckpointIdx >= 0) this.deselectCheckpoint();
+        if (!this.isFinishSelected)          this.selectFinish();
         this.isDraggingFinish = true;
         return;
       }
+      // Check checkpoints
+      for (let i = 0; i < this.checkpoints.length; i++) {
+        const cp = this.checkpoints[i];
+        if (Math.hypot(ptr.worldX - cp.x, ptr.worldY - cp.y) < hitRadius) {
+          if (this.isCarSelected)    this.deselectCar();
+          if (this.isFinishSelected) this.deselectFinish();
+          this.selectCheckpoint(i);
+          this.isDraggingCheckpoint = true;
+          return;
+        }
+      }
       // Tapped elsewhere — deselect everything, start camera pan
-      if (this.isCarSelected)    this.deselectCar();
-      if (this.isFinishSelected) this.deselectFinish();
-      this.isDraggingStart  = false;
-      this.isDraggingFinish = false;
-      this.isDragging       = false;
-      this.dragStartX       = ptr.x;
-      this.dragStartY       = ptr.y;
-      this.dragScrollX      = cam.scrollX;
-      this.dragScrollY      = cam.scrollY;
+      if (this.isCarSelected)              this.deselectCar();
+      if (this.isFinishSelected)           this.deselectFinish();
+      if (this.selectedCheckpointIdx >= 0) this.deselectCheckpoint();
+      this.isDraggingStart      = false;
+      this.isDraggingFinish     = false;
+      this.isDraggingCheckpoint = false;
+      this.isDragging           = false;
+      this.dragStartX           = ptr.x;
+      this.dragStartY           = ptr.y;
+      this.dragScrollX          = cam.scrollX;
+      this.dragScrollY          = cam.scrollY;
     });
 
     this.input.on('pointermove', (ptr: Phaser.Input.Pointer) => {
@@ -274,6 +304,17 @@ export class TrackEditor extends Scene {
         this.updateSelectionRing();
         return;
       }
+      if (this.isDraggingCheckpoint && this.selectedCheckpointIdx >= 0) {
+        const cp  = this.checkpoints[this.selectedCheckpointIdx];
+        const img = this.checkpointImgs[this.selectedCheckpointIdx];
+        if (cp && img) {
+          cp.x = ptr.worldX;
+          cp.y = ptr.worldY;
+          img.setPosition(ptr.worldX, ptr.worldY);
+          this.updateSelectionRing();
+        }
+        return;
+      }
       const dx = ptr.x - this.dragStartX;
       const dy = ptr.y - this.dragStartY;
       if (!this.isDragging && Math.abs(dx) + Math.abs(dy) > 5) this.isDragging = true;
@@ -296,10 +337,11 @@ export class TrackEditor extends Scene {
           this.dragScrollY = cam.scrollY;
         }
       }
-      if (this.isDraggingStart || this.isDraggingFinish) this.isDirty = true;
-      this.isDraggingStart  = false;
-      this.isDraggingFinish = false;
-      this.isDragging       = false;
+      if (this.isDraggingStart || this.isDraggingFinish || this.isDraggingCheckpoint) this.isDirty = true;
+      this.isDraggingStart      = false;
+      this.isDraggingFinish     = false;
+      this.isDraggingCheckpoint = false;
+      this.isDragging           = false;
     });
 
     this.input.on('wheel', (ptr: Phaser.Input.Pointer) => {
@@ -451,7 +493,7 @@ export class TrackEditor extends Scene {
 
   private deselectCar(): void {
     this.isCarSelected = false;
-    if (!this.isFinishSelected) {
+    if (!this.isFinishSelected && this.selectedCheckpointIdx < 0) {
       if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = true;
       if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = true;
     }
@@ -467,7 +509,23 @@ export class TrackEditor extends Scene {
 
   private deselectFinish(): void {
     this.isFinishSelected = false;
-    if (!this.isCarSelected) {
+    if (!this.isCarSelected && this.selectedCheckpointIdx < 0) {
+      if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = true;
+      if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = true;
+    }
+    this.updateSelectionRing();
+  }
+
+  private selectCheckpoint(i: number): void {
+    this.selectedCheckpointIdx = i;
+    if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = false;
+    if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = false;
+    this.updateSelectionRing();
+  }
+
+  private deselectCheckpoint(): void {
+    this.selectedCheckpointIdx = -1;
+    if (!this.isCarSelected && !this.isFinishSelected) {
       if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = true;
       if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = true;
     }
@@ -492,6 +550,18 @@ export class TrackEditor extends Scene {
       this.selectionGfx.fillStyle(0xffdd00, 1);
       for (const [dx, dy] of [[0, -r], [r, 0], [0, r], [-r, 0]] as [number, number][]) {
         this.selectionGfx.fillCircle(this.finishMarker.x + dx, this.finishMarker.y + dy, 3.5);
+      }
+    }
+    if (this.selectedCheckpointIdx >= 0) {
+      const cp = this.checkpoints[this.selectedCheckpointIdx];
+      if (cp) {
+        const r = 36;
+        this.selectionGfx.lineStyle(2, 0x00ccff, 0.9);
+        this.selectionGfx.strokeCircle(cp.x, cp.y, r);
+        this.selectionGfx.fillStyle(0x00ccff, 1);
+        for (const [dx, dy] of [[0, -r], [r, 0], [0, r], [-r, 0]] as [number, number][]) {
+          this.selectionGfx.fillCircle(cp.x + dx, cp.y + dy, 3.5);
+        }
       }
     }
   }
@@ -523,6 +593,15 @@ export class TrackEditor extends Scene {
 
   private rotateStartHeading(delta: number): void {
     this.isDirty = true;
+    if (this.selectedCheckpointIdx >= 0) {
+      const cp = this.checkpoints[this.selectedCheckpointIdx];
+      if (cp) {
+        cp.rotation = ((cp.rotation + delta) % 360 + 360) % 360;
+        this.updateCheckpointImgs();
+        this.updateSelectionRing();
+      }
+      return;
+    }
     if (this.isFinishSelected && this.finishMarker) {
       this.finishMarker.rotation = ((this.finishMarker.rotation + delta) % 360 + 360) % 360;
       this.updateFinishImg();
@@ -546,6 +625,7 @@ export class TrackEditor extends Scene {
   private addPiece(def: PieceDef): void {
     this.isDirty = true;
     this.defs.push(def);
+    this.undoStack.push('piece');
     this.rebuildTrack();
     this.scrollToCursor();
     this.updateBarrierImg();
@@ -555,22 +635,29 @@ export class TrackEditor extends Scene {
   }
 
   private undo(): void {
+    const last = this.undoStack.pop();
+    if (!last) return;
     this.isDirty = true;
-    if (this.finishMarker) {
+    if (last === 'finish') {
       this.finishMarker = null;
       if (this.isFinishSelected) this.deselectFinish();
       this.updateFinishImg();
       this.redrawMarkers();
-      return;
+    } else if (last === 'checkpoint') {
+      this.checkpoints.pop();
+      if (this.selectedCheckpointIdx >= this.checkpoints.length) this.deselectCheckpoint();
+      this.updateCheckpointImgs();
+      this.redrawMarkers();
+    } else {
+      if (this.defs.length === 0) return;
+      this.defs.pop();
+      this.rebuildTrack();
+      this.scrollToCursor();
+      this.updateBarrierImg();
+      this.redrawMarkers();
+      this.rebuildOpts();
+      if (this.hintEl) this.hintEl.style.display = this.defs.length === 0 ? '' : 'none';
     }
-    if (this.defs.length === 0) return;
-    this.defs.pop();
-    this.rebuildTrack();
-    this.scrollToCursor();
-    this.updateBarrierImg();
-    this.redrawMarkers();
-    this.rebuildOpts();
-    if (this.hintEl) this.hintEl.style.display = this.defs.length === 0 ? '' : 'none';
   }
 
   private scrollToCursor(): void {
@@ -591,6 +678,7 @@ export class TrackEditor extends Scene {
   private placeFinish(): void {
     if (this.defs.length === 0) { this.showToast('Add pieces first'); return; }
     this.isDirty = true;
+    this.undoStack.push('finish');
     this.finishMarker = {
       kind: 'finish', shape: 'gate',
       x: this.cursor.x, y: this.cursor.y,
@@ -604,6 +692,7 @@ export class TrackEditor extends Scene {
   private placeCheckpoint(shape: 'gate' | 'circle'): void {
     if (this.defs.length === 0) { this.showToast('Add pieces first'); return; }
     this.isDirty = true;
+    this.undoStack.push('checkpoint');
     this.checkpoints.push({
       kind: 'checkpoint', shape,
       x: this.cursor.x, y: this.cursor.y,
