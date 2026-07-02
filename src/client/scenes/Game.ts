@@ -325,8 +325,10 @@ export class Game extends Scene {
     this.addMinimap();
     this.addShiftSlow();
 
-    // Short delay so the tap that launched this scene isn't treated as a pick.
-    this.time.delayedCall(120, () => { this.framePicker(); });
+    // Show pre-race lineup, then start.
+    this.showPreRaceDialog(() => {
+      this.time.delayedCall(120, () => { this.framePicker(); });
+    });
   }
 
 
@@ -2100,6 +2102,79 @@ export class Game extends Scene {
     fn();
   }
 
+  private showPreRaceDialog(onStart: () => void): void {
+    // Skip for draft test-runs or when there are no opponents.
+    if (this.mineTrackId || this.ghostStates.length === 0) { onStart(); return; }
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:1010',
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'background:rgba(0,0,0,0.72)',
+    ].join(';');
+
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'background:#0d0d1e', 'border:1.5px solid #444488', 'border-radius:10px',
+      'padding:20px 18px', 'width:min(300px,calc(100% - 32px))',
+      'display:flex', 'flex-direction:column', 'gap:10px',
+      'box-shadow:0 8px 32px rgba(0,0,0,0.85)',
+    ].join(';');
+
+    const trackNameEl = document.createElement('div');
+    trackNameEl.textContent = this.trackEntry.name;
+    trackNameEl.style.cssText = 'font:bold 16px "Arial Black",Arial,sans-serif;color:#aaccff;text-align:center;';
+    card.appendChild(trackNameEl);
+
+    const lineupLabel = document.createElement('div');
+    lineupLabel.textContent = 'STARTING LINEUP';
+    lineupLabel.style.cssText = 'font:bold 10px Arial,sans-serif;color:#444466;letter-spacing:0.12em;text-align:center;';
+    card.appendChild(lineupLabel);
+
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:7px;';
+
+    const mkRow = (dotColor: string, name: string, badge: string, badgeBg: string, nameColor: string) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;';
+      const dot = document.createElement('span');
+      dot.textContent = '●';
+      dot.style.cssText = `font-size:10px;color:${dotColor};flex-shrink:0;`;
+      const nameEl = document.createElement('span');
+      nameEl.textContent = name;
+      nameEl.style.cssText = `font:bold 14px Arial,sans-serif;color:${nameColor};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+      const badgeEl = document.createElement('span');
+      badgeEl.textContent = badge;
+      badgeEl.style.cssText = `font:10px Arial,sans-serif;color:${badgeBg};border:1px solid ${badgeBg};border-radius:3px;padding:1px 5px;flex-shrink:0;`;
+      row.appendChild(dot); row.appendChild(nameEl); row.appendChild(badgeEl);
+      return row;
+    };
+
+    list.appendChild(mkRow('#88ffaa', username || 'You', 'YOU', '#44aa66', '#88ffaa'));
+
+    for (let i = 0; i < this.ghostStates.length; i++) {
+      const gs = this.ghostStates[i];
+      const name = gs.data.author || `Ghost ${i + 1}`;
+      const color = '#' + gs.trailTint.toString(16).padStart(6, '0');
+      list.appendChild(mkRow(color, name, 'GHOST', '#555588', '#ccccee'));
+    }
+    card.appendChild(list);
+
+    const raceBtn = document.createElement('button');
+    raceBtn.textContent = 'RACE!';
+    raceBtn.style.cssText = [
+      'padding:14px', 'font:bold 20px "Arial Black",Arial,sans-serif',
+      'color:#00ff88', 'background:#0a2a16', 'border:2px solid #00cc66',
+      'border-radius:8px', 'cursor:pointer', 'letter-spacing:0.08em', 'margin-top:4px',
+    ].join(';');
+    raceBtn.addEventListener('click', () => { overlay.remove(); onStart(); });
+    card.appendChild(raceBtn);
+
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    this.events.once('shutdown', () => overlay.remove());
+  }
+
   private buildPauseDOM(): HTMLElement {
     const overlay = document.createElement('div');
     overlay.style.cssText = [
@@ -2148,8 +2223,45 @@ export class Game extends Scene {
       return b;
     };
 
+    // ── Racer list ─────────────────────────────────────────────────────────────
+    const mkRacerRow = (dotColor: string, name: string, info: string, nameColor: string) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:6px;font:13px Arial,sans-serif;';
+      const dot = document.createElement('span');
+      dot.textContent = '●';
+      dot.style.cssText = `font-size:9px;color:${dotColor};flex-shrink:0;`;
+      const nameEl = document.createElement('span');
+      nameEl.textContent = name;
+      nameEl.style.cssText = `color:${nameColor};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+      const infoEl = document.createElement('span');
+      infoEl.textContent = info;
+      infoEl.style.cssText = 'color:#555577;font-size:12px;flex-shrink:0;';
+      row.appendChild(dot); row.appendChild(nameEl); row.appendChild(infoEl);
+      return row;
+    };
+
+    const racerSection = document.createElement('div');
+    racerSection.style.cssText = 'border-top:1px solid #2a2a55;padding-top:8px;display:flex;flex-direction:column;gap:4px;';
+    const racerLabel = document.createElement('div');
+    racerLabel.textContent = 'RACERS';
+    racerLabel.style.cssText = 'font:bold 10px Arial,sans-serif;color:#444466;letter-spacing:0.1em;margin-bottom:2px;';
+    racerSection.appendChild(racerLabel);
+
+    const crashStr = this.crashes > 0 ? `  ·  ${this.crashes} crash${this.crashes !== 1 ? 'es' : ''}` : '';
+    racerSection.appendChild(mkRacerRow('#88ffaa', username || 'You', `Turn ${this.turn}${crashStr}`, '#88ffaa'));
+
+    for (let i = 0; i < this.ghostStates.length; i++) {
+      const gs = this.ghostStates[i];
+      const name = gs.data.author || `Ghost ${i + 1}`;
+      const dotColor = '#' + gs.trailTint.toString(16).padStart(6, '0');
+      const gCrashes = gs.data.moves.slice(0, gs.moveIdx).filter(m => m.crash).length;
+      const gCrashStr = gCrashes > 0 ? `  ·  ${gCrashes} crash${gCrashes !== 1 ? 'es' : ''}` : '';
+      racerSection.appendChild(mkRacerRow(dotColor, name, `Turn ${gs.moveIdx}${gCrashStr}`, '#ccccee'));
+    }
+
     dialog.appendChild(title);
     dialog.appendChild(body);
+    dialog.appendChild(racerSection);
     dialog.appendChild(makeBtn('Continue', '#66ff99', () => this.resumeGame()));
     dialog.appendChild(makeBtn('Restart',  '#ffcc44', () => this.clearPauseAndGo(() => this.scene.start('Game', { track: this.trackEntry }))));
     dialog.appendChild(makeBtn('Exit',     '#ff6666', () => this.clearPauseAndGo(() => this.scene.start('TrackSelect'))));
