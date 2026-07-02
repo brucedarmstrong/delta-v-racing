@@ -538,6 +538,30 @@ export class TrackSelect extends Scene {
     document.head.appendChild(s);
   }
 
+  private static showToast(msg: string, duration = 3000): void {
+    const t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = [
+      'position:fixed', 'bottom:28px', 'left:50%',
+      'transform:translateX(-50%)',
+      'background:rgba(20,20,48,0.96)',
+      'color:#e8e8ff',
+      'padding:10px 20px',
+      'border-radius:8px',
+      'font:14px Arial,sans-serif',
+      'z-index:9999',
+      'pointer-events:none',
+      'max-width:90vw',
+      'overflow:hidden',
+      'text-overflow:ellipsis',
+      'white-space:nowrap',
+      'border:1px solid #3a3a6a',
+      'box-shadow:0 2px 16px rgba(0,0,0,0.6)',
+    ].join(';');
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), duration);
+  }
+
   private buildDraftCard(draft: DraftEntry): HTMLElement {
     const card = document.createElement('div');
     card.style.cssText = [
@@ -848,25 +872,32 @@ export class TrackSelect extends Scene {
       delBtn.textContent = '✕';
       delBtn.title = 'Remove track';
       delBtn.style.cssText = [
-        'flex-shrink:0', 'width:34px', 'height:34px',
+        'flex-shrink:0', 'width:36px', 'height:36px',
         'background:#1a0808', 'color:#ff6666',
         'border:1px solid #663333', 'border-radius:5px',
-        'font:bold 15px Arial,sans-serif', 'cursor:pointer',
-        'display:flex', 'align-items:center', 'justify-content:center',
+        'font:bold 16px Arial,sans-serif', 'cursor:pointer',
+        'text-align:center', 'line-height:36px', 'padding:0',
+        'pointer-events:auto',
+        '-webkit-tap-highlight-color:rgba(255,80,80,0.3)',
       ].join(';');
       delBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (!confirm(`Remove "${meta.name}" from the community list?${meta.postUrl ? '\n\nThe associated Reddit post will also be removed.' : ''}`)) return;
+        e.preventDefault();
+        if (delBtn.disabled) return;
         delBtn.textContent = '…';
         delBtn.disabled = true;
+        TrackSelect.showToast(`Removing "${meta.name}"…`);
         try {
           await deleteCommunityTrack(meta.id);
           this.communityTracks = this.communityTracks.filter(t => t.id !== meta.id);
           this.communityTotal  = Math.max(0, this.communityTotal - 1);
           card.remove();
-        } catch {
+          TrackSelect.showToast('Track removed');
+        } catch (err) {
           delBtn.textContent = '✕';
           delBtn.disabled = false;
+          const msg = err instanceof Error ? err.message : 'Unknown error';
+          TrackSelect.showToast(`Failed: ${msg}`);
         }
       });
       card.appendChild(delBtn);
