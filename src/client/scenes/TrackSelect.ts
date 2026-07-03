@@ -36,12 +36,13 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 type DraftEntry = {
-  id:        string;
-  name:      string;
-  createdAt: number;
-  verified:  boolean;
-  local:     boolean;    // true = localStorage only (Devvit save failed)
-  data?:     string;     // embedded for local entries; undefined for server entries
+  id:          string;
+  name:        string;
+  createdAt:   number;
+  verified:    boolean;
+  local:       boolean;    // true = localStorage only (Devvit save failed)
+  data?:       string;     // embedded for local entries; undefined for server entries
+  uploadedId?: string;     // community track ID if this draft was published
 };
 
 type HitZone = { x: number; y: number; w: number; h: number; action: () => void };
@@ -443,7 +444,7 @@ export class TrackSelect extends Scene {
           .then(tracks => {
             const serverEntries: DraftEntry[] = tracks.map(t => ({
               id: t.id, name: t.name, createdAt: t.createdAt,
-              verified: t.verified, local: false,
+              verified: t.verified, local: false, uploadedId: t.uploadedId,
             }));
             this.drafts = [...localEntries, ...serverEntries]
               .sort((a, b) => b.createdAt - a.createdAt);
@@ -682,7 +683,6 @@ export class TrackSelect extends Scene {
     const dateInput = document.createElement('input');
     dateInput.type  = 'date';
     dateInput.value = today;
-    dateInput.min   = today;
     dateInput.style.cssText = [
       'width:100%', 'padding:8px', 'box-sizing:border-box',
       'background:#1a1a2e', 'border:1px solid #335566',
@@ -913,6 +913,32 @@ export class TrackSelect extends Scene {
     btnRow.appendChild(editBtn);
     btnRow.appendChild(deleteBtn);
     if (aiVerifyBtn) btnRow.appendChild(aiVerifyBtn);
+
+    if (this.isMod) {
+      const dailyBtn = mkBtn('📅 Daily', '#aaddff', '#0a1a28', '#335566');
+      dailyBtn.style.flex = '0 0 auto';
+      dailyBtn.addEventListener('click', () => {
+        const communityId = draft.uploadedId;
+        if (!communityId) {
+          TrackSelect.showToast('Upload to Community first before promoting to Daily');
+          return;
+        }
+        TrackSelect.showPromoteDailyDialog(draft.name, async (date) => {
+          dailyBtn.textContent = '…';
+          dailyBtn.disabled = true;
+          try {
+            await promoteToDailyTrack(communityId, date);
+            TrackSelect.showToast(`"${draft.name}" set as Daily for ${date}`);
+          } catch (err) {
+            TrackSelect.showToast(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+          } finally {
+            dailyBtn.textContent = '📅 Daily';
+            dailyBtn.disabled = false;
+          }
+        });
+      });
+      btnRow.appendChild(dailyBtn);
+    }
 
     info.appendChild(nameRow);
     info.appendChild(date);
