@@ -5,7 +5,7 @@ import { MainMenu } from './scenes/MainMenu';
 import { ModeSelect } from './scenes/ModeSelect';
 import { TrackSelect } from './scenes/TrackSelect';
 import { Leaderboard } from './scenes/Leaderboard';
-import { OptionsMenu } from './scenes/OptionsMenu';
+import { AboutScreen } from './scenes/AboutScreen';
 import { TrackEditor } from './scenes/TrackEditor';
 import { GridTest } from './scenes/GridTest';
 import * as Phaser from 'phaser';
@@ -26,7 +26,7 @@ const config: Phaser.Types.Core.GameConfig = {
     width: 1024,
     height: 768,
   },
-  scene: [Boot, Preloader, MainMenu, ModeSelect, TrackSelect, Leaderboard, OptionsMenu, TrackEditor, GridTest, MainGame, GameOver],
+  scene: [Boot, Preloader, MainMenu, ModeSelect, TrackSelect, Leaderboard, AboutScreen, TrackEditor, GridTest, MainGame, GameOver],
 };
 
 const StartGame = (parent: string) => {

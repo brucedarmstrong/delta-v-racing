@@ -63,7 +63,7 @@ export class ModeSelect extends Scene {
     const defs: BtnDef[] = [
       { label: 'RACE',    action: () => this.scene.start('TrackSelect') },
       { label: 'CREATE',  action: () => this.scene.start('TrackEditor') },
-      { label: 'OPTIONS', action: () => this.scene.start('OptionsMenu') },
+      { label: 'ABOUT',   action: () => this.scene.start('AboutScreen') },
     ];
 
     this.btns = defs.map(d => ({
