@@ -564,8 +564,8 @@ export class TrackSelect extends Scene {
       card.style.opacity = '0.6';
       card.style.pointerEvents = 'none';
       fetchRaceGhosts(track.id, track)
-        .then(ghosts  => this.scene.start('Game', { trackId: track.id, ghosts }))
-        .catch(()     => this.scene.start('Game', { trackId: track.id }));
+        .then(ghosts  => this.scene.start('Game', { trackId: track.id, ghosts, returnTab: 'standard' }))
+        .catch(()     => this.scene.start('Game', { trackId: track.id, returnTab: 'standard' }));
     });
 
     return card;
@@ -801,8 +801,8 @@ export class TrackSelect extends Scene {
       fetchCommunityTrack(entry.trackId)
         .then(track =>
           fetchRaceGhosts(entry.trackId, track)
-            .then(ghosts => this.scene.start('Game', { track, ghosts }))
-            .catch(()    => this.scene.start('Game', { track }))
+            .then(ghosts => this.scene.start('Game', { track, ghosts, returnTab: 'daily' }))
+            .catch(()    => this.scene.start('Game', { track, returnTab: 'daily' }))
         )
         .catch(() => {
           arrow.textContent = '›';
@@ -973,7 +973,7 @@ export class TrackSelect extends Scene {
           startHeading: payload.startHeading ?? 90,
           pieces: payload.pieces, markers: payload.markers,
         };
-        this.scene.start('Game', { track: entry, mineTrackId: draft.id });
+        this.scene.start('Game', { track: entry, mineTrackId: draft.id, returnTab: 'drafts' });
       } catch {
         playBtn.textContent = '▶ Play';
         playBtn.disabled = false;
@@ -1365,8 +1365,8 @@ export class TrackSelect extends Scene {
       fetchCommunityTrack(meta.id)
         .then(track =>
           fetchRaceGhosts(meta.id, track)
-            .then(ghosts => this.scene.start('Game', { track, ghosts }))
-            .catch(()    => this.scene.start('Game', { track }))
+            .then(ghosts => this.scene.start('Game', { track, ghosts, returnTab: 'community' }))
+            .catch(()    => this.scene.start('Game', { track, returnTab: 'community' }))
         )
         .catch(() => {
           arrow.textContent = '!';

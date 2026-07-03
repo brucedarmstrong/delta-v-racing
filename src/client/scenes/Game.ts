@@ -82,9 +82,10 @@ export class Game extends Scene {
   private currentGhost: GhostData | null = null;
 
   // Ghost playback — one entry per racing opponent, up to 3.
-  private ghostStates:   GhostState[] = [];
-  private pendingGhosts: GhostData[] | null = null; // set by init(), consumed by createInner()
+  private ghostStates:    GhostState[] = [];
+  private pendingGhosts:  GhostData[] | null = null; // set by init(), consumed by createInner()
   private originalGhosts: GhostData[] | null = null; // retained for restart
+  private returnTab:      string | null = null;       // tab to restore on Exit
 
   // DOM HUD — immune to Phaser camera zoom/scroll (setScrollFactor(0) only prevents scroll, not zoom)
   private topBarEl:   HTMLElement | null = null;
@@ -136,7 +137,7 @@ export class Game extends Scene {
 
   constructor() { super('Game'); }
 
-  init(data?: { trackId?: string; track?: TrackEntry; ghosts?: GhostData[]; mineTrackId?: string }) {
+  init(data?: { trackId?: string; track?: TrackEntry; ghosts?: GhostData[]; mineTrackId?: string; returnTab?: string }) {
     const entry: TrackEntry = data?.track
       ?? TRACK_REGISTRY.get(data?.trackId ?? '')
       ?? TRACK_REGISTRY.values().next().value!;
@@ -148,6 +149,7 @@ export class Game extends Scene {
     this.mineTrackId    = data?.mineTrackId ?? null;
     this.pendingGhosts  = data?.ghosts ?? this.originalGhosts ?? null;
     if (data?.ghosts)   this.originalGhosts = data.ghosts;
+    if (data?.returnTab !== undefined) this.returnTab = data.returnTab;
   }
 
   preload() {
@@ -1184,7 +1186,11 @@ export class Game extends Scene {
     const exitBtn = makeBtn('Exit', '#aaaacc', '#1a1a2a', '#444466');
     exitBtn.addEventListener('click', () => {
       overlay.remove(); this.finishOverlayEl = null;
-      this.scene.start('ModeSelect', { skipAutoRace: true });
+      if (this.returnTab) {
+        this.scene.start('TrackSelect', { activeTab: this.returnTab });
+      } else {
+        this.scene.start('ModeSelect', { skipAutoRace: true });
+      }
     });
     const viewBtn = makeBtn('View Track', '#aaccff', '#0a1828', '#334466');
     viewBtn.addEventListener('click', () => {
@@ -2266,8 +2272,14 @@ export class Game extends Scene {
     dialog.appendChild(body);
     dialog.appendChild(racerSection);
     dialog.appendChild(makeBtn('Continue', '#66ff99', () => this.resumeGame()));
-    dialog.appendChild(makeBtn('Restart',  '#ffcc44', () => this.clearPauseAndGo(() => this.scene.start('Game', { track: this.trackEntry }))));
-    dialog.appendChild(makeBtn('Exit',     '#ff6666', () => this.clearPauseAndGo(() => this.scene.start('ModeSelect', { skipAutoRace: true }))));
+    dialog.appendChild(makeBtn('Restart',  '#ffcc44', () => this.clearPauseAndGo(() => this.scene.start('Game', { track: this.trackEntry, returnTab: this.returnTab }))));
+    dialog.appendChild(makeBtn('Exit',     '#ff6666', () => this.clearPauseAndGo(() => {
+      if (this.returnTab) {
+        this.scene.start('TrackSelect', { activeTab: this.returnTab });
+      } else {
+        this.scene.start('ModeSelect', { skipAutoRace: true });
+      }
+    })));
 
     overlay.appendChild(dialog);
     return overlay;
