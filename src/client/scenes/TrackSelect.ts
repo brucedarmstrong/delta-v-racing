@@ -6,7 +6,7 @@ import {
   fetchCommunityTrack, fetchCommunityTracks, seedCommunityTracks,
   fetchMineTrack, fetchMineTracks, deleteMineTrack, saveMineTrack,
   getLocalDrafts, deleteLocalDraft, markLocalDraftVerified, verifyMineTrack,
-  fetchIsMod, deleteCommunityTrack,
+  fetchIsMod, deleteCommunityTrack, fetchDailyTracks, promoteToDailyTrack,
   type TrackPayload, type LocalDraft,
 } from '../track/TrackUpload';
 import { fetchRaceGhosts } from '../track/RaceGhosts';
@@ -14,7 +14,7 @@ import { generateAndUploadAiGhosts } from '../track/AiGhost';
 import { solveTrack } from '../track/GhostSolver';
 import { navigateTo } from '@devvit/web/client';
 import { username, isLoggedIn } from '../devvitContext';
-import type { CommunityTrackMeta, MineTrackMeta, LeaderboardEntry, LeaderboardResponse } from '../../shared/api';
+import type { CommunityTrackMeta, MineTrackMeta, LeaderboardEntry, LeaderboardResponse, DailyTrackEntry } from '../../shared/api';
 
 const BG         = 0x0a0a16;
 const SURFACE    = 0x12122a;
@@ -490,11 +490,28 @@ export class TrackSelect extends Scene {
       }
 
     } else {
-      // Daily tab — Coming Soon
-      const msg = document.createElement('div');
-      msg.textContent = 'Coming Soon';
-      msg.style.cssText = 'text-align:center;color:#555588;font:20px Arial;margin-top:80px;';
-      el.appendChild(msg);
+      // Daily tab — load schedule from server
+      const loading = document.createElement('div');
+      loading.textContent = 'Loading…';
+      loading.style.cssText = 'text-align:center;color:#555588;font:16px Arial;margin-top:80px;';
+      el.appendChild(loading);
+
+      fetchDailyTracks().then((entries) => {
+        loading.remove();
+        if (entries.length === 0) {
+          const empty = document.createElement('div');
+          empty.textContent = 'No daily tracks scheduled yet.';
+          empty.style.cssText = 'text-align:center;color:#555588;font:16px Arial;margin-top:80px;';
+          el.appendChild(empty);
+          return;
+        }
+        const today = new Date().toISOString().slice(0, 10);
+        for (const entry of entries) {
+          el.appendChild(this.buildDailyCard(entry, entry.date === today));
+        }
+      }).catch(() => {
+        loading.textContent = 'Failed to load daily tracks.';
+      });
     }
 
     document.body.appendChild(el);
@@ -631,6 +648,85 @@ export class TrackSelect extends Scene {
     document.body.appendChild(overlay);
   }
 
+  private static showPromoteDailyDialog(trackName: string, onConfirm: (date: string) => void): void {
+    const today = new Date().toISOString().slice(0, 10);
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:1100',
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'background:rgba(0,0,0,0.75)',
+    ].join(';');
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'background:#0d0d1e', 'border:1.5px solid #335566', 'border-radius:10px',
+      'padding:20px 18px', 'width:min(300px,calc(100% - 32px))',
+      'display:flex', 'flex-direction:column', 'gap:12px',
+      'box-shadow:0 8px 32px rgba(0,0,0,0.85)',
+    ].join(';');
+
+    const title = document.createElement('div');
+    title.textContent = 'Promote to Daily';
+    title.style.cssText = 'font:bold 15px "Arial Black",Arial,sans-serif;color:#aaccff;text-align:center;';
+
+    const sub = document.createElement('div');
+    sub.textContent = trackName;
+    sub.style.cssText = 'font:13px Arial,sans-serif;color:#6688aa;text-align:center;margin-top:-6px;';
+
+    const label = document.createElement('label');
+    label.textContent = 'Daily date:';
+    label.style.cssText = 'font:12px Arial,sans-serif;color:#888899;';
+
+    const dateInput = document.createElement('input');
+    dateInput.type  = 'date';
+    dateInput.value = today;
+    dateInput.min   = today;
+    dateInput.style.cssText = [
+      'width:100%', 'padding:8px', 'box-sizing:border-box',
+      'background:#1a1a2e', 'border:1px solid #335566',
+      'border-radius:5px', 'color:#ccddff', 'font:14px Arial,sans-serif',
+    ].join(';');
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.cssText = [
+      'flex:1', 'padding:10px', 'font:14px Arial,sans-serif',
+      'color:#aaaacc', 'background:#1a1a2a', 'border:1px solid #444466',
+      'border-radius:6px', 'cursor:pointer',
+    ].join(';');
+    cancelBtn.addEventListener('click', () => overlay.remove());
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.textContent = 'Set Daily';
+    confirmBtn.style.cssText = [
+      'flex:1', 'padding:10px', 'font:bold 14px Arial,sans-serif',
+      'color:#aaddff', 'background:#0a1a28', 'border:1px solid #335566',
+      'border-radius:6px', 'cursor:pointer',
+    ].join(';');
+    confirmBtn.addEventListener('click', () => {
+      const date = dateInput.value;
+      if (!date) return;
+      overlay.remove();
+      onConfirm(date);
+    });
+
+    row.appendChild(cancelBtn);
+    row.appendChild(confirmBtn);
+    label.appendChild(dateInput);
+    card.appendChild(title);
+    card.appendChild(sub);
+    card.appendChild(label);
+    card.appendChild(row);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    setTimeout(() => dateInput.focus(), 50);
+  }
+
   private static showToast(msg: string, duration = 3000): void {
     const t = document.createElement('div');
     t.textContent = msg;
@@ -653,6 +749,86 @@ export class TrackSelect extends Scene {
     ].join(';');
     document.body.appendChild(t);
     setTimeout(() => t.remove(), duration);
+  }
+
+  private buildDailyCard(entry: DailyTrackEntry, isToday: boolean): HTMLElement {
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'display:flex', 'align-items:center', 'gap:12px',
+      `background:${isToday ? '#141428' : '#12122a'}`,
+      `border:1px solid ${isToday ? '#5566aa' : '#3a3a6a'}`,
+      'border-radius:6px', 'padding:10px', 'margin-bottom:10px', 'cursor:pointer',
+      '-webkit-tap-highlight-color:rgba(100,100,200,0.2)',
+      'user-select:none', '-webkit-user-select:none',
+    ].join(';');
+
+    const canvas  = document.createElement('canvas');
+    canvas.width  = THUMB_W;
+    canvas.height = THUMB_H;
+    canvas.style.cssText = 'flex-shrink:0;border:1px solid #3a3a6a;border-radius:3px;background:#0a0a16;';
+
+    const info = document.createElement('div');
+    info.style.cssText = 'flex:1;min-width:0;';
+
+    const dateLabel = document.createElement('div');
+    dateLabel.textContent = isToday ? '📅 TODAY' : `📅 ${entry.date}`;
+    dateLabel.style.cssText = `font:bold 10px Arial,sans-serif;letter-spacing:0.1em;color:${isToday ? '#88aaff' : '#555588'};margin-bottom:3px;`;
+
+    const name = document.createElement('div');
+    name.textContent = entry.name;
+    name.style.cssText = 'font:bold 17px "Arial Black",Arial,sans-serif;color:#e8e8ff;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+
+    const author = document.createElement('div');
+    author.textContent = `by ${entry.author}`;
+    author.style.cssText = 'font:13px Arial,sans-serif;color:#6666aa;';
+
+    info.appendChild(dateLabel);
+    info.appendChild(name);
+    info.appendChild(author);
+
+    const arrow = document.createElement('div');
+    arrow.textContent = '›';
+    arrow.style.cssText = 'font:28px Arial,sans-serif;color:#5555aa;flex-shrink:0;line-height:1;';
+
+    card.appendChild(canvas);
+    card.appendChild(info);
+    card.appendChild(arrow);
+
+    card.addEventListener('click', () => {
+      arrow.textContent = '…';
+      card.style.opacity = '0.6';
+      card.style.pointerEvents = 'none';
+      fetchCommunityTrack(entry.trackId)
+        .then(track =>
+          fetchRaceGhosts(entry.trackId, track)
+            .then(ghosts => this.scene.start('Game', { track, ghosts }))
+            .catch(()    => this.scene.start('Game', { track }))
+        )
+        .catch(() => {
+          arrow.textContent = '›';
+          card.style.opacity = '';
+          card.style.pointerEvents = '';
+          TrackSelect.showToast('Failed to load track');
+        });
+    });
+
+    // Render thumbnail asynchronously
+    (async () => {
+      try {
+        const track   = await fetchCommunityTrack(entry.trackId);
+        const payload = { pieces: track.pieces, markers: track.markers };
+        const ctx     = canvas.getContext('2d')!;
+        const bounds  = trackBounds(payload.pieces);
+        const scale   = Math.min((THUMB_W - 4) / bounds.width, (THUMB_H - 4) / bounds.height) * 0.9;
+        ctx.save();
+        ctx.translate(THUMB_W / 2 - bounds.cx * scale, THUMB_H / 2 - bounds.cy * scale);
+        ctx.scale(scale, scale);
+        drawBarriersOnCanvas(ctx, payload.pieces);
+        ctx.restore();
+      } catch { /* thumbnail stays blank */ }
+    })();
+
+    return card;
   }
 
   private buildDraftCard(draft: DraftEntry): HTMLElement {
@@ -1049,6 +1225,36 @@ export class TrackSelect extends Scene {
         }
       });
       card.appendChild(lbBtn);
+
+      const dailyBtn = document.createElement('button');
+      dailyBtn.textContent = '📅';
+      dailyBtn.title = 'Promote to Daily';
+      dailyBtn.style.cssText = [
+        'flex-shrink:0', 'width:36px', 'height:36px',
+        'background:#0a1a28', 'color:#aaddff',
+        'border:1px solid #335566', 'border-radius:5px',
+        'font:16px Arial,sans-serif', 'cursor:pointer',
+        'text-align:center', 'line-height:36px', 'padding:0',
+        'pointer-events:auto',
+      ].join(';');
+      dailyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        TrackSelect.showPromoteDailyDialog(meta.name, async (date) => {
+          dailyBtn.textContent = '…';
+          dailyBtn.disabled = true;
+          try {
+            await promoteToDailyTrack(meta.id, date);
+            TrackSelect.showToast(`"${meta.name}" set as Daily for ${date}`);
+          } catch (err) {
+            TrackSelect.showToast(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+          } finally {
+            dailyBtn.textContent = '📅';
+            dailyBtn.disabled = false;
+          }
+        });
+      });
+      card.appendChild(dailyBtn);
 
       const delBtn = document.createElement('button');
       delBtn.textContent = '✕';

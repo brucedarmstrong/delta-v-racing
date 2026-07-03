@@ -28,6 +28,9 @@ import type {
   UploadGhostResponse,
   UploadTrackRequest,
   UploadTrackResponse,
+  PromoteDailyResponse,
+  DailyTrackEntry,
+  DailyTracksResponse,
 } from '../../shared/api';
 
 type ErrorResponse = {
@@ -628,6 +631,56 @@ api.delete('/community-track/:id', async (c) => {
 
   console.log(`[mod delete] trackId=${id} by ${uname}`);
   return c.json<DeleteCommunityTrackResponse>({ type: 'delete_community_track', trackId: id });
+});
+
+api.patch('/community-track/:id/promote-daily', async (c) => {
+  const uname = context.username;
+  if (!uname) return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+
+  let isMod = false;
+  try {
+    const mods = await reddit.getModerators({ subredditName: context.subredditName!, username: uname }).all();
+    isMod = mods.length > 0;
+  } catch { /* treat as not-mod */ }
+  if (!isMod) return c.json<ErrorResponse>({ status: 'error', message: 'Moderators only' }, 403);
+
+  const { id } = c.req.param();
+  const raw = await redis.get(`track:${id}`);
+  if (!raw) return c.json<ErrorResponse>({ status: 'error', message: 'Track not found' }, 404);
+
+  let body: { date?: string };
+  try { body = await c.req.json(); } catch { body = {}; }
+  const { date } = body;
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid date (expected YYYY-MM-DD)' }, 400);
+  }
+
+  await redis.hSet('daily:schedule', { [date]: id });
+  return c.json<PromoteDailyResponse>({ type: 'promote_daily', trackId: id, date });
+});
+
+api.get('/daily-tracks', async (c) => {
+  const schedule = await redis.hGetAll('daily:schedule') as Record<string, string>;
+  const dateEntries = Object.entries(schedule);
+  if (dateEntries.length === 0) {
+    return c.json<DailyTracksResponse>({ type: 'daily_tracks', entries: [] });
+  }
+
+  const trackIds = dateEntries.map(([, id]) => id);
+  const raws = await redis.mGet(trackIds.map(id => `track:${id}`));
+
+  const entries: DailyTrackEntry[] = [];
+  dateEntries.forEach(([date, trackId], i) => {
+    const raw = raws[i];
+    if (!raw) return;
+    try {
+      const r = JSON.parse(raw) as { name: string; author: string; postUrl?: string };
+      entries.push({ date, trackId, name: r.name, author: r.author, postUrl: r.postUrl });
+    } catch { /* skip corrupt records */ }
+  });
+
+  entries.sort((a, b) => b.date.localeCompare(a.date));
+  return c.json<DailyTracksResponse>({ type: 'daily_tracks', entries });
 });
 
 api.get('/track/:id', async (c) => {

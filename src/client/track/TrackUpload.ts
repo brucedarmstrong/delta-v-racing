@@ -12,6 +12,9 @@ import type {
   SaveMineTrackResponse,
   UploadTrackRequest,
   UploadTrackResponse,
+  DailyTrackEntry,
+  DailyTracksResponse,
+  PromoteDailyResponse,
 } from '../../shared/api';
 import type { PlacedPiece } from './TrackLayout';
 import type { TrackMarker } from './convertGmsTrack';
@@ -209,6 +212,27 @@ export async function fetchIsMod(): Promise<boolean> {
     const json = await res.json() as IsModResponse;
     return json.isMod;
   } catch { return false; }
+}
+
+export async function fetchDailyTracks(): Promise<DailyTrackEntry[]> {
+  const res = await fetch('/api/daily-tracks');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json() as DailyTracksResponse;
+  return json.entries;
+}
+
+export async function promoteToDailyTrack(id: string, date: string): Promise<void> {
+  const res = await fetch(`/api/community-track/${encodeURIComponent(id)}/promote-daily`, {
+    method:  'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ date }),
+  });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch {}
+    throw new Error(msg);
+  }
+  await res.json() as PromoteDailyResponse;
 }
 
 export async function deleteCommunityTrack(id: string): Promise<void> {

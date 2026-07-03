@@ -178,3 +178,26 @@ export type DeleteCommunityTrackResponse = {
   type: 'delete_community_track';
   trackId: string;
 };
+
+export type PromoteDailyRequest = {
+  date: string; // YYYY-MM-DD
+};
+
+export type PromoteDailyResponse = {
+  type: 'promote_daily';
+  trackId: string;
+  date: string;
+};
+
+export type DailyTrackEntry = {
+  date:    string; // YYYY-MM-DD
+  trackId: string;
+  name:    string;
+  author:  string;
+  postUrl?: string;
+};
+
+export type DailyTracksResponse = {
+  type:    'daily_tracks';
+  entries: DailyTrackEntry[];
+};
