@@ -1215,7 +1215,7 @@ export class TrackSelect extends Scene {
     author.style.cssText = 'font:13px Arial,sans-serif;color:#6666aa;';
 
     info.appendChild(name);
-    info.appendChild(author);
+    // author appended after buttons for mods, immediately for non-mods
 
     const arrow = document.createElement('div');
     arrow.textContent = '›';
@@ -1225,16 +1225,21 @@ export class TrackSelect extends Scene {
     card.appendChild(info);
 
     if (this.isMod) {
+      name.style.marginBottom = '4px';
+
+      const modRow = document.createElement('div');
+      modRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:6px;';
+
       const lbBtn = document.createElement('button');
       lbBtn.textContent = '≡';
       lbBtn.title = 'View leaderboard';
       lbBtn.style.cssText = [
-        'flex-shrink:0', 'width:36px', 'height:36px',
+        'width:36px', 'height:32px',
         'background:#0a1628', 'color:#6688cc',
         'border:1px solid #334466', 'border-radius:5px',
         'font:bold 18px Arial,sans-serif', 'cursor:pointer',
-        'text-align:center', 'line-height:36px', 'padding:0',
-        'pointer-events:auto',
+        'text-align:center', 'line-height:32px', 'padding:0',
+        'pointer-events:auto', 'flex-shrink:0',
       ].join(';');
       lbBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -1253,18 +1258,16 @@ export class TrackSelect extends Scene {
           lbBtn.disabled = false;
         }
       });
-      card.appendChild(lbBtn);
-
       const dailyBtn = document.createElement('button');
       dailyBtn.textContent = '📅';
       dailyBtn.title = 'Promote to Daily';
       dailyBtn.style.cssText = [
-        'flex-shrink:0', 'width:36px', 'height:36px',
+        'width:36px', 'height:32px',
         'background:#0a1a28', 'color:#aaddff',
         'border:1px solid #335566', 'border-radius:5px',
         'font:16px Arial,sans-serif', 'cursor:pointer',
-        'text-align:center', 'line-height:36px', 'padding:0',
-        'pointer-events:auto',
+        'text-align:center', 'line-height:32px', 'padding:0',
+        'pointer-events:auto', 'flex-shrink:0',
       ].join(';');
       dailyBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1283,18 +1286,16 @@ export class TrackSelect extends Scene {
           }
         });
       });
-      card.appendChild(dailyBtn);
-
       const delBtn = document.createElement('button');
       delBtn.textContent = '✕';
       delBtn.title = 'Remove track';
       delBtn.style.cssText = [
-        'flex-shrink:0', 'width:36px', 'height:36px',
+        'width:36px', 'height:32px',
         'background:#1a0808', 'color:#ff6666',
         'border:1px solid #663333', 'border-radius:5px',
         'font:bold 16px Arial,sans-serif', 'cursor:pointer',
-        'text-align:center', 'line-height:36px', 'padding:0',
-        'pointer-events:auto',
+        'text-align:center', 'line-height:32px', 'padding:0',
+        'pointer-events:auto', 'flex-shrink:0',
         '-webkit-tap-highlight-color:rgba(255,80,80,0.3)',
       ].join(';');
       let confirmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1339,10 +1340,16 @@ export class TrackSelect extends Scene {
           TrackSelect.showToast(`Failed: ${msg}`);
         }
       });
-      card.appendChild(delBtn);
+      modRow.appendChild(lbBtn);
+      modRow.appendChild(dailyBtn);
+      modRow.appendChild(delBtn);
+      modRow.appendChild(arrow);
+      info.appendChild(modRow);
+      info.appendChild(author);
+    } else {
+      info.appendChild(author);
+      card.appendChild(arrow);
     }
-
-    card.appendChild(arrow);
 
     card.addEventListener('click', () => {
       if (meta.postUrl) {
