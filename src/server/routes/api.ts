@@ -31,6 +31,8 @@ import type {
   PromoteDailyResponse,
   DailyTrackEntry,
   DailyTracksResponse,
+  DirectDailyRequest,
+  DirectDailyResponse,
 } from '../../shared/api';
 
 type ErrorResponse = {
@@ -657,6 +659,40 @@ api.patch('/community-track/:id/promote-daily', async (c) => {
 
   await redis.hSet('daily:schedule', { [date]: id });
   return c.json<PromoteDailyResponse>({ type: 'promote_daily', trackId: id, date });
+});
+
+// Promote a mod-created draft directly to Daily without adding it to Community.
+api.post('/daily-track/direct', async (c) => {
+  const uname = context.username;
+  if (!uname) return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+
+  let isMod = false;
+  try {
+    const mods = await reddit.getModerators({ subredditName: context.subredditName!, username: uname }).all();
+    isMod = mods.length > 0;
+  } catch { /* treat as not-mod */ }
+  if (!isMod) return c.json<ErrorResponse>({ status: 'error', message: 'Moderators only' }, 403);
+
+  let body: DirectDailyRequest;
+  try { body = await c.req.json(); } catch {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON' }, 400);
+  }
+  const { date, name, data } = body;
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid date (expected YYYY-MM-DD)' }, 400);
+  }
+  if (!name?.trim() || !data) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Missing name or data' }, 400);
+  }
+
+  const uploadedAt = Date.now();
+  const id = `daily_${uname}_${uploadedAt}`;
+  // Store track data but do NOT add to tracks:community sorted set.
+  const record = JSON.stringify({ id, name: name.trim(), author: uname, uploadedAt, data });
+  await redis.set(`track:${id}`, record);
+  await redis.hSet('daily:schedule', { [date]: id });
+
+  return c.json<DirectDailyResponse>({ type: 'direct_daily', trackId: id, date });
 });
 
 api.get('/daily-tracks', async (c) => {

@@ -6,7 +6,7 @@ import {
   fetchCommunityTrack, fetchCommunityTracks, seedCommunityTracks,
   fetchMineTrack, fetchMineTracks, deleteMineTrack, saveMineTrack,
   getLocalDrafts, deleteLocalDraft, markLocalDraftVerified, verifyMineTrack,
-  fetchIsMod, deleteCommunityTrack, fetchDailyTracks, promoteToDailyTrack,
+  fetchIsMod, deleteCommunityTrack, fetchDailyTracks, promoteToDailyTrack, promoteDraftToDaily,
   type TrackPayload, type LocalDraft,
 } from '../track/TrackUpload';
 import { fetchRaceGhosts } from '../track/RaceGhosts';
@@ -918,16 +918,19 @@ export class TrackSelect extends Scene {
       const dailyBtn = mkBtn('📅 Daily', '#aaddff', '#0a1a28', '#335566');
       dailyBtn.style.flex = '0 0 auto';
       dailyBtn.addEventListener('click', () => {
-        const communityId = draft.uploadedId;
-        if (!communityId) {
-          TrackSelect.showToast('Upload to Community first before promoting to Daily');
-          return;
-        }
         TrackSelect.showPromoteDailyDialog(draft.name, async (date) => {
           dailyBtn.textContent = '…';
           dailyBtn.disabled = true;
           try {
-            await promoteToDailyTrack(communityId, date);
+            if (draft.uploadedId) {
+              // Already in Community — just schedule it as Daily.
+              await promoteToDailyTrack(draft.uploadedId, date);
+            } else {
+              // Mod-only draft — save track data directly for Daily without
+              // adding to Community.
+              const { data } = await resolveData();
+              await promoteDraftToDaily(draft.name, data, date);
+            }
             TrackSelect.showToast(`"${draft.name}" set as Daily for ${date}`);
           } catch (err) {
             TrackSelect.showToast(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);

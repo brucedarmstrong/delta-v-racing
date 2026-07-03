@@ -15,6 +15,7 @@ import type {
   DailyTrackEntry,
   DailyTracksResponse,
   PromoteDailyResponse,
+  DirectDailyResponse,
 } from '../../shared/api';
 import type { PlacedPiece } from './TrackLayout';
 import type { TrackMarker } from './convertGmsTrack';
@@ -233,6 +234,20 @@ export async function promoteToDailyTrack(id: string, date: string): Promise<voi
     throw new Error(msg);
   }
   await res.json() as PromoteDailyResponse;
+}
+
+export async function promoteDraftToDaily(name: string, data: string, date: string): Promise<void> {
+  const res = await fetch('/api/daily-track/direct', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ date, name, data }),
+  });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch {}
+    throw new Error(msg);
+  }
+  await res.json() as DirectDailyResponse;
 }
 
 export async function deleteCommunityTrack(id: string): Promise<void> {

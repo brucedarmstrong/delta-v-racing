@@ -183,6 +183,18 @@ export type PromoteDailyRequest = {
   date: string; // YYYY-MM-DD
 };
 
+export type DirectDailyRequest = {
+  date: string; // YYYY-MM-DD
+  name: string;
+  data: string; // TrackPayload JSON
+};
+
+export type DirectDailyResponse = {
+  type:    'direct_daily';
+  trackId: string;
+  date:    string;
+};
+
 export type PromoteDailyResponse = {
   type: 'promote_daily';
   trackId: string;
