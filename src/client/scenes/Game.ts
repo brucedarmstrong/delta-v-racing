@@ -84,6 +84,7 @@ export class Game extends Scene {
   // Ghost playback — one entry per racing opponent, up to 3.
   private ghostStates:   GhostState[] = [];
   private pendingGhosts: GhostData[] | null = null; // set by init(), consumed by createInner()
+  private originalGhosts: GhostData[] | null = null; // retained for restart
 
   // DOM HUD — immune to Phaser camera zoom/scroll (setScrollFactor(0) only prevents scroll, not zoom)
   private topBarEl:   HTMLElement | null = null;
@@ -144,8 +145,9 @@ export class Game extends Scene {
     this.trackMarkers  = entry.markers;
     this.startWX       = entry.startX;
     this.startWY       = entry.startY;
-    this.mineTrackId   = data?.mineTrackId ?? null;
-    this.pendingGhosts = data?.ghosts ?? null;
+    this.mineTrackId    = data?.mineTrackId ?? null;
+    this.pendingGhosts  = data?.ghosts ?? this.originalGhosts ?? null;
+    if (data?.ghosts)   this.originalGhosts = data.ghosts;
   }
 
   preload() {
