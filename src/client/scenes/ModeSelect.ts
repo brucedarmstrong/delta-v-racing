@@ -18,7 +18,7 @@ export class ModeSelect extends Scene {
 
   constructor() { super('ModeSelect'); }
 
-  create() {
+  create(data?: { skipAutoRace?: boolean }) {
     // Deep-link routing takes priority — splash secondary buttons set this even on track posts.
     const route = localStorage.getItem('dv-route');
     if (route) {
@@ -29,7 +29,8 @@ export class ModeSelect extends Scene {
     }
 
     // Track post: boot directly into race mode — no menu needed.
-    if (postData?.trackId) {
+    // Skip auto-start when returning from a finished/exited race.
+    if (postData?.trackId && !data?.skipAutoRace) {
       const trackId = postData.trackId;
       fetchCommunityTrack(trackId)
         .then(track =>

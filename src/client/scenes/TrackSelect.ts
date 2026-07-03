@@ -475,6 +475,16 @@ export class TrackSelect extends Scene {
         el.appendChild(emptyWrap);
       } else {
         for (const draft of this.drafts) el.appendChild(this.buildDraftCard(draft));
+        const createBtn = document.createElement('button');
+        createBtn.textContent = '+ Create a track';
+        createBtn.style.cssText = [
+          'display:block', 'width:100%', 'margin-top:10px',
+          'padding:10px 28px', 'font:bold 15px Arial,sans-serif',
+          'color:#88ffaa', 'background:#0a2a0a', 'border:1px solid #33aa33',
+          'border-radius:6px', 'cursor:pointer', 'box-sizing:border-box',
+        ].join(';');
+        createBtn.addEventListener('click', () => this.scene.start('TrackEditor'));
+        el.appendChild(createBtn);
       }
 
     } else {

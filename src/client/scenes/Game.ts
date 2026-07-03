@@ -1182,7 +1182,7 @@ export class Game extends Scene {
     const exitBtn = makeBtn('Exit', '#aaaacc', '#1a1a2a', '#444466');
     exitBtn.addEventListener('click', () => {
       overlay.remove(); this.finishOverlayEl = null;
-      this.scene.start('TrackSelect');
+      this.scene.start('ModeSelect', { skipAutoRace: true });
     });
     const viewBtn = makeBtn('View Track', '#aaccff', '#0a1828', '#334466');
     viewBtn.addEventListener('click', () => {
@@ -2265,7 +2265,7 @@ export class Game extends Scene {
     dialog.appendChild(racerSection);
     dialog.appendChild(makeBtn('Continue', '#66ff99', () => this.resumeGame()));
     dialog.appendChild(makeBtn('Restart',  '#ffcc44', () => this.clearPauseAndGo(() => this.scene.start('Game', { track: this.trackEntry }))));
-    dialog.appendChild(makeBtn('Exit',     '#ff6666', () => this.clearPauseAndGo(() => this.scene.start('TrackSelect'))));
+    dialog.appendChild(makeBtn('Exit',     '#ff6666', () => this.clearPauseAndGo(() => this.scene.start('ModeSelect', { skipAutoRace: true }))));
 
     overlay.appendChild(dialog);
     return overlay;
