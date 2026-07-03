@@ -1,6 +1,7 @@
 import { Scene } from 'phaser';
 import { appVersion, postData } from '../devvitContext';
 import { fetchCommunityTrack } from '../track/TrackUpload';
+import { fetchRaceGhosts } from '../track/RaceGhosts';
 
 const BG      = 0x0a0a16;
 const SURFACE = 0x12122a;
@@ -29,12 +30,17 @@ export class ModeSelect extends Scene {
 
     // Track post: boot directly into race mode — no menu needed.
     if (postData?.trackId) {
-      fetchCommunityTrack(postData.trackId).then(track => {
-        this.scene.start('Game', { track });
-      }).catch(() => {
-        // Track fetch failed — fall through to normal menu.
-        this.scene.restart();
-      });
+      const trackId = postData.trackId;
+      fetchCommunityTrack(trackId)
+        .then(track =>
+          fetchRaceGhosts(trackId, track)
+            .then(ghosts => this.scene.start('Game', { track, ghosts }))
+            .catch(()    => this.scene.start('Game', { track }))
+        )
+        .catch(() => {
+          // Track fetch failed — fall through to normal menu.
+          this.scene.restart();
+        });
       return;
     }
 
