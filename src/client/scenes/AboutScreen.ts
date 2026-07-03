@@ -80,7 +80,7 @@ export class AboutScreen extends Scene {
         heading: 'Track editor',
         body: 'Build your own track using the CREATE button. Place straights, curves, '
             + 'and chicanes, then set a finish line and optional checkpoints. '
-            + 'Use AI Verify to confirm the track is completable, then upload it '
+            + 'Complete the track yourself to verify it, then upload it '
             + 'to the Community list for everyone to race.',
       },
       {
