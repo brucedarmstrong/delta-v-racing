@@ -675,7 +675,10 @@ export class Game extends Scene {
         const tx = natX + dx, ty = natY + dy;
         const twx = tx * gridPx, twy = ty * gridPx;
         if ((wp.x - twx) ** 2 + (wp.y - twy) ** 2 <= hitR * hitR) {
-          if (!intersectsBarrier(this.gx * gridPx, this.gy * gridPx, twx, twy, this.trackPieces)) {
+          const fromWX = this.gx * gridPx, fromWY = this.gy * gridPx;
+          if (!intersectsBarrier(fromWX, fromWY, twx, twy, this.trackPieces) ||
+              this.finishBeforeBarrier(fromWX, fromWY, twx, twy)) {
+            // Safe move — or finish line crossed before barrier (counts as a win, no crash).
             this.commitMove(tx, ty, dx, dy);
           } else {
             // Player deliberately picked a barrier-crossing target.
@@ -771,9 +774,17 @@ export class Game extends Scene {
     this.velGfx.clear();
     this.pickGfx.clear();
 
-    this.crashes++;
+    // crashes++ is deferred to Phase 2 so the penalty only applies when the car
+    // physically reaches the barrier (not when the player picks the cell).
     if (countTurn) this.turn++;
     this.updateHud();
+
+    // Set move bounds so triggerWin() can compute the correct finesse fraction
+    // if the finish line is crossed during Phase 1's animation.
+    this.moveFromWX = this.gx * gridPx;
+    this.moveFromWY = this.gy * gridPx;
+    this.moveToWX   = crashGX * gridPx;
+    this.moveToWY   = crashGY * gridPx;
 
     this.ghostMoves.push({ gx: crashGX, gy: crashGY, crash: true });
     this.drawTrailSegment(this.gx, this.gy, crashGX, crashGY, true);
@@ -814,9 +825,22 @@ export class Game extends Scene {
       x: contactWX, y: contactWY,
       duration: 280,
       ease:     'Quad.easeIn',
+      onUpdate:   () => this.checkMarkerCrossing(), // safety net: detect finish before contact
       onComplete: () => {
+        // If the finish line was crossed during Phase 1, treat as a win — no crash penalty.
+        if (this.won) {
+          const last = this.ghostMoves[this.ghostMoves.length - 1];
+          if (last) last.crash = false;
+          this.crashing = false;
+          this.advanceGhosts();
+          return;
+        }
 
         // ── Phase 2: slow-motion explosion from contact → selected target ──────
+        // Count the crash NOW — car has physically reached the barrier.
+        this.crashes++;
+        this.updateHud();
+
         this.tweens.timeScale = CRASH_SLO;
         this.time.timeScale   = CRASH_SLO;
 
@@ -876,6 +900,22 @@ export class Game extends Scene {
 
   // Walk from fromW toward toW in 20 steps; return the last pixel that is on-surface.
   // This gives the approximate point where the car's path crosses the barrier edge.
+  // Returns true when the finish line is crossed before the barrier on the given path.
+  // Used in handlePick to redirect a crash-bound move to commitMove so the win registers cleanly.
+  private finishBeforeBarrier(fromWX: number, fromWY: number, toWX: number, toWY: number): boolean {
+    if (this.finishIndex < 0) return false;
+    if (this.checkpointIndices.length > 0 && !this.checkpointTouched.every(Boolean)) return false;
+    const tFinish = this.findFinishContactFraction(fromWX, fromWY, toWX, toWY);
+    if (tFinish >= 1) return false; // finish not on this path
+    for (let i = 1; i <= 40; i++) {
+      const t  = i / 40;
+      const wx = fromWX + (toWX - fromWX) * t;
+      const wy = fromWY + (toWY - fromWY) * t;
+      if (pointInsideBarrier(wx, wy, this.trackPieces)) return tFinish < t;
+    }
+    return false;
+  }
+
   private findBarrierContact(
     fromWX: number, fromWY: number,
     toWX:   number, toWY:   number,

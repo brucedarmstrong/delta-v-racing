@@ -10,6 +10,12 @@ const BORDER  = 0x3a3a6a;
 type BtnDef = { label: string; action: () => void };
 type BtnObj = BtnDef & { gfx: Phaser.GameObjects.Graphics; text: Phaser.GameObjects.Text; bx: number; by: number; bw: number; bh: number };
 
+const GRID_CELL   = 24;
+const GRID_MAJOR  = 5;
+const GRID_PERIOD = GRID_CELL * GRID_MAJOR; // 120 px
+const GRID_DX     = -3;   // px/s westward
+const GRID_DY     = -8;   // px/s northward (NNW, ~1:2.7 ratio)
+
 export class ModeSelect extends Scene {
   private btns:          BtnObj[]                 = [];
   private title:         Phaser.GameObjects.Text | null = null;
@@ -18,6 +24,12 @@ export class ModeSelect extends Scene {
   private ftueEl:        HTMLElement | null = null;
   private ftueResetTaps  = 0;
   private ftueResetTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private gridGfx:  Phaser.GameObjects.Graphics | null = null;
+  private gridOX    = 0;
+  private gridOY    = 0;
+  private gridRaf:  number | null = null;
+  private gridLast  = 0;
 
   constructor() { super('ModeSelect'); }
 
@@ -84,6 +96,8 @@ export class ModeSelect extends Scene {
     cam.setScroll(0, 0);
     cam.setZoom(1);
 
+    this.startGrid();
+
     this.title = this.add.text(0, 0, 'delta-v', {
       fontFamily: 'Arial Black', fontSize: '52px',
       color: '#ffffff', stroke: '#000000', strokeThickness: 4,
@@ -141,6 +155,7 @@ export class ModeSelect extends Scene {
     });
 
     this.events.once('shutdown', () => {
+      this.stopGrid();
       this.ftueEl?.remove();
       this.ftueEl = null;
       if (this.ftueResetTimer) clearTimeout(this.ftueResetTimer);
@@ -222,6 +237,70 @@ export class ModeSelect extends Scene {
 
     overlay.appendChild(card);
     document.body.appendChild(overlay);
+  }
+
+  private startGrid(): void {
+    this.gridGfx  = this.add.graphics().setDepth(-1).setScrollFactor(0);
+    this.gridOX   = 0;
+    this.gridOY   = 0;
+    this.gridLast = 0;
+
+    const tick = (ts: number) => {
+      if (!this.gridGfx) return;
+      const dt = this.gridLast ? (ts - this.gridLast) / 1000 : 0;
+      this.gridLast = ts;
+      this.gridOX = ((this.gridOX + GRID_DX * dt) % GRID_PERIOD + GRID_PERIOD) % GRID_PERIOD;
+      this.gridOY = ((this.gridOY + GRID_DY * dt) % GRID_PERIOD + GRID_PERIOD) % GRID_PERIOD;
+      this.drawScrollingGrid();
+      this.gridRaf = requestAnimationFrame(tick);
+    };
+    this.gridRaf = requestAnimationFrame(tick);
+  }
+
+  private stopGrid(): void {
+    if (this.gridRaf !== null) { cancelAnimationFrame(this.gridRaf); this.gridRaf = null; }
+    this.gridGfx = null; // Phaser destroys the object on scene shutdown
+  }
+
+  private drawScrollingGrid(): void {
+    const g = this.gridGfx;
+    if (!g) return;
+    g.clear();
+
+    const W  = this.scale.width;
+    const H  = this.scale.height;
+    const ox = this.gridOX;
+    const oy = this.gridOY;
+
+    // Minor line start positions (first line just off left/top edge)
+    const startX = -GRID_CELL + ((ox % GRID_CELL + GRID_CELL) % GRID_CELL);
+    const startY = -GRID_CELL + ((oy % GRID_CELL + GRID_CELL) % GRID_CELL);
+
+    // Minor lines — every GRID_CELL, skip majors
+    g.lineStyle(1, 0x15153a, 0.9);
+    g.beginPath();
+    for (let x = startX; x <= W + GRID_CELL; x += GRID_CELL) {
+      if (Math.round((x - ox) / GRID_CELL) % GRID_MAJOR === 0) continue;
+      g.moveTo(x, 0); g.lineTo(x, H);
+    }
+    for (let y = startY; y <= H + GRID_CELL; y += GRID_CELL) {
+      if (Math.round((y - oy) / GRID_CELL) % GRID_MAJOR === 0) continue;
+      g.moveTo(0, y); g.lineTo(W, y);
+    }
+    g.strokePath();
+
+    // Major lines — every GRID_PERIOD
+    const majStartX = -GRID_PERIOD + ((ox % GRID_PERIOD + GRID_PERIOD) % GRID_PERIOD);
+    const majStartY = -GRID_PERIOD + ((oy % GRID_PERIOD + GRID_PERIOD) % GRID_PERIOD);
+    g.lineStyle(1, 0x20205a, 1.0);
+    g.beginPath();
+    for (let x = majStartX; x <= W + GRID_PERIOD; x += GRID_PERIOD) {
+      g.moveTo(x, 0); g.lineTo(x, H);
+    }
+    for (let y = majStartY; y <= H + GRID_PERIOD; y += GRID_PERIOD) {
+      g.moveTo(0, y); g.lineTo(W, y);
+    }
+    g.strokePath();
   }
 
   private handleFtueResetTap(): void {
