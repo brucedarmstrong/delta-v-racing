@@ -15,6 +15,28 @@
   overflow: hidden;
 }
 
+/* Scrolling grid (NNW, matches race-screen grid aesthetic) */
+.grid {
+  position: absolute;
+  inset: 0;
+  /* major (120 px) on top, minor (24 px) below — major color wins at shared positions */
+  background-image:
+    linear-gradient(rgba(36, 36, 100, 0.85) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(36, 36, 100, 0.85) 1px, transparent 1px),
+    linear-gradient(rgba(20, 20, 60, 0.8) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(20, 20, 60, 0.8) 1px, transparent 1px);
+  background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px;
+  /* LCM(40s, 15s) = 120s gives whole-tile counts in both axes so the
+     loop is seamless: 360 px west (3 major tiles) + 960 px north (8 major tiles) */
+  animation: scrollGrid 120s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes scrollGrid {
+  from { background-position: 0 0, 0 0, 0 0, 0 0; }
+  to   { background-position: -360px -960px, -360px -960px, -360px -960px, -360px -960px; }
+}
+
 /* Subtle static star field */
 .stars {
   position: absolute;
