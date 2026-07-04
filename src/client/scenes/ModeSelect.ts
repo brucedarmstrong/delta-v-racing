@@ -25,11 +25,9 @@ export class ModeSelect extends Scene {
   private ftueResetTaps  = 0;
   private ftueResetTimer: ReturnType<typeof setTimeout> | null = null;
 
-  private gridGfx:  Phaser.GameObjects.Graphics | null = null;
-  private gridOX    = 0;
-  private gridOY    = 0;
-  private gridRaf:  number | null = null;
-  private gridLast  = 0;
+  private gridGfx: Phaser.GameObjects.Graphics | null = null;
+  private gridOX   = 0;
+  private gridOY   = 0;
 
   constructor() { super('ModeSelect'); }
 
@@ -86,6 +84,13 @@ export class ModeSelect extends Scene {
     }
 
     this.buildMenu(data);
+  }
+
+  update(_time: number, delta: number): void {
+    if (!this.gridGfx) return;
+    this.gridOX = ((this.gridOX + GRID_DX * delta / 1000) % GRID_PERIOD + GRID_PERIOD) % GRID_PERIOD;
+    this.gridOY = ((this.gridOY + GRID_DY * delta / 1000) % GRID_PERIOD + GRID_PERIOD) % GRID_PERIOD;
+    this.drawScrollingGrid();
   }
 
   private buildMenu(data?: { skipAutoRace?: boolean }): void {
@@ -155,7 +160,9 @@ export class ModeSelect extends Scene {
     });
 
     this.events.once('shutdown', () => {
-      this.stopGrid();
+      // stopGrid() is handled by Phaser destroying the scene's objects;
+      // just null the ref so update() stops drawing.
+      this.gridGfx = null;
       this.ftueEl?.remove();
       this.ftueEl = null;
       if (this.ftueResetTimer) clearTimeout(this.ftueResetTimer);
@@ -240,26 +247,15 @@ export class ModeSelect extends Scene {
   }
 
   private startGrid(): void {
-    this.gridGfx  = this.add.graphics().setDepth(-1).setScrollFactor(0);
-    this.gridOX   = 0;
-    this.gridOY   = 0;
-    this.gridLast = 0;
-
-    const tick = (ts: number) => {
-      if (!this.gridGfx) return;
-      const dt = this.gridLast ? (ts - this.gridLast) / 1000 : 0;
-      this.gridLast = ts;
-      this.gridOX = ((this.gridOX + GRID_DX * dt) % GRID_PERIOD + GRID_PERIOD) % GRID_PERIOD;
-      this.gridOY = ((this.gridOY + GRID_DY * dt) % GRID_PERIOD + GRID_PERIOD) % GRID_PERIOD;
-      this.drawScrollingGrid();
-      this.gridRaf = requestAnimationFrame(tick);
-    };
-    this.gridRaf = requestAnimationFrame(tick);
+    this.gridGfx = this.add.graphics().setDepth(-1);
+    this.gridOX  = 0;
+    this.gridOY  = 0;
+    this.drawScrollingGrid(); // initial draw so it's visible before first update()
   }
 
   private stopGrid(): void {
-    if (this.gridRaf !== null) { cancelAnimationFrame(this.gridRaf); this.gridRaf = null; }
-    this.gridGfx = null; // Phaser destroys the object on scene shutdown
+    this.gridGfx?.destroy();
+    this.gridGfx = null;
   }
 
   private drawScrollingGrid(): void {
