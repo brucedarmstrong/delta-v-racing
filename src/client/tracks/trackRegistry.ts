@@ -27,16 +27,23 @@ import squareJson       from './gms/2026_square.json';
 import testJson         from './gms/2026_test.json';
 import shortyJson       from './gms/2026_shorty.json';
 
+export type CoachMessage = {
+  turn:  number; // show BEFORE this turn (0 = before first move)
+  title: string;
+  body:  string;
+};
+
 export type TrackEntry = {
-  id:           string;
-  name:         string;
-  author:       string;
-  startX:       number;
-  startY:       number;
-  startHeading: number; // degrees CW from north; 0=N, 90=E, 180=S
-  pieces:       PlacedPiece[];
-  markers:      TrackMarker[];
-  postUrl?:     string; // Reddit post permalink; community tracks only
+  id:             string;
+  name:           string;
+  author:         string;
+  startX:         number;
+  startY:         number;
+  startHeading:   number; // degrees CW from north; 0=N, 90=E, 180=S
+  pieces:         PlacedPiece[];
+  markers:        TrackMarker[];
+  postUrl?:       string;        // Reddit post permalink; community tracks only
+  coachMessages?: CoachMessage[]; // tutorial overlay messages keyed by turn number
 };
 
 function fromGms(

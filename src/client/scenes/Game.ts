@@ -82,10 +82,11 @@ export class Game extends Scene {
   private currentGhost: GhostData | null = null;
 
   // Ghost playback — one entry per racing opponent, up to 3.
-  private ghostStates:    GhostState[] = [];
-  private pendingGhosts:  GhostData[] | null = null; // set by init(), consumed by createInner()
-  private originalGhosts: GhostData[] | null = null; // retained for restart
-  private returnTab:      string | null = null;       // tab to restore on Exit
+  private ghostStates:      GhostState[] = [];
+  private pendingGhosts:    GhostData[] | null = null; // set by init(), consumed by createInner()
+  private originalGhosts:   GhostData[] | null = null; // retained for restart
+  private returnTab:        string | null = null;       // tab to restore on Exit
+  private shownCoachTurns:  Set<number> = new Set();   // prevents re-showing coach dialogs
 
   // DOM HUD — immune to Phaser camera zoom/scroll (setScrollFactor(0) only prevents scroll, not zoom)
   private topBarEl:   HTMLElement | null = null;
@@ -189,6 +190,7 @@ export class Game extends Scene {
     this.turn = 0;
     this.crashes = 0;
     this.picking = false;
+    this.shownCoachTurns = new Set();
 
     this.dotGfx   = this.add.graphics().setDepth(-1);
     this.drawGrid();
@@ -1186,11 +1188,7 @@ export class Game extends Scene {
     const exitBtn = makeBtn('Exit', '#aaaacc', '#1a1a2a', '#444466');
     exitBtn.addEventListener('click', () => {
       overlay.remove(); this.finishOverlayEl = null;
-      if (this.returnTab) {
-        this.scene.start('TrackSelect', { activeTab: this.returnTab });
-      } else {
-        this.scene.start('ModeSelect', { skipAutoRace: true });
-      }
+      this.exitToMenu();
     });
     const viewBtn = makeBtn('View Track', '#aaccff', '#0a1828', '#334466');
     viewBtn.addEventListener('click', () => {
@@ -1644,6 +1642,16 @@ export class Game extends Scene {
   }
 
   private framePicker() {
+    // Check for a coach message due at this turn (before enabling input).
+    const coach = this.trackEntry.coachMessages?.find(
+      c => c.turn === this.turn && !this.shownCoachTurns.has(c.turn),
+    );
+    if (coach) {
+      this.shownCoachTurns.add(coach.turn);
+      this.showCoachDialog(coach.title, coach.body, () => this.framePicker());
+      return;
+    }
+
     this.hoverTarget = null;
     const pickR = Math.floor(gridPx / 2) - 1;
     const pad   = pickR + 8;
@@ -2110,6 +2118,67 @@ export class Game extends Scene {
     fn();
   }
 
+  // Navigate on Exit/Finish-Exit.
+  // If the player came from a tutorial track AND there's a pending community track
+  // waiting (stored before taking the tutorial), route through ModeSelect so it
+  // auto-launches that track. Otherwise restore the tab they were browsing.
+  private exitToMenu(): void {
+    const hasPending = !!localStorage.getItem('dv-pending-track');
+    if (hasPending && this.returnTab === 'tutorial') {
+      this.scene.start('ModeSelect');
+    } else if (this.returnTab) {
+      this.scene.start('TrackSelect', { activeTab: this.returnTab });
+    } else {
+      this.scene.start('ModeSelect', { skipAutoRace: true });
+    }
+  }
+
+  private showCoachDialog(title: string, body: string, onDismiss: () => void): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:9000',
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'background:rgba(0,0,0,0.72)',
+    ].join(';');
+
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'background:#12122a', 'border:1.5px solid #6666cc', 'border-radius:10px',
+      'padding:24px 22px 20px', 'max-width:340px', 'width:90%',
+      'box-sizing:border-box', 'color:#ccccee', 'font-family:Arial,sans-serif',
+    ].join(';');
+
+    const titleEl = document.createElement('div');
+    titleEl.textContent = title;
+    titleEl.style.cssText = 'font:bold 16px "Arial Black",Arial,sans-serif;color:#aaccff;margin-bottom:14px;';
+
+    const bodyEl = document.createElement('div');
+    bodyEl.style.cssText = 'font:14px Arial,sans-serif;line-height:1.6;color:#aaaacc;white-space:pre-wrap;margin-bottom:20px;';
+    bodyEl.textContent = body;
+
+    const btn = document.createElement('button');
+    btn.textContent = 'Got it  ›';
+    btn.style.cssText = [
+      'display:block', 'margin:0 auto', 'padding:10px 32px',
+      'background:#22224a', 'color:#ccccff',
+      'border:1.5px solid #6666cc', 'border-radius:6px',
+      'font:bold 15px Arial,sans-serif', 'cursor:pointer',
+      'pointer-events:none',  // prevent tap bleed-through from prior scene
+    ].join(';');
+    setTimeout(() => { btn.style.pointerEvents = 'auto'; }, 350);
+
+    btn.addEventListener('click', () => {
+      overlay.remove();
+      onDismiss();
+    });
+
+    card.appendChild(titleEl);
+    card.appendChild(bodyEl);
+    card.appendChild(btn);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+  }
+
   private showPreRaceDialog(onStart: () => void): void {
 
     const overlay = document.createElement('div');
@@ -2273,13 +2342,7 @@ export class Game extends Scene {
     dialog.appendChild(racerSection);
     dialog.appendChild(makeBtn('Continue', '#66ff99', () => this.resumeGame()));
     dialog.appendChild(makeBtn('Restart',  '#ffcc44', () => this.clearPauseAndGo(() => this.scene.start('Game', { track: this.trackEntry, returnTab: this.returnTab }))));
-    dialog.appendChild(makeBtn('Exit',     '#ff6666', () => this.clearPauseAndGo(() => {
-      if (this.returnTab) {
-        this.scene.start('TrackSelect', { activeTab: this.returnTab });
-      } else {
-        this.scene.start('ModeSelect', { skipAutoRace: true });
-      }
-    })));
+    dialog.appendChild(makeBtn('Exit',     '#ff6666', () => this.clearPauseAndGo(() => this.exitToMenu())));
 
     overlay.appendChild(dialog);
     return overlay;

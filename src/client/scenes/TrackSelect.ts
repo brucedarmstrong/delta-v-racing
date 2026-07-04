@@ -1,5 +1,6 @@
 import { Scene, GameObjects } from 'phaser';
 import { STANDARD_TRACKS, type TrackEntry } from '../tracks/trackRegistry';
+import { TUTORIAL_TRACKS } from '../tracks/tutorialTracks';
 import { trackBounds } from '../track/TrackLayout';
 import { drawBarriersOnCanvas } from '../track/TrackCanvasRenderer';
 import {
@@ -27,9 +28,9 @@ const THUMB_H = 88;
 const HEADER_H = 60;
 const TAB_H    = 48;
 
-type Tab = 'standard' | 'daily' | 'drafts' | 'community';
+type Tab = 'tutorial' | 'daily' | 'drafts' | 'community';
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'standard',  label: 'Standard'  },
+  { id: 'tutorial',  label: 'Tutorial'  },
   { id: 'daily',     label: 'Daily'     },
   { id: 'drafts',    label: 'Drafts'    },
   { id: 'community', label: 'Community' },
@@ -48,7 +49,7 @@ type DraftEntry = {
 type HitZone = { x: number; y: number; w: number; h: number; action: () => void };
 
 export class TrackSelect extends Scene {
-  private activeTab: Tab = 'standard';
+  private activeTab: Tab = 'tutorial';
 
   // Phaser chrome (header + tabs only — immune to scroll issues at zoom=1)
   private headerGfx!:  GameObjects.Graphics;
@@ -281,9 +282,9 @@ export class TrackSelect extends Scene {
       'box-sizing:border-box',
     ].join(';');
 
-    if (this.activeTab === 'standard') {
-      for (const track of STANDARD_TRACKS) {
-        el.appendChild(this.buildCard(track));
+    if (this.activeTab === 'tutorial') {
+      for (let i = 0; i < TUTORIAL_TRACKS.length; i++) {
+        el.appendChild(this.buildTutorialCard(TUTORIAL_TRACKS[i], i + 1));
       }
 
     } else if (this.activeTab === 'community') {
@@ -520,6 +521,67 @@ export class TrackSelect extends Scene {
   }
 
   // ── Standard track card ───────────────────────────────────────────────────────
+
+  private buildTutorialCard(track: TrackEntry, num: number): HTMLElement {
+    const descriptions = [
+      'Learn the 9-dot grid, velocity, and basic movement.',
+      'Practice braking before corners — momentum is everything.',
+      'Checkpoints, racing lines, and full-circuit strategy.',
+    ];
+
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'display:flex', 'align-items:center', 'gap:12px',
+      'background:#12122a', 'border:1px solid #3a3a6a', 'border-radius:6px',
+      'padding:10px', 'margin-bottom:10px', 'cursor:pointer',
+      '-webkit-tap-highlight-color:rgba(100,100,200,0.2)',
+      'user-select:none', '-webkit-user-select:none',
+    ].join(';');
+
+    const canvas  = document.createElement('canvas');
+    canvas.width  = THUMB_W;
+    canvas.height = THUMB_H;
+    canvas.style.cssText = 'flex-shrink:0;border:1px solid #3a3a6a;border-radius:3px;background:#0a0a16;';
+    this.drawThumbnail(canvas, track);
+
+    const info = document.createElement('div');
+    info.style.cssText = 'flex:1;min-width:0;';
+
+    const numLabel = document.createElement('div');
+    numLabel.textContent = `LESSON ${num}`;
+    numLabel.style.cssText = 'font:bold 10px Arial,sans-serif;letter-spacing:0.12em;color:#556688;margin-bottom:3px;';
+
+    const name = document.createElement('div');
+    name.textContent = track.name.replace(/^Tutorial \d+ — /, '');
+    name.style.cssText = 'font:bold 16px "Arial Black",Arial,sans-serif;color:#e8e8ff;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+
+    const desc = document.createElement('div');
+    desc.textContent = descriptions[num - 1] ?? '';
+    desc.style.cssText = 'font:12px Arial,sans-serif;color:#6666aa;';
+
+    info.appendChild(numLabel);
+    info.appendChild(name);
+    info.appendChild(desc);
+
+    const arrow = document.createElement('div');
+    arrow.textContent = '›';
+    arrow.style.cssText = 'font:28px Arial,sans-serif;color:#5555aa;flex-shrink:0;line-height:1;';
+
+    card.appendChild(canvas);
+    card.appendChild(info);
+    card.appendChild(arrow);
+
+    card.addEventListener('click', () => {
+      arrow.textContent = '…';
+      card.style.opacity = '0.6';
+      card.style.pointerEvents = 'none';
+      fetchRaceGhosts(track.id, track)
+        .then(ghosts => this.scene.start('Game', { track, ghosts, returnTab: 'tutorial' }))
+        .catch(()    => this.scene.start('Game', { track, returnTab: 'tutorial' }));
+    });
+
+    return card;
+  }
 
   private buildCard(track: TrackEntry): HTMLElement {
     const card = document.createElement('div');
