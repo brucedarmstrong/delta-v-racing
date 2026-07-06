@@ -1699,10 +1699,23 @@ export class Game extends Scene {
     const natY  = this.gy + this.velY;
 
     // Bounding box that must be fully visible: car position + all 9 pick targets.
-    const x0 = Math.min(this.gx, natX - 1) * gridPx - pad;
-    const y0 = Math.min(this.gy, natY - 1) * gridPx - pad;
-    const x1 = Math.max(this.gx, natX + 1) * gridPx + pad;
-    const y1 = Math.max(this.gy, natY + 1) * gridPx + pad;
+    let x0 = Math.min(this.gx, natX - 1) * gridPx - pad;
+    let y0 = Math.min(this.gy, natY - 1) * gridPx - pad;
+    let x1 = Math.max(this.gx, natX + 1) * gridPx + pad;
+    let y1 = Math.max(this.gy, natY + 1) * gridPx + pad;
+
+    // Look-ahead: extend the box 3 grid cells further along the velocity direction
+    // so the camera reveals a bit of track beyond the pick targets.
+    const speed = Math.hypot(this.velX, this.velY);
+    if (speed > 0) {
+      const LOOK = 3 * gridPx;
+      const lx   = natX * gridPx + (this.velX / speed) * LOOK;
+      const ly   = natY * gridPx + (this.velY / speed) * LOOK;
+      x0 = Math.min(x0, lx - pad);
+      y0 = Math.min(y0, ly - pad);
+      x1 = Math.max(x1, lx + pad);
+      y1 = Math.max(y1, ly + pad);
+    }
 
     const cx    = (x0 + x1) / 2;
     const cy    = (y0 + y1) / 2;
