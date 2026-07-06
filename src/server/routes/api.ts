@@ -350,6 +350,33 @@ api.post('/debug/purge-bad-ghosts', async (c) => {
   return c.json({ deleted: deleted.length, kept: kept.length, deletedList: deleted });
 });
 
+// Purge AI ghosts that hit the greedy solver's 600-turn cap without finishing.
+// Safe to call repeatedly — good AI ghosts (BFS-solved) have far fewer moves and
+// won't be touched. Purged slots regenerate correctly on next player visit.
+api.post('/debug/purge-incomplete-ai-ghosts', async (c) => {
+  const GREEDY_SKILLS: AiSkillLevel[] = ['average', 'rookie'];
+  const CAP = 600; // MAX_GREEDY_TURNS from GhostSolver.ts
+  const trackIds = await redis.hKeys('lb:tracks');
+  const purged: string[] = [];
+
+  for (const trackId of trackIds) {
+    for (const skill of GREEDY_SKILLS) {
+      const raw = await redis.get(`ai-ghost:${trackId}:${skill}`);
+      if (!raw) continue;
+      try {
+        const g = JSON.parse(raw) as { moves?: unknown[] };
+        if (Array.isArray(g.moves) && g.moves.length >= CAP) {
+          await redis.del(`ai-ghost:${trackId}:${skill}`);
+          purged.push(`${trackId}/${skill} (${g.moves.length} moves)`);
+        }
+      } catch { /* skip malformed */ }
+    }
+  }
+
+  console.log(`[purge-ai] removed ${purged.length} incomplete AI ghosts`);
+  return c.json({ type: 'purge_incomplete_ai_ghosts', purged: purged.length, list: purged });
+});
+
 api.delete('/debug/ghost/:trackId/:username', async (c) => {
   const { trackId, username } = c.req.param();
   await redis.del(`ghost:${trackId}:${username}`);

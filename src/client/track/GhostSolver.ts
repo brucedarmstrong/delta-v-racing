@@ -39,7 +39,7 @@ function markerContains(m: TrackMarker, wx: number, wy: number, gridPx: number):
 }
 
 // Samples 8 points along the grid-space segment and tests each in world space.
-function moveCrossesMarker(
+export function moveCrossesMarker(
   fromGX: number, fromGY: number,
   toGX:   number, toGY:   number,
   m: TrackMarker, gridPx: number,
@@ -166,10 +166,11 @@ function greedySolve(
   gridPx: number,
   maxSpeed: number,
   lookahead: number,
-): GhostMove[] {
+): GhostMove[] | null {
   let gx = startGX, gy = startGY, vx = 0, vy = 0;
   const cpTouched = new Array<boolean>(checkpoints.length).fill(false);
   const moves: GhostMove[] = [];
+  let finished = false;
 
   // Nearest-neighbour: pick the closest untouched checkpoint each turn,
   // since checkpoint visit order is free and part of the player's strategy.
@@ -239,12 +240,13 @@ function greedySolve(
       }
 
       if (cpTouched.every(Boolean) && moveCrossesMarker(fromGX, fromGY, gx, gy, finish, gridPx)) {
+        finished = true;
         break;
       }
     }
   }
 
-  return moves;
+  return finished ? moves : null;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
