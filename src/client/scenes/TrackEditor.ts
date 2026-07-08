@@ -491,8 +491,8 @@ export class TrackEditor extends Scene {
     hdr.appendChild(sep());
     hdr.appendChild(snapBtn);
     hdr.appendChild(sep());
-    hdr.appendChild(mkBtn('↩', 'Undo', '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
-    hdr.appendChild(mkBtn('↪', 'Redo', '#ffaa44', '#1a0e00', '#553300', () => this.redo()));
+    hdr.appendChild(mkBtn('↶', 'Undo', '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
+    hdr.appendChild(mkBtn('↷', 'Redo', '#ffaa44', '#1a0e00', '#553300', () => this.redo()));
     hdr.appendChild(sep());
     hdr.appendChild(mkBtn('📂', 'My drafts', '#aaaaff', '#0a0a22', '#333366', () => this.openDrafts()));
     hdr.appendChild(mkBtn('✓ Save', 'Save track', '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
@@ -1525,24 +1525,24 @@ export class TrackEditor extends Scene {
     // Spacer — pushes rotate/copy/delete to the right
     { const sp = document.createElement('div'); sp.style.cssText = 'flex:1;min-width:4px;'; el.appendChild(sp); }
 
-    // Rotate ↶ angle ↷ — visible whenever anything is selected
+    // Rotate - angle + — visible whenever anything is selected
     if (showRotate) {
       const rot =
         sel!.kind === 'car'          ? this.curStartH
         : sel!.kind === 'finish'     ? (this.finishMarker?.rotation ?? 0)
         : sel!.kind === 'checkpoint' ? (this.checkpoints[(sel as { kind: 'checkpoint'; idx: number }).idx]?.rotation ?? 0)
         : selPiece!.rotation;
-      el.appendChild(mkB('↶', 'Rotate −15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(-15)));
+      el.appendChild(mkB('-', 'Rotate −15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(-15)));
       const angEl = document.createElement('span');
       angEl.textContent = `${rot}°`;
       angEl.style.cssText = 'color:#8888aa;font:12px Arial,sans-serif;min-width:34px;text-align:center;flex-shrink:0;';
       el.appendChild(angEl);
-      el.appendChild(mkB('↷', 'Rotate +15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(15)));
+      el.appendChild(mkB('+', 'Rotate +15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(15)));
     }
 
     // Copy / Paste — pieces only
     if (showCopy) {
-      el.appendChild(mkB('Copy', 'Copy piece', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
+      el.appendChild(mkB('🗐', 'Copy piece', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
       if (this.clipboard)
         el.appendChild(mkB('📋', 'Paste copy', '#aaaaff', '#0a0a22', '#333366', () => this.paste()));
     }
