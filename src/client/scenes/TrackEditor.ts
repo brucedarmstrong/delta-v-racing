@@ -176,6 +176,7 @@ function trySnapPiece(dragged: PlacedPiece, idx: number, all: PlacedPiece[]): Pl
 
 const PAL_COLOR = '#22ee55';
 
+// Three-pass neon: wide bloom → core line → white highlight (used for selected/active state)
 function palNeon(ctx: CanvasRenderingContext2D, path: () => void, lw: number): void {
   ctx.save();
   ctx.shadowColor = PAL_COLOR; ctx.shadowBlur = lw * 4;
@@ -194,9 +195,22 @@ function palNeon(ctx: CanvasRenderingContext2D, path: () => void, lw: number): v
   ctx.restore();
 }
 
+// Two-pass flat: core line + white highlight, no shadowBlur (used for inactive/unselected state)
+function palFlat(ctx: CanvasRenderingContext2D, path: () => void, lw: number): void {
+  ctx.save();
+  ctx.strokeStyle = PAL_COLOR; ctx.lineWidth = lw; ctx.lineCap = 'round';
+  path(); ctx.stroke();
+  ctx.restore();
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  ctx.lineWidth = Math.max(0.5, lw * 0.35); ctx.lineCap = 'round';
+  path(); ctx.stroke();
+  ctx.restore();
+}
+
 // Two parallel walls at 45°, using exact piece proportions (HALF_TRACK width, real length).
 // The canvas is rotated 45° so local-space coordinates draw correctly.
-function drawStraightIcon(canvas: HTMLCanvasElement, size: StraightSize, walls: WallVariant = 'both'): void {
+function drawStraightIcon(canvas: HTMLCanvasElement, size: StraightSize, walls: WallVariant = 'both', glow = true): void {
   const ctx = canvas.getContext('2d')!;
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
@@ -209,11 +223,12 @@ function drawStraightIcon(canvas: HTMLCanvasElement, size: StraightSize, walls: 
   const hw = HALF_TRACK * scale;
   const hl = half * scale;
   const lw = 1.8;
+  const stroke = glow ? palNeon : palFlat;
   ctx.save();
   ctx.translate(W / 2, H / 2);
   ctx.rotate(Math.PI / 4);
-  if (walls !== 'inner') palNeon(ctx, () => { ctx.beginPath(); ctx.moveTo(-hw, -hl); ctx.lineTo(-hw, +hl); }, lw);
-  if (walls !== 'outer') palNeon(ctx, () => { ctx.beginPath(); ctx.moveTo(+hw, -hl); ctx.lineTo(+hw, +hl); }, lw);
+  if (walls !== 'inner') stroke(ctx, () => { ctx.beginPath(); ctx.moveTo(-hw, -hl); ctx.lineTo(-hw, +hl); }, lw);
+  if (walls !== 'outer') stroke(ctx, () => { ctx.beginPath(); ctx.moveTo(+hw, -hl); ctx.lineTo(+hw, +hl); }, lw);
   ctx.restore();
 }
 
@@ -225,6 +240,7 @@ function drawCornerIcon(
   angleDeg: CornerAngle,
   flip: boolean,
   walls: WallVariant = 'both',
+  glow = true,
 ): void {
   const ctx = canvas.getContext('2d')!;
   const W = canvas.width, H = canvas.height;
@@ -237,13 +253,14 @@ function drawCornerIcon(
   const scale = Math.min(avW / rO, contentH > 2 ? avH / contentH : avW / (rO * 0.2));
   const outerR = rO * scale, innerR = rI * scale;
   const lw = Math.max(1, W / 32);
+  const stroke = glow ? palNeon : palFlat;
   ctx.save();
   if (flip) { ctx.translate(W, 0); ctx.scale(-1, 1); }
   const ax = W - margin, ay = H - margin;
   const s = Math.PI, e = Math.PI + θ;
-  if (walls !== 'inner') palNeon(ctx, () => { ctx.beginPath(); ctx.arc(ax, ay, outerR, s, e, false); }, lw);
+  if (walls !== 'inner') stroke(ctx, () => { ctx.beginPath(); ctx.arc(ax, ay, outerR, s, e, false); }, lw);
   if (walls !== 'outer' && innerR > 0.5) {
-    palNeon(ctx, () => { ctx.beginPath(); ctx.arc(ax, ay, innerR, s, e, false); }, lw);
+    stroke(ctx, () => { ctx.beginPath(); ctx.arc(ax, ay, innerR, s, e, false); }, lw);
   }
   ctx.restore();
 }
@@ -1296,14 +1313,14 @@ export class TrackEditor extends Scene {
     type TabDef = {
       tab:      PalTab;
       label:    string;
-      draw?:    (c: HTMLCanvasElement) => void;
+      draw?:    (c: HTMLCanvasElement, glow: boolean) => void;
       imgBase?: string; // e.g. 'assets/markers/tile_finish_' — appended with '0.png'/'1.png'
     };
     const ICO = 36;
     const defs: TabDef[] = [
-      { tab: 'straight',   label: 'Straight', draw: c => drawStraightIcon(c, 75) },
-      { tab: 'tight',      label: 'Tight',    draw: c => drawCornerIcon(c, 'corner',     90, false) },
-      { tab: 'big',        label: 'Big',      draw: c => drawCornerIcon(c, 'big_corner', 90, false) },
+      { tab: 'straight',   label: 'Straight', draw: (c, g) => drawStraightIcon(c, 75, 'both', g) },
+      { tab: 'tight',      label: 'Tight',    draw: (c, g) => drawCornerIcon(c, 'corner',     90, false, 'both', g) },
+      { tab: 'big',        label: 'Big',      draw: (c, g) => drawCornerIcon(c, 'big_corner', 90, false, 'both', g) },
       { tab: 'finish',     label: 'Finish',   imgBase: 'assets/markers/tile_finish_' },
       { tab: 'checkpoint', label: 'Chkpt',    imgBase: 'assets/markers/tile_checkpoint_' },
     ];
@@ -1326,8 +1343,7 @@ export class TrackEditor extends Scene {
         const c = document.createElement('canvas');
         c.width = ICO; c.height = ICO;
         c.style.cssText = `width:${ICO}px;height:${ICO}px;display:block;`;
-        if (!active) c.style.filter = 'brightness(0.35) saturate(0.5)';
-        def.draw(c);
+        def.draw(c, active);
         btn.appendChild(c);
       } else if (def.imgBase) {
         const img = document.createElement('img');
@@ -1357,7 +1373,7 @@ export class TrackEditor extends Scene {
     // Helper: canvas piece button. Canvas fills button width via CSS so 6 buttons
     // fit without overflow even on narrow phones (min-width:0 allows flex shrinking).
     const mkCanvasBtn = (
-      draw: (c: HTMLCanvasElement) => void,
+      draw: (c: HTMLCanvasElement, glow: boolean) => void,
       label: string,
       active: boolean,
     ): HTMLButtonElement => {
@@ -1373,7 +1389,7 @@ export class TrackEditor extends Scene {
       c.width = ICO; c.height = ICO;
       // width:100% makes the canvas fill the button; aspect-ratio keeps it square.
       c.style.cssText = 'width:100%;aspect-ratio:1;display:block;';
-      draw(c);
+      draw(c, active);
       btn.appendChild(c);
       if (label) {
         const sp = document.createElement('span');
@@ -1413,7 +1429,7 @@ export class TrackEditor extends Scene {
       const row = this.mkRow(); row.style.gap = '3px';
       const sizes: [StraightSize, string][] = [[25,'XS'],[50,'S'],[75,'M'],[100,'L']];
       for (const [sz, lbl] of sizes) {
-        const b = mkCanvasBtn(c => drawStraightIcon(c, sz, this.palWalls), lbl, false);
+        const b = mkCanvasBtn((c, g) => drawStraightIcon(c, sz, this.palWalls, g), lbl, false);
         b.addEventListener('click', () => this.addPieceFromPalette({ type:'straight', size:sz, walls:this.palWalls }));
         row.appendChild(b);
       }
@@ -1428,7 +1444,7 @@ export class TrackEditor extends Scene {
     if (this.palTab === 'tight') {
       const row = this.mkRow(); row.style.gap = '3px';
       for (const ang of CORNER_ANGLES) {
-        const b = mkCanvasBtn(c => drawCornerIcon(c, 'corner', ang, this.palFlip, this.palWalls), `${ang}°`, this.palAngle === ang);
+        const b = mkCanvasBtn((c, g) => drawCornerIcon(c, 'corner', ang, this.palFlip, this.palWalls, g), `${ang}°`, this.palAngle === ang);
         b.addEventListener('click', () => {
           this.palAngle = ang;
           this.addPieceFromPalette({ type:'corner', angle:ang, walls:this.palWalls, flip:this.palFlip });
@@ -1442,7 +1458,7 @@ export class TrackEditor extends Scene {
     if (this.palTab === 'big') {
       const row = this.mkRow(); row.style.gap = '3px';
       for (const ang of CORNER_ANGLES) {
-        const b = mkCanvasBtn(c => drawCornerIcon(c, 'big_corner', ang, this.palFlip, this.palWalls), `${ang}°`, this.palAngle === ang);
+        const b = mkCanvasBtn((c, g) => drawCornerIcon(c, 'big_corner', ang, this.palFlip, this.palWalls, g), `${ang}°`, this.palAngle === ang);
         b.addEventListener('click', () => {
           this.palAngle = ang;
           this.addPieceFromPalette({ type:'big_corner', angle:ang, walls:this.palWalls, flip:this.palFlip });
