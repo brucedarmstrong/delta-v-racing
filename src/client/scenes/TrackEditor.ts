@@ -336,7 +336,6 @@ export class TrackEditor extends Scene {
   // DOM
   private hdrEl:     HTMLElement | null       = null;
   private palEl:     HTMLElement | null       = null;
-  private propsEl:   HTMLElement | null       = null;
   private snapBtnEl: HTMLButtonElement | null = null;
   // Context
   private mineTrackId: string | null = null;
@@ -432,10 +431,8 @@ export class TrackEditor extends Scene {
       window.removeEventListener('keydown', onEsc);
       this.hdrEl?.remove();
       this.palEl?.remove();
-      this.propsEl?.remove();
       this.hdrEl = null;
       this.palEl = null;
-      this.propsEl = null;
     });
   }
 
@@ -997,7 +994,7 @@ export class TrackEditor extends Scene {
       this.updateBarrierImg();
       this.updateSelectedHighlight();
       this.drawSelectionOverlay();
-      this.rebuildPropsStrip();
+      this.rebuildCtrlRow();
     }
 
     this.dragOp = null;
@@ -1008,13 +1005,13 @@ export class TrackEditor extends Scene {
   private selectPiece(idx: number): void {
     this.selection = { kind: 'piece', idx };
     this.updateSelectedHighlight();
-    this.rebuildPropsStrip();
+    this.rebuildCtrlRow();
     this.drawSelectionOverlay();
   }
 
   private selectMarker(sel: Exclude<Selection, null | { kind: 'piece' }>): void {
     this.selection = sel;
-    this.rebuildPropsStrip();
+    this.rebuildCtrlRow();
     this.drawSelectionOverlay();
   }
 
@@ -1024,7 +1021,7 @@ export class TrackEditor extends Scene {
     this.connGfx.clear();
     this.selectedPieceImg?.destroy();
     this.selectedPieceImg = null;
-    this.rebuildPropsStrip();
+    this.rebuildCtrlRow();
   }
 
   // ── Piece & marker management ─────────────────────────────────────────────────
@@ -1060,7 +1057,7 @@ export class TrackEditor extends Scene {
         this.deselectAll();
       } else if (si > idx) {
         this.selection = { kind: 'piece', idx: si - 1 };
-        this.rebuildPropsStrip();
+        this.rebuildCtrlRow();
       }
     }
     this.updateBarrierImg();
@@ -1096,17 +1093,17 @@ export class TrackEditor extends Scene {
       this.updateBarrierImg();
       this.updateSelectedHighlight();
       this.drawSelectionOverlay();
-      this.rebuildPropsStrip();
+      this.rebuildCtrlRow();
       this.isDirty = true;
     } else if (this.selection?.kind === 'car') {
       this.curStartH = ((this.curStartH + delta) % 360 + 360) % 360;
-      this.updateStartCarImg(); this.rebuildPropsStrip(); this.isDirty = true;
+      this.updateStartCarImg(); this.rebuildCtrlRow(); this.isDirty = true;
     } else if (this.selection?.kind === 'finish' && this.finishMarker) {
       this.finishMarker.rotation = ((this.finishMarker.rotation + delta) % 360 + 360) % 360;
-      this.updateFinishImg(); this.rebuildPropsStrip(); this.isDirty = true;
+      this.updateFinishImg(); this.rebuildCtrlRow(); this.isDirty = true;
     } else if (this.selection?.kind === 'checkpoint') {
       const cp = this.checkpoints[this.selection.idx];
-      if (cp) { cp.rotation = ((cp.rotation + delta) % 360 + 360) % 360; this.updateCheckpointImgs(); this.rebuildPropsStrip(); this.isDirty = true; }
+      if (cp) { cp.rotation = ((cp.rotation + delta) % 360 + 360) % 360; this.updateCheckpointImgs(); this.rebuildCtrlRow(); this.isDirty = true; }
     }
   }
 
@@ -1114,7 +1111,7 @@ export class TrackEditor extends Scene {
     if (this.selection?.kind !== 'piece') return;
     this.saveUndo();
     this.pieces[this.selection.idx] = { ...this.pieces[this.selection.idx], walls };
-    this.updateBarrierImg(); this.updateSelectedHighlight(); this.drawSelectionOverlay(); this.rebuildPropsStrip(); this.isDirty = true;
+    this.updateBarrierImg(); this.updateSelectedHighlight(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
   }
 
   private changePieceFlip(flip: boolean): void {
@@ -1123,7 +1120,7 @@ export class TrackEditor extends Scene {
     if (p.type === 'straight') return;
     this.saveUndo();
     this.pieces[this.selection.idx] = { ...(p as CornerDef & { x: number; y: number; rotation: number }), flip };
-    this.updateBarrierImg(); this.updateSelectedHighlight(); this.drawSelectionOverlay(); this.rebuildPropsStrip(); this.isDirty = true;
+    this.updateBarrierImg(); this.updateSelectedHighlight(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
   }
 
   private deleteSelectedPiece(): void {
@@ -1134,8 +1131,8 @@ export class TrackEditor extends Scene {
   private copySelected(): void {
     if (this.selection?.kind !== 'piece') return;
     this.clipboard = { ...this.pieces[this.selection.idx] };
-    this.showToast('Copied — use Paste in props strip');
-    this.rebuildPropsStrip();
+    this.showToast('Copied — use Paste in the controls bar');
+    this.rebuildCtrlRow();
   }
 
   private paste(): void {
@@ -1207,11 +1204,27 @@ export class TrackEditor extends Scene {
       'user-select:none', '-webkit-user-select:none', 'gap:4px',
     ].join(';');
 
-    // Content area — justify-content:flex-end pins buttons to the bottom (flush with tabs).
+    // Spacer — pushes the button wrapper to the bottom of the palette.
+    const spacer = document.createElement('div');
+    spacer.style.flex = '1';
+    el.appendChild(spacer);
+
+    // Wrapper — ctrl row + piece buttons are always adjacent at the bottom.
+    const wrapperEl = document.createElement('div');
+    wrapperEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;flex-shrink:0;';
+    el.appendChild(wrapperEl);
+
+    // Unified ctrl row: palette defaults when nothing selected, piece/marker controls when selected.
+    const ctrlEl = document.createElement('div');
+    ctrlEl.id = 'ed-ctrl';
+    ctrlEl.style.cssText = 'display:none;gap:5px;align-items:center;overflow-x:auto;';
+    wrapperEl.appendChild(ctrlEl);
+
+    // Piece buttons content area.
     const contentEl = document.createElement('div');
     contentEl.id = 'ed-content';
-    contentEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;flex:1;min-height:0;justify-content:flex-end;';
-    el.appendChild(contentEl);
+    contentEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+    wrapperEl.appendChild(contentEl);
 
     // Tab row — always at the very bottom
     const tabRow = document.createElement('div');
@@ -1221,23 +1234,8 @@ export class TrackEditor extends Scene {
 
     document.body.appendChild(el);
     this.palEl = el;
-
-    // Props bar: separate fixed element that floats above the palette.
-    // It takes zero space in the palette and slides up from the palette edge when shown.
-    const propsEl = document.createElement('div');
-    propsEl.id = 'ed-props';
-    propsEl.style.cssText = [
-      'position:fixed', `bottom:${PALETTE_H}px`, 'left:0', 'right:0',
-      'background:#0d0d20', 'border-top:1px solid #3a3a6a',
-      'display:flex', 'gap:5px', 'align-items:center',
-      'padding:4px 8px', 'z-index:99', 'overflow-x:auto',
-      'transform:translateY(100%)', 'opacity:0', 'pointer-events:none',
-      'transition:transform 0.15s ease-out,opacity 0.1s',
-      'user-select:none', '-webkit-user-select:none',
-    ].join(';');
-    document.body.appendChild(propsEl);
-    this.propsEl = propsEl;
     this.rebuildTabs();
+    this.rebuildCtrlRow();
     this.rebuildContent();
   }
 
@@ -1365,7 +1363,6 @@ export class TrackEditor extends Scene {
 
     // ─ Straight ─
     if (this.palTab === 'straight') {
-      el.appendChild(this.mkCtrlRow('straight', false));
       const row = this.mkRow(); row.style.gap = '3px';
       const sizes: [StraightSize, string][] = [[25,'XS'],[50,'S'],[75,'M'],[100,'L']];
       for (const [sz, lbl] of sizes) {
@@ -1382,7 +1379,6 @@ export class TrackEditor extends Scene {
 
     // ─ Tight corner ─
     if (this.palTab === 'tight') {
-      el.appendChild(this.mkCtrlRow('corner', true));
       const row = this.mkRow(); row.style.gap = '3px';
       for (const ang of CORNER_ANGLES) {
         const b = mkCanvasBtn(c => drawCornerIcon(c, 'corner', ang, this.palFlip, this.palWalls), `${ang}°`, this.palAngle === ang);
@@ -1397,7 +1393,6 @@ export class TrackEditor extends Scene {
 
     // ─ Big corner ─
     if (this.palTab === 'big') {
-      el.appendChild(this.mkCtrlRow('corner', true));
       const row = this.mkRow(); row.style.gap = '3px';
       for (const ang of CORNER_ANGLES) {
         const b = mkCanvasBtn(c => drawCornerIcon(c, 'big_corner', ang, this.palFlip, this.palWalls), `${ang}°`, this.palAngle === ang);
@@ -1431,65 +1426,40 @@ export class TrackEditor extends Scene {
       row.appendChild(bG); row.appendChild(bC);
       el.appendChild(row);
     }
+
+    this.rebuildCtrlRow();
   }
 
-  // Controls row: single cycling wall-toggle button + optional L/R flip buttons.
-  // toggleKind drives the toggle icon: 'straight' → vertical XS lines, 'corner' → 30° arc.
-  private mkCtrlRow(toggleKind: 'straight' | 'corner', showFlip: boolean): HTMLDivElement {
-    const row = this.mkRow();
+  // ── Unified ctrl row ─────────────────────────────────────────────────────────
+  // Shown when: any selection (piece/marker), or a piece tab with wall/flip options.
+  // Buttons adapt to context: palette defaults when nothing selected; piece/marker
+  // controls when something is selected.
 
-    if (showFlip) {
-      row.appendChild(this.mkOptBtn('← L', this.palFlip,  () => { this.palFlip = true;  this.rebuildContent(); }));
-      row.appendChild(this.mkOptBtn('R →', !this.palFlip, () => { this.palFlip = false; this.rebuildContent(); }));
-    }
-    // Spacer pushes the wall-toggle to the right regardless of whether flip buttons are shown.
-    { const sp = document.createElement('div'); sp.style.cssText = 'flex:1;min-width:4px;'; row.appendChild(sp); }
-
-    // Wall toggle: one canvas button that cycles both → outer → inner → both.
-    const TSIZE = 28;
-    const togBtn = document.createElement('button');
-    togBtn.style.cssText = [
-      'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
-      'gap:2px', 'padding:3px 5px', 'border-radius:5px', 'cursor:pointer', 'flex-shrink:0',
-      'background:#111128;border:1px solid #3a3a60;',
-    ].join(';');
-    const togCanvas = document.createElement('canvas');
-    togCanvas.width = TSIZE; togCanvas.height = TSIZE;
-    togCanvas.style.cssText = `width:${TSIZE}px;height:${TSIZE}px;display:block;`;
-    drawWallToggleIcon(togCanvas, this.palWalls, toggleKind);
-    const wallLabel = document.createElement('span');
-    wallLabel.style.cssText = 'font:bold 7px Arial,sans-serif;line-height:1;color:#5599aa;';
-    const wallNames: Record<WallVariant, string> = { both: 'Both', outer: 'Outer', inner: 'Inner' };
-    wallLabel.textContent = wallNames[this.palWalls];
-    togBtn.appendChild(togCanvas);
-    togBtn.appendChild(wallLabel);
-    togBtn.addEventListener('click', () => {
-      const cycle: WallVariant[] = ['both', 'outer', 'inner'];
-      this.palWalls = cycle[(cycle.indexOf(this.palWalls) + 1) % cycle.length];
-      this.rebuildContent();
-    });
-    row.appendChild(togBtn);
-
-    return row;
-  }
-
-  // ── Properties strip ──────────────────────────────────────────────────────────
-
-  private rebuildPropsStrip(): void {
-    const el = this.propsEl;
+  private rebuildCtrlRow(): void {
+    const el = document.getElementById('ed-ctrl');
     if (!el) return;
     el.innerHTML = '';
 
-    if (!this.selection) {
-      el.style.transform = 'translateY(100%)';
-      el.style.opacity = '0';
-      el.style.pointerEvents = 'none';
-      el.innerHTML = '';
+    const sel = this.selection;
+    const tab = this.palTab;
+
+    const selPiece    = sel?.kind === 'piece' ? this.pieces[(sel as { kind: 'piece'; idx: number }).idx] : null;
+    const isCornerSel = !!selPiece && selPiece.type !== 'straight';
+    const isCornerTab = tab === 'tight' || tab === 'big';
+    const isPieceTab  = tab === 'straight' || tab === 'tight' || tab === 'big';
+
+    const showFlip   = (!sel && isCornerTab) || isCornerSel;
+    const showWall   = (!sel && isPieceTab)  || !!selPiece;
+    const showRotate = !!sel;
+    const showCopy   = !!selPiece;
+    const showDelete = !!selPiece || sel?.kind === 'finish' || sel?.kind === 'checkpoint';
+    const showLabel  = !!sel && sel.kind !== 'piece';
+
+    if (!showFlip && !showWall && !showRotate) {
+      el.style.display = 'none';
       return;
     }
-    el.style.transform = 'translateY(0)';
-    el.style.opacity = '1';
-    el.style.pointerEvents = 'auto';
+    el.style.display = 'flex';
 
     const mkB = (text: string, title: string, color: string, bg: string, border: string, fn: () => void) => {
       const b = document.createElement('button');
@@ -1499,96 +1469,105 @@ export class TrackEditor extends Scene {
       return b;
     };
     const mkOpt = (text: string, active: boolean, fn: () => void) =>
-      mkB(text, text, active ? '#ccccff' : '#6666aa', active ? '#22224a' : '#111128', active ? '#6666cc' : '#2a2a44', fn);
-    const flex = () => { const d = document.createElement('div'); d.style.flex='1'; return d; };
+      mkB(text, text,
+        active ? '#ccccff' : '#6666aa',
+        active ? '#22224a' : '#111128',
+        active ? '#6666cc' : '#2a2a44',
+        fn);
 
-    if (this.selection.kind === 'piece') {
-      const p = this.pieces[this.selection.idx];
-      if (!p) return;
-
-      // Wall toggle — single cycling button matching the palette control style.
-      {
-        const TSIZE = 28;
-        const togKind: 'straight' | 'corner' = p.type === 'straight' ? 'straight' : 'corner';
-        const togBtn = document.createElement('button');
-        togBtn.style.cssText = [
-          'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
-          'gap:2px', 'padding:3px 5px', 'border-radius:5px', 'cursor:pointer', 'flex-shrink:0',
-          'background:#111128;border:1px solid #3a3a60;',
-        ].join(';');
-        const togCanvas = document.createElement('canvas');
-        togCanvas.width = TSIZE; togCanvas.height = TSIZE;
-        togCanvas.style.cssText = `width:${TSIZE}px;height:${TSIZE}px;display:block;`;
-        drawWallToggleIcon(togCanvas, p.walls, togKind);
-        const togLabel = document.createElement('span');
-        togLabel.style.cssText = 'font:bold 7px Arial,sans-serif;line-height:1;color:#5599aa;';
-        const wallNames: Record<WallVariant, string> = { both: 'Both', outer: 'Outer', inner: 'Inner' };
-        togLabel.textContent = wallNames[p.walls];
-        togBtn.appendChild(togCanvas);
-        togBtn.appendChild(togLabel);
-        togBtn.addEventListener('click', () => {
-          const cycle: WallVariant[] = ['both', 'outer', 'inner'];
-          const next = cycle[(cycle.indexOf(p.walls) + 1) % cycle.length];
-          this.changePieceWalls(next);
-        });
-        el.appendChild(togBtn);
-      }
-
-      // Flip toggle (corners only)
-      if (p.type !== 'straight') {
-        const flip = (p as CornerDef).flip ?? false;
-        el.appendChild(mkOpt(flip ? '◀ L' : 'R ▶', false, () => this.changePieceFlip(!flip)));
-      }
-
-      el.appendChild(flex());
-
-      // Rotation
-      el.appendChild(mkB('↶', 'Rotate −15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(-15)));
-      const angEl = document.createElement('span');
-      angEl.textContent = `${p.rotation}°`;
-      angEl.style.cssText = 'color:#8888aa;font:12px Arial,sans-serif;min-width:34px;text-align:center;flex-shrink:0;';
-      el.appendChild(angEl);
-      el.appendChild(mkB('↷', 'Rotate +15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(15)));
-
-      el.appendChild(mkB('✂', 'Copy', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
-      if (this.clipboard)
-        el.appendChild(mkB('📋', 'Paste copy', '#aaaaff', '#0a0a22', '#333366', () => this.paste()));
-      el.appendChild(mkB('🗑', 'Delete', '#ff8888', '#1a0808', '#663333', () => this.deleteSelectedPiece()));
-    } else {
-      // Car / finish / checkpoint
-      const rot =
-        this.selection.kind === 'car'        ? this.curStartH
-        : this.selection.kind === 'finish'   ? (this.finishMarker?.rotation ?? 0)
-        : (this.checkpoints[this.selection.idx]?.rotation ?? 0);
+    // Marker label (car / finish / checkpoint)
+    if (showLabel) {
       const label =
-        this.selection.kind === 'car'        ? '🚗 Start'
-        : this.selection.kind === 'finish'   ? '⚑ Finish'
-        : `◎ CP ${(this.selection as { kind:'checkpoint';idx:number}).idx + 1}`;
-
+        sel!.kind === 'car'          ? '🚗 Start'
+        : sel!.kind === 'finish'     ? '⚑ Finish'
+        : `◎ CP ${(sel as { kind: 'checkpoint'; idx: number }).idx + 1}`;
       const lEl = document.createElement('span');
       lEl.textContent = label;
       lEl.style.cssText = 'color:#aaaacc;font:bold 12px Arial,sans-serif;flex-shrink:0;padding-right:2px;';
       el.appendChild(lEl);
-      el.appendChild(flex());
+    }
 
-      el.appendChild(mkB('↶', '−15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(-15)));
+    // L / R flip — sets palFlip (no selection) or piece flip (corner selected)
+    if (showFlip) {
+      const curFlip = isCornerSel ? ((selPiece as CornerDef).flip ?? false) : this.palFlip;
+      el.appendChild(mkOpt('← L', curFlip, () => {
+        if (isCornerSel) this.changePieceFlip(true);
+        else { this.palFlip = true; this.rebuildContent(); }
+      }));
+      el.appendChild(mkOpt('R →', !curFlip, () => {
+        if (isCornerSel) this.changePieceFlip(false);
+        else { this.palFlip = false; this.rebuildContent(); }
+      }));
+    }
+
+    // Spacer — pushes wall toggle to the right
+    { const sp = document.createElement('div'); sp.style.cssText = 'flex:1;min-width:4px;'; el.appendChild(sp); }
+
+    // Wall toggle — cycles palWalls (no selection) or piece walls (piece selected)
+    if (showWall) {
+      const curWalls: WallVariant = selPiece ? selPiece.walls : this.palWalls;
+      const togKind: 'straight' | 'corner' =
+        (selPiece ? selPiece.type !== 'straight' : isCornerTab) ? 'corner' : 'straight';
+      const TSIZE = 28;
+      const togBtn = document.createElement('button');
+      togBtn.style.cssText = [
+        'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
+        'gap:2px', 'padding:3px 5px', 'border-radius:5px', 'cursor:pointer', 'flex-shrink:0',
+        'background:#111128;border:1px solid #3a3a60;',
+      ].join(';');
+      const togCanvas = document.createElement('canvas');
+      togCanvas.width = TSIZE; togCanvas.height = TSIZE;
+      togCanvas.style.cssText = `width:${TSIZE}px;height:${TSIZE}px;display:block;`;
+      drawWallToggleIcon(togCanvas, curWalls, togKind);
+      const wallNames: Record<WallVariant, string> = { both: 'Both', outer: 'Outer', inner: 'Inner' };
+      const togLabel = document.createElement('span');
+      togLabel.style.cssText = 'font:bold 7px Arial,sans-serif;line-height:1;color:#5599aa;';
+      togLabel.textContent = wallNames[curWalls];
+      togBtn.appendChild(togCanvas);
+      togBtn.appendChild(togLabel);
+      togBtn.addEventListener('click', () => {
+        const cycle: WallVariant[] = ['both', 'outer', 'inner'];
+        const next = cycle[(cycle.indexOf(curWalls) + 1) % cycle.length];
+        if (selPiece) this.changePieceWalls(next);
+        else { this.palWalls = next; this.rebuildContent(); }
+      });
+      el.appendChild(togBtn);
+    }
+
+    // Rotate ↶ angle ↷ — visible whenever anything is selected
+    if (showRotate) {
+      const rot =
+        sel!.kind === 'car'          ? this.curStartH
+        : sel!.kind === 'finish'     ? (this.finishMarker?.rotation ?? 0)
+        : sel!.kind === 'checkpoint' ? (this.checkpoints[(sel as { kind: 'checkpoint'; idx: number }).idx]?.rotation ?? 0)
+        : selPiece!.rotation;
+      el.appendChild(mkB('↶', 'Rotate −15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(-15)));
       const angEl = document.createElement('span');
       angEl.textContent = `${rot}°`;
       angEl.style.cssText = 'color:#8888aa;font:12px Arial,sans-serif;min-width:34px;text-align:center;flex-shrink:0;';
       el.appendChild(angEl);
-      el.appendChild(mkB('↷', '+15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(15)));
+      el.appendChild(mkB('↷', 'Rotate +15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(15)));
+    }
 
-      if (this.selection.kind === 'finish') {
-        el.appendChild(mkB('🗑', 'Delete finish', '#ff8888', '#1a0808', '#663333', () => {
-          this.saveUndo(); this.finishMarker = null; this.updateFinishImg(); this.deselectAll(); this.isDirty = true;
-        }));
+    // Copy / Paste — pieces only
+    if (showCopy) {
+      el.appendChild(mkB('✂', 'Copy', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
+      if (this.clipboard)
+        el.appendChild(mkB('📋', 'Paste copy', '#aaaaff', '#0a0a22', '#333366', () => this.paste()));
+    }
+
+    // Delete — pieces + finish + checkpoint (not car start)
+    if (showDelete) {
+      let delFn: () => void;
+      if (selPiece) {
+        delFn = () => this.deleteSelectedPiece();
+      } else if (sel!.kind === 'finish') {
+        delFn = () => { this.saveUndo(); this.finishMarker = null; this.updateFinishImg(); this.deselectAll(); this.isDirty = true; };
+      } else {
+        const cidx = (sel as { kind: 'checkpoint'; idx: number }).idx;
+        delFn = () => { this.saveUndo(); this.checkpoints.splice(cidx, 1); this.updateCheckpointImgs(); this.deselectAll(); this.isDirty = true; };
       }
-      if (this.selection.kind === 'checkpoint') {
-        const cidx = (this.selection as { kind:'checkpoint';idx:number }).idx;
-        el.appendChild(mkB('🗑', 'Delete checkpoint', '#ff8888', '#1a0808', '#663333', () => {
-          this.saveUndo(); this.checkpoints.splice(cidx, 1); this.updateCheckpointImgs(); this.deselectAll(); this.isDirty = true;
-        }));
-      }
+      el.appendChild(mkB('🗑', 'Delete', '#ff8888', '#1a0808', '#663333', delFn));
     }
   }
 
