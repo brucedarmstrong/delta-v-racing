@@ -1,5 +1,7 @@
 import { Scene, GameObjects } from 'phaser';
-import { drawBarriersOnCanvas } from '../track/TrackCanvasRenderer';
+import { buildTrackTexture } from '../track/TrackCanvasRenderer';
+import { addPiecePaths } from '../track/TrackBarrierCanvas';
+import { NEON_GREEN } from '../track/TrackSkin';
 import {
   trackBounds, connectors,
   type PieceDef, type PlacedPiece, type CornerDef, type StraightDef,
@@ -335,6 +337,8 @@ export class TrackEditor extends Scene {
   private barrierImg:       GameObjects.Image | null = null;
   private barrierExclude:   number | null            = null;
   private selectedPieceImg: GameObjects.Image | null = null;
+  private selCanvasTex:     Phaser.Textures.CanvasTexture | null = null;
+  private selDashOffset     = 0;
   private finishImg:      GameObjects.Image | null = null;
   private checkpointImgs: GameObjects.Image[]      = [];
   private startCarImg:    GameObjects.Image | null = null;
@@ -528,52 +532,58 @@ export class TrackEditor extends Scene {
       ? this.pieces.filter((_, i) => i !== excludeIdx)
       : this.pieces;
     if (drawPieces.length === 0) return;
-
-    const b   = trackBounds(drawPieces);
-    const pad = 12;
-    const w   = Math.ceil(b.width  + pad * 2);
-    const h   = Math.ceil(b.height + pad * 2);
-    const key = '_ed_barriers';
-    if (this.textures.exists(key)) this.textures.remove(key);
-    const ct = this.textures.createCanvas(key, w, h)!;
-    drawBarriersOnCanvas(ct.getContext(), drawPieces,
-      b.x - pad, b.y - pad, 1, 1, 0, 0, '#33bb55', 2);
-    ct.refresh();
-    this.barrierImg = this.add.image(b.x - pad, b.y - pad, key).setOrigin(0, 0).setDepth(3);
+    this.barrierImg = buildTrackTexture(this, drawPieces, NEON_GREEN, '_ed_barriers').setDepth(3);
   }
 
-  // Rebuild the cyan glow overlay for the selected piece.
-  // Renders the actual barrier walls in cyan so the user can clearly see which
-  // walls the piece has.  Hidden during drag; restored on drop.
+  // Marching-ants selection outline for the selected piece (both straights and corners).
+  // Allocates a canvas texture sized to the piece bounds, then redraws each frame
+  // in update() via redrawSelectionDashes().  Hidden during move-drag; restored on drop.
   private updateSelectedHighlight(): void {
     this.selectedPieceImg?.destroy();
     this.selectedPieceImg = null;
+    this.selCanvasTex = null;
 
     if (this.selection?.kind !== 'piece') return;
     const p = this.pieces[this.selection.idx];
     if (!p) return;
-    // Corners are drawn as accurate arcs by drawSelectionOverlay (selectionGfx).
-    // Only straights use a canvas-texture glow.
-    if (p.type !== 'straight') return;
 
     const b   = trackBounds([p]);
-    const pad = 18;
+    const pad = 14;
     const w   = Math.max(4, Math.ceil(b.width  + pad * 2));
     const h   = Math.max(4, Math.ceil(b.height + pad * 2));
     const key = '_ed_sel_hl';
     if (this.textures.exists(key)) this.textures.remove(key);
-    const ct  = this.textures.createCanvas(key, w, h)!;
-    const ctx = ct.getContext();
+    this.selCanvasTex = this.textures.createCanvas(key, w, h)!;
 
-    // Three-pass glow: thick semi-transparent → medium cyan → thin white
-    drawBarriersOnCanvas(ctx, [p], b.x - pad, b.y - pad, 1, 1, 0, 0, 'rgba(0,220,255,0.30)', 10);
-    drawBarriersOnCanvas(ctx, [p], b.x - pad, b.y - pad, 1, 1, 0, 0, '#00ddff', 3.5);
-    drawBarriersOnCanvas(ctx, [p], b.x - pad, b.y - pad, 1, 1, 0, 0, 'rgba(255,255,255,0.65)', 1.5);
-
-    ct.refresh();
     this.selectedPieceImg = this.add.image(b.x - pad, b.y - pad, key)
       .setOrigin(0, 0)
       .setDepth(3.5); // above barrier canvas (3), below markers (4)
+
+    this.redrawSelectionDashes();
+  }
+
+  // Redraws the marching-ants outline at the current selDashOffset.
+  // Called once from updateSelectedHighlight and then every frame from update().
+  private redrawSelectionDashes(): void {
+    if (!this.selCanvasTex || this.selection?.kind !== 'piece') return;
+    const p = this.pieces[this.selection.idx];
+    if (!p) return;
+    const b   = trackBounds([p]);
+    const pad = 14;
+    const ctx = this.selCanvasTex.getContext();
+    ctx.clearRect(0, 0, this.selCanvasTex.width, this.selCanvasTex.height);
+    ctx.save();
+    ctx.translate(pad - b.x, pad - b.y);
+    ctx.setLineDash([10, 8]);
+    ctx.lineDashOffset = -this.selDashOffset;
+    ctx.strokeStyle = '#00ddff';
+    ctx.lineWidth   = 2.5;
+    ctx.lineCap     = 'round';
+    ctx.beginPath();
+    addPiecePaths(ctx, p);
+    ctx.stroke();
+    ctx.restore();
+    this.selCanvasTex.refresh();
   }
 
   // ── Marker images ───────────────────────────────────────────────────────────
@@ -667,20 +677,13 @@ export class TrackEditor extends Scene {
       }
     }
 
-    // Corner arc selection indicator — drawn as actual arcs (not full circles),
-    // matching the exact geometry of the visible track walls.
-    if (p.type !== 'straight') {
+    // Corner drag preview — only while dragging; at rest the canvas texture handles it.
+    if (p.type !== 'straight' && this.dragOp?.kind === 'move') {
       const outerR = p.type === 'corner' ? TIGHT.outerR : BIG.outerR;
       const innerR = p.type === 'corner' ? TIGHT.innerR : BIG.innerR;
       const def    = p as CornerDef;
-      if (def.walls !== 'inner') {
-        drawCornerArcOnGfx(g, p, outerR, 9,  0x00ddff, 0.25); // glow
-        drawCornerArcOnGfx(g, p, outerR, 3,  0x00ddff, 0.90); // bright line
-      }
-      if (def.walls !== 'outer' && innerR > 8) {
-        drawCornerArcOnGfx(g, p, innerR, 9,  0x00ddff, 0.25);
-        drawCornerArcOnGfx(g, p, innerR, 3,  0x00ddff, 0.90);
-      }
+      if (def.walls !== 'inner') drawCornerArcOnGfx(g, p, outerR, 2.5, 0x00ddff, 0.90);
+      if (def.walls !== 'outer' && innerR > 8) drawCornerArcOnGfx(g, p, innerR, 2.5, 0x00ddff, 0.90);
     }
 
     // Rotate handle — drawn from the exit connector outward
@@ -1039,6 +1042,7 @@ export class TrackEditor extends Scene {
     this.connGfx.clear();
     this.selectedPieceImg?.destroy();
     this.selectedPieceImg = null;
+    this.selCanvasTex = null;
     this.rebuildCtrlRow();
   }
 
@@ -1807,5 +1811,11 @@ export class TrackEditor extends Scene {
     setTimeout(() => t.remove(), 2500);
   }
 
-  override update(): void { /* event-driven */ }
+  override update(_time: number, delta: number): void {
+    // Advance marching-ants dash offset; redraw only when a piece is selected and not being moved
+    if (this.selCanvasTex && this.selection?.kind === 'piece' && this.dragOp?.kind !== 'move') {
+      this.selDashOffset = (this.selDashOffset + delta * 0.03) % 18;
+      this.redrawSelectionDashes();
+    }
+  }
 }
