@@ -495,6 +495,8 @@ export class TrackEditor extends Scene {
     hdr.appendChild(mkBtn('↷', 'Redo', '#ffaa44', '#1a0e00', '#553300', () => this.redo()));
     hdr.appendChild(sep());
     hdr.appendChild(mkBtn('📂', 'My drafts', '#aaaaff', '#0a0a22', '#333366', () => this.openDrafts()));
+    hdr.appendChild(sep());
+    hdr.appendChild(mkBtn('▶ Test', 'Test track in play mode', '#44ffcc', '#001a12', '#226644', () => this.testTrack()));
     hdr.appendChild(mkBtn('✓ Save', 'Save track', '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
 
     document.body.appendChild(hdr);
@@ -1638,6 +1640,26 @@ export class TrackEditor extends Scene {
     this.showConfirm('Discard unsaved changes?', 'Discard',
       () => this.scene.start('TrackSelect', { activeTab: 'drafts' }),
     );
+  }
+
+  private testTrack(): void {
+    if (this.pieces.length < 1) { this.showToast('Add track pieces first'); return; }
+    if (!this.finishMarker)     { this.showToast('Place a finish line first (Finish tab)'); return; }
+    const entry: TrackEntry = {
+      id:           '__test__',
+      name:         this.existingName || 'Test Track',
+      author:       '',
+      startX:       this.curStartX,
+      startY:       this.curStartY,
+      startHeading: this.curStartH,
+      pieces:       this.pieces.map(p => ({ ...p })),
+      markers:      [this.finishMarker, ...this.checkpoints],
+    };
+    this.scene.start('Game', {
+      track:       entry,
+      mineTrackId: this.mineTrackId ?? undefined,
+      returnTab:   'editor',
+    });
   }
 
   private showSaveDialog(): void {

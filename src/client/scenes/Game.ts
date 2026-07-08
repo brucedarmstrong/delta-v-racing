@@ -2177,7 +2177,9 @@ export class Game extends Scene {
   // auto-launches that track. Otherwise restore the tab they were browsing.
   private exitToMenu(): void {
     const hasPending = !!localStorage.getItem('dv-pending-track');
-    if (hasPending && this.returnTab === 'tutorial') {
+    if (this.returnTab === 'editor') {
+      this.scene.start('TrackEditor', { track: this.trackEntry, mineTrackId: this.mineTrackId ?? undefined });
+    } else if (hasPending && this.returnTab === 'tutorial') {
       this.scene.start('ModeSelect');
     } else if (this.returnTab) {
       this.scene.start('TrackSelect', { activeTab: this.returnTab });
