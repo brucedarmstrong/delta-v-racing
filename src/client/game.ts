@@ -1,3 +1,4 @@
+import '@mdi/font/css/materialdesignicons.min.css';
 import { Boot } from './scenes/Boot';
 import { GameOver } from './scenes/GameOver';
 import { Game as MainGame } from './scenes/Game';

@@ -288,6 +288,12 @@ function drawWallToggleIcon(
   }
 }
 
+// Returns an HTML string for a Material Design Icon, with an optional text label.
+function ic(name: string, label = ''): string {
+  const i = `<i class="mdi mdi-${name}" style="font-size:16px;line-height:1;vertical-align:middle;pointer-events:none;"></i>`;
+  return label ? `${i}<span style="pointer-events:none;"> ${label}</span>` : i;
+}
+
 // ── Scene ──────────────────────────────────────────────────────────────────────
 
 export class TrackEditor extends Scene {
@@ -450,19 +456,20 @@ export class TrackEditor extends Scene {
     ].join(';');
 
     const backBtn = document.createElement('button');
-    backBtn.textContent = '‹';
+    backBtn.innerHTML = ic('arrow-left');
     backBtn.title = 'Back';
-    backBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#8888ff;font:bold 22px Arial,sans-serif;padding:0 6px;height:100%;flex-shrink:0;';
+    backBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#8888ff;font-size:16px;padding:0 6px;height:100%;flex-shrink:0;display:inline-flex;align-items:center;';
     backBtn.addEventListener('click', () => this.scene.start('ModeSelect'));
 
     const titleEl = document.createElement('div');
     titleEl.style.cssText = 'flex:1;';
 
-    const mkBtn = (text: string, title: string, color: string, bg: string, border: string, fn: () => void) => {
+    const mkBtn = (html: string, title: string, color: string, bg: string, border: string, fn: () => void) => {
       const b = document.createElement('button');
-      b.textContent = text; b.title = title;
+      b.innerHTML = html; b.title = title;
       b.style.cssText = [
         'border-radius:5px', 'cursor:pointer', 'font:bold 12px Arial,sans-serif',
+        'display:inline-flex', 'align-items:center', 'gap:3px',
         'padding:4px 8px', `color:${color}`, `background:${bg}`, `border:1px solid ${border}`,
         `height:${HEADER_H - 16}px`, 'white-space:nowrap', 'flex-shrink:0',
       ].join(';');
@@ -480,6 +487,7 @@ export class TrackEditor extends Scene {
     snapBtn.title = 'Toggle connection snapping';
     snapBtn.style.cssText = [
       'border-radius:5px', 'cursor:pointer', 'font:bold 12px Arial,sans-serif',
+      'display:inline-flex', 'align-items:center', 'gap:3px',
       'padding:4px 8px', `height:${HEADER_H - 16}px`, 'flex-shrink:0',
     ].join(';');
     snapBtn.addEventListener('click', () => { this.snapEnabled = !this.snapEnabled; this.updateSnapBtn(); });
@@ -491,13 +499,13 @@ export class TrackEditor extends Scene {
     hdr.appendChild(sep());
     hdr.appendChild(snapBtn);
     hdr.appendChild(sep());
-    hdr.appendChild(mkBtn('↶', 'Undo', '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
-    hdr.appendChild(mkBtn('↷', 'Redo', '#ffaa44', '#1a0e00', '#553300', () => this.redo()));
+    hdr.appendChild(mkBtn(ic('undo'),                    'Undo',              '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
+    hdr.appendChild(mkBtn(ic('redo'),                    'Redo',              '#ffaa44', '#1a0e00', '#553300', () => this.redo()));
     hdr.appendChild(sep());
-    hdr.appendChild(mkBtn('📂', 'My drafts', '#aaaaff', '#0a0a22', '#333366', () => this.openDrafts()));
+    hdr.appendChild(mkBtn(ic('folder-open',  'Drafts'), 'My drafts',         '#aaaaff', '#0a0a22', '#333366', () => this.openDrafts()));
     hdr.appendChild(sep());
-    hdr.appendChild(mkBtn('▶ Test', 'Test track in play mode', '#44ffcc', '#001a12', '#226644', () => this.testTrack()));
-    hdr.appendChild(mkBtn('✓ Save', 'Save track', '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
+    hdr.appendChild(mkBtn(ic('play',         'Test'),   'Test track',        '#44ffcc', '#001a12', '#226644', () => this.testTrack()));
+    hdr.appendChild(mkBtn(ic('content-save', 'Save'),   'Save track',        '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
 
     document.body.appendChild(hdr);
     this.hdrEl = hdr;
@@ -505,7 +513,7 @@ export class TrackEditor extends Scene {
 
   private updateSnapBtn(): void {
     if (!this.snapBtnEl) return;
-    this.snapBtnEl.textContent = this.snapEnabled ? '🔗 Snap' : '🔗 Snap';
+    this.snapBtnEl.innerHTML = ic('link-variant', 'Snap');
     this.snapBtnEl.style.background = this.snapEnabled ? '#001a22' : '#111128';
     this.snapBtnEl.style.color      = this.snapEnabled ? '#44ddff' : '#445566';
     this.snapBtnEl.style.border     = `1px solid ${this.snapEnabled ? '#226644' : '#2a2a44'}`;
@@ -1466,19 +1474,13 @@ export class TrackEditor extends Scene {
     }
     el.style.display = 'flex';
 
-    const mkB = (text: string, title: string, color: string, bg: string, border: string, fn: () => void) => {
+    const mkB = (html: string, title: string, color: string, bg: string, border: string, fn: () => void) => {
       const b = document.createElement('button');
-      b.textContent = text; b.title = title;
-      b.style.cssText = `padding:5px 8px;border-radius:5px;cursor:pointer;font:bold 12px Arial,sans-serif;white-space:nowrap;color:${color};background:${bg};border:1px solid ${border};flex-shrink:0;`;
+      b.innerHTML = html; b.title = title;
+      b.style.cssText = `display:inline-flex;align-items:center;gap:3px;padding:5px 8px;border-radius:5px;cursor:pointer;font:bold 12px Arial,sans-serif;white-space:nowrap;color:${color};background:${bg};border:1px solid ${border};flex-shrink:0;`;
       b.addEventListener('click', fn);
       return b;
     };
-    const mkOpt = (text: string, active: boolean, fn: () => void) =>
-      mkB(text, text,
-        active ? '#ccccff' : '#6666aa',
-        active ? '#22224a' : '#111128',
-        active ? '#6666cc' : '#2a2a44',
-        fn);
 
     // Wall toggle — always leftmost when visible; same size as other buttons;
     // 20×20 canvas icon inline with text label.
@@ -1514,23 +1516,25 @@ export class TrackEditor extends Scene {
 
     // Marker label (car / finish / checkpoint) — leftmost when wall toggle absent
     if (showLabel) {
-      const label =
-        sel!.kind === 'car'          ? '🚗 Start'
-        : sel!.kind === 'finish'     ? '⚑ Finish'
-        : `◎ CP ${(sel as { kind: 'checkpoint'; idx: number }).idx + 1}`;
+      const labelHtml =
+        sel!.kind === 'car'          ? ic('car',             'Start')
+        : sel!.kind === 'finish'     ? ic('flag-checkered',  'Finish')
+        : ic('map-marker', `CP ${(sel as { kind: 'checkpoint'; idx: number }).idx + 1}`);
       const lEl = document.createElement('span');
-      lEl.textContent = label;
-      lEl.style.cssText = 'color:#aaaacc;font:bold 12px Arial,sans-serif;flex-shrink:0;padding-right:2px;';
+      lEl.innerHTML = labelHtml;
+      lEl.style.cssText = 'display:inline-flex;align-items:center;gap:3px;color:#aaaacc;font:bold 12px Arial,sans-serif;flex-shrink:0;padding-right:2px;';
       el.appendChild(lEl);
     }
 
-    // L / R flip — sets palFlip (no selection) or piece flip (corner selected)
+    // Flip — sets palFlip (no selection) or piece flip (corner selected)
     if (showFlip) {
       const curFlip = isCornerSel ? ((selPiece as CornerDef).flip ?? false) : this.palFlip;
-      el.appendChild(mkOpt('⇄ Flip', true, () => {
-        if (isCornerSel) this.changePieceFlip(!curFlip);
-        else { this.palFlip = !curFlip; this.rebuildContent(); }
-      }));
+      el.appendChild(mkB(ic('flip-horizontal', 'Flip'), 'Flip',
+        '#ccccff', '#22224a', '#6666cc',
+        () => {
+          if (isCornerSel) this.changePieceFlip(!curFlip);
+          else { this.palFlip = !curFlip; this.rebuildContent(); }
+        }));
     }
 
     // Spacer — pushes rotate/copy/delete to the right
@@ -1543,20 +1547,20 @@ export class TrackEditor extends Scene {
         : sel!.kind === 'finish'     ? (this.finishMarker?.rotation ?? 0)
         : sel!.kind === 'checkpoint' ? (this.checkpoints[(sel as { kind: 'checkpoint'; idx: number }).idx]?.rotation ?? 0)
         : selPiece!.rotation;
-      el.appendChild(mkB('-', 'Rotate −15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(-15)));
+      el.appendChild(mkB(ic('rotate-left'),  'Rotate −15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(-15)));
       const angEl = document.createElement('span');
       angEl.id = 'ed-ctrl-angle';
       angEl.textContent = `${rot}°`;
       angEl.style.cssText = 'color:#8888aa;font:12px Arial,sans-serif;min-width:34px;text-align:center;flex-shrink:0;';
       el.appendChild(angEl);
-      el.appendChild(mkB('+', 'Rotate +15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(15)));
+      el.appendChild(mkB(ic('rotate-right'), 'Rotate +15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(15)));
     }
 
     // Copy / Paste — pieces only
     if (showCopy) {
-      el.appendChild(mkB('📄', 'Copy piece', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
+      el.appendChild(mkB(ic('content-copy'),  'Copy piece', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
       if (this.clipboard)
-        el.appendChild(mkB('📋', 'Paste copy', '#aaaaff', '#0a0a22', '#333366', () => this.paste()));
+        el.appendChild(mkB(ic('content-paste'), 'Paste copy', '#aaaaff', '#0a0a22', '#333366', () => this.paste()));
     }
 
     // Delete — pieces + finish + checkpoint (not car start)
@@ -1570,7 +1574,7 @@ export class TrackEditor extends Scene {
         const cidx = (sel as { kind: 'checkpoint'; idx: number }).idx;
         delFn = () => { this.saveUndo(); this.checkpoints.splice(cidx, 1); this.updateCheckpointImgs(); this.deselectAll(); this.isDirty = true; };
       }
-      el.appendChild(mkB('🗑', 'Delete', '#ff8888', '#1a0808', '#663333', delFn));
+      el.appendChild(mkB(ic('delete'), 'Delete', '#ff8888', '#1a0808', '#663333', delFn));
     }
   }
 
