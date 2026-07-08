@@ -1554,7 +1554,7 @@ export class TrackEditor extends Scene {
 
     // Copy / Paste — pieces only
     if (showCopy) {
-      el.appendChild(mkB('🗐', 'Copy piece', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
+      el.appendChild(mkB('📄', 'Copy piece', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
       if (this.clipboard)
         el.appendChild(mkB('📋', 'Paste copy', '#aaaaff', '#0a0a22', '#333366', () => this.paste()));
     }
