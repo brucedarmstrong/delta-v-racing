@@ -1516,13 +1516,9 @@ export class TrackEditor extends Scene {
     // L / R flip — sets palFlip (no selection) or piece flip (corner selected)
     if (showFlip) {
       const curFlip = isCornerSel ? ((selPiece as CornerDef).flip ?? false) : this.palFlip;
-      el.appendChild(mkOpt('← L', curFlip, () => {
-        if (isCornerSel) this.changePieceFlip(true);
-        else { this.palFlip = true; this.rebuildContent(); }
-      }));
-      el.appendChild(mkOpt('R →', !curFlip, () => {
-        if (isCornerSel) this.changePieceFlip(false);
-        else { this.palFlip = false; this.rebuildContent(); }
+      el.appendChild(mkOpt('⇄ Flip', true, () => {
+        if (isCornerSel) this.changePieceFlip(!curFlip);
+        else { this.palFlip = !curFlip; this.rebuildContent(); }
       }));
     }
 
@@ -1546,7 +1542,7 @@ export class TrackEditor extends Scene {
 
     // Copy / Paste — pieces only
     if (showCopy) {
-      el.appendChild(mkB('✂', 'Copy', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
+      el.appendChild(mkB('Copy', 'Copy piece', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
       if (this.clipboard)
         el.appendChild(mkB('📋', 'Paste copy', '#aaaaff', '#0a0a22', '#333366', () => this.paste()));
     }
@@ -1608,13 +1604,13 @@ export class TrackEditor extends Scene {
     const pH = this.paletteH();
     const margin = Math.min(W, H - HEADER_H - pH) * 0.12;
 
-    // Use the bounding box of piece center + both connectors so the full
-    // extent of long straights and wide corners becomes visible.
+    // Bounding box of piece center + both connectors, padded by HALF_TRACK so
+    // the track walls (not just the spine) clear the palette and header.
     const { entry, exit } = worldConnectors(p);
-    const minWX = Math.min(p.x, entry.x, exit.x);
-    const maxWX = Math.max(p.x, entry.x, exit.x);
-    const minWY = Math.min(p.y, entry.y, exit.y);
-    const maxWY = Math.max(p.y, entry.y, exit.y);
+    const minWX = Math.min(p.x, entry.x, exit.x) - HALF_TRACK;
+    const maxWX = Math.max(p.x, entry.x, exit.x) + HALF_TRACK;
+    const minWY = Math.min(p.y, entry.y, exit.y) - HALF_TRACK;
+    const maxWY = Math.max(p.y, entry.y, exit.y) + HALF_TRACK;
 
     let { scrollX, scrollY } = cam;
     const z = cam.zoom;
