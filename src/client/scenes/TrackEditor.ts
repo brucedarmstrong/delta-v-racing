@@ -795,7 +795,7 @@ export class TrackEditor extends Scene {
   // ── Input ───────────────────────────────────────────────────────────────────
 
   private onDown(ptr: Phaser.Input.Pointer): void {
-    if (ptr.y > this.scale.height - PALETTE_H) return;
+    if (ptr.y > this.scale.height - this.paletteH()) return;
     this.touches.set(ptr.id, { x: ptr.x, y: ptr.y });
 
     if (this.touches.size >= 2) {
@@ -1196,7 +1196,6 @@ export class TrackEditor extends Scene {
     const el = document.createElement('div');
     el.style.cssText = [
       'position:fixed', 'bottom:0', 'left:0', 'right:0',
-      `height:${PALETTE_H}px`,
       'background:#0d0d20', 'border-top:1.5px solid #3a3a6a',
       'z-index:100', 'display:flex', 'flex-direction:column',
       'padding:4px 6px max(env(safe-area-inset-bottom,0px),8px)',
@@ -1204,12 +1203,7 @@ export class TrackEditor extends Scene {
       'user-select:none', '-webkit-user-select:none', 'gap:4px',
     ].join(';');
 
-    // Spacer — pushes the button wrapper to the bottom of the palette.
-    const spacer = document.createElement('div');
-    spacer.style.flex = '1';
-    el.appendChild(spacer);
-
-    // Wrapper — ctrl row + piece buttons are always adjacent at the bottom.
+    // Wrapper — ctrl row + piece buttons.
     const wrapperEl = document.createElement('div');
     wrapperEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;flex-shrink:0;';
     el.appendChild(wrapperEl);
@@ -1599,9 +1593,11 @@ export class TrackEditor extends Scene {
     return cam.scrollX + cam.width / (2 * cam.zoom);
   }
 
+  private paletteH(): number { return this.palEl?.offsetHeight ?? PALETTE_H; }
+
   private viewCenterY(): number {
     const cam = this.cameras.main;
-    return cam.scrollY + (cam.height - PALETTE_H + HEADER_H) / (2 * cam.zoom);
+    return cam.scrollY + (cam.height - this.paletteH() + HEADER_H) / (2 * cam.zoom);
   }
 
   private scrollToShowPiece(idx: number): void {
@@ -1609,13 +1605,33 @@ export class TrackEditor extends Scene {
     if (!p) return;
     const cam = this.cameras.main;
     const W = this.scale.width, H = this.scale.height;
-    const margin = Math.min(W, H - HEADER_H - PALETTE_H) * 0.22;
-    const sx = (p.x - cam.scrollX) * cam.zoom;
-    const sy = (p.y - cam.scrollY) * cam.zoom;
-    if (sx < margin)                 cam.setScroll(cam.scrollX - (margin - sx) / cam.zoom, cam.scrollY);
-    if (sx > W - margin)             cam.setScroll(cam.scrollX + (sx - W + margin) / cam.zoom, cam.scrollY);
-    if (sy < HEADER_H + margin)      cam.setScroll(cam.scrollX, cam.scrollY - (HEADER_H + margin - sy) / cam.zoom);
-    if (sy > H - PALETTE_H - margin) cam.setScroll(cam.scrollX, cam.scrollY + (sy - (H - PALETTE_H - margin)) / cam.zoom);
+    const pH = this.paletteH();
+    const margin = Math.min(W, H - HEADER_H - pH) * 0.12;
+
+    // Use the bounding box of piece center + both connectors so the full
+    // extent of long straights and wide corners becomes visible.
+    const { entry, exit } = worldConnectors(p);
+    const minWX = Math.min(p.x, entry.x, exit.x);
+    const maxWX = Math.max(p.x, entry.x, exit.x);
+    const minWY = Math.min(p.y, entry.y, exit.y);
+    const maxWY = Math.max(p.y, entry.y, exit.y);
+
+    let { scrollX, scrollY } = cam;
+    const z = cam.zoom;
+
+    const sx0 = (minWX - scrollX) * z;
+    const sx1 = (maxWX - scrollX) * z;
+    if (sx0 < margin)       scrollX -= (margin - sx0) / z;
+    if (sx1 > W - margin)   scrollX += (sx1 - (W - margin)) / z;
+
+    const topBound = HEADER_H + margin;
+    const botBound = H - pH - margin;
+    const sy0 = (minWY - scrollY) * z;
+    const sy1 = (maxWY - scrollY) * z;
+    if (sy0 < topBound)     scrollY -= (topBound - sy0) / z;
+    if (sy1 > botBound)     scrollY += (sy1 - botBound) / z;
+
+    cam.setScroll(scrollX, scrollY);
   }
 
   // ── Save / drafts ─────────────────────────────────────────────────────────────
@@ -1720,7 +1736,7 @@ export class TrackEditor extends Scene {
     const t = document.createElement('div');
     t.textContent = msg;
     t.style.cssText = [
-      'position:fixed', `bottom:${PALETTE_H + 10}px`, 'left:50%',
+      'position:fixed', `bottom:${this.paletteH() + 10}px`, 'left:50%',
       'transform:translateX(-50%)', 'background:#2a2a50', 'border:1px solid #5555aa',
       'border-radius:6px', 'padding:8px 16px', 'color:#ccccff', 'font:13px Arial,sans-serif',
       'z-index:400', 'pointer-events:none', 'white-space:nowrap',
