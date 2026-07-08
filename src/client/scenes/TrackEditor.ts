@@ -1,94 +1,350 @@
 import { Scene, GameObjects } from 'phaser';
 import { drawBarriersOnCanvas } from '../track/TrackCanvasRenderer';
 import {
-  buildTrackWithCursor, trackBounds,
-  type CornerDef, type PieceDef, type PlacedPiece,
+  trackBounds, connectors,
+  type PieceDef, type PlacedPiece, type CornerDef, type StraightDef,
 } from '../track/TrackLayout';
 import {
-  CORRIDOR,
-  CORNER_ANGLES, STRAIGHT_SIZES,
-  type CornerAngle, type CornerFamily,
+  HALF_TRACK, TIGHT, BIG, STRAIGHT_LEN,
+  CORNER_ANGLES,
+  type CornerAngle, type CornerFamily, type WallVariant, type StraightSize,
 } from '../track/TrackGeometry';
 import type { TrackMarker } from '../track/convertGmsTrack';
 import type { TrackEntry } from '../tracks/trackRegistry';
 import { saveDraft } from '../track/TrackUpload';
 import type { TrackPayload } from '../track/TrackUpload';
 
-const BG        = 0x0a0a16;
-const HEADER_H  = 60;
-const PALETTE_H = 246;
-const DEFAULT_START_X = 0, DEFAULT_START_Y = 0, DEFAULT_START_HEADING = 180;
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type PalTab = 'straight' | 'tight' | 'big' | 'finish' | 'checkpoint';
+
+type Selection =
+  | { kind: 'piece'; idx: number }
+  | { kind: 'car' }
+  | { kind: 'finish' }
+  | { kind: 'checkpoint'; idx: number }
+  | null;
+
+type DragOp =
+  | { kind: 'pan';              sx: number; sy: number; scrollX: number; scrollY: number }
+  | { kind: 'move';             idx: number; offX: number; offY: number }
+  | { kind: 'rotate';           idx: number; handleLocalAngle: number }
+  | { kind: 'move-car' }
+  | { kind: 'move-finish' }
+  | { kind: 'move-checkpoint';  idx: number }
+  | { kind: 'rotate-car' }
+  | { kind: 'rotate-finish' }
+  | { kind: 'rotate-checkpoint'; idx: number }
+  | null;
+
+interface EditorSnapshot {
+  pieces:       PlacedPiece[];
+  finishMarker: TrackMarker | null;
+  checkpoints:  TrackMarker[];
+  startX:       number;
+  startY:       number;
+  startHeading: number;
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const HEADER_H  = 52;
+const PALETTE_H = 210;
+const SNAP_R    = 55;
+const MAX_UNDO  = 40;
+const HIT_R_MARKER = 46;
+const HANDLE_HIT_R = 22;   // hit radius for the rotate handle
+
+const DEFAULT_START_X = 0, DEFAULT_START_Y = 0, DEFAULT_START_H = 180;
+const BG = 0x0a0a16;
+
+// ── Module helpers ─────────────────────────────────────────────────────────────
+
+function rotateCW(x: number, y: number, deg: number): [number, number] {
+  const r = deg * (Math.PI / 180);
+  const c = Math.cos(r), s = Math.sin(r);
+  return [x * c - y * s, x * s + y * c];
+}
+
+type WorldConn = { x: number; y: number; heading: number };
+
+function worldConnectors(p: PlacedPiece): { entry: WorldConn; exit: WorldConn } {
+  const c = connectors(p);
+  const [ex, ey] = rotateCW(c.entryX, c.entryY, p.rotation);
+  const [xx, xy] = rotateCW(c.exitX,  c.exitY,  p.rotation);
+  return {
+    entry: { x: p.x + ex, y: p.y + ey, heading: ((c.entryH + p.rotation) % 360 + 360) % 360 },
+    exit:  { x: p.x + xx, y: p.y + xy, heading: ((c.exitH  + p.rotation) % 360 + 360) % 360 },
+  };
+}
+
+// Draw one corner-wall arc on a Phaser Graphics object using lineBetween segments.
+// Matches the same geometry as addPiecePaths / TrackBarrierCanvas.
+// localStart: π for right turn (flip=false), 0 for left turn (flip=true).
+function drawCornerArcOnGfx(
+  g: GameObjects.Graphics,
+  p: PlacedPiece,
+  radius: number,
+  lineW: number,
+  color: number,
+  alpha: number,
+): void {
+  const flip    = (p as CornerDef).flip ?? false;
+  const θr      = (p as CornerDef).angle * Math.PI / 180;
+  const pRad    = p.rotation * Math.PI / 180;
+  const wStart  = (flip ? 0 : Math.PI) + pRad;
+  const dir     = flip ? -1 : 1;
+  const N       = Math.max(3, Math.ceil((p as CornerDef).angle / 5));
+  g.lineStyle(lineW, color, alpha);
+  for (let i = 0; i < N; i++) {
+    const a1 = wStart + dir * (θr * i       / N);
+    const a2 = wStart + dir * (θr * (i + 1) / N);
+    g.lineBetween(
+      p.x + Math.cos(a1) * radius, p.y + Math.sin(a1) * radius,
+      p.x + Math.cos(a2) * radius, p.y + Math.sin(a2) * radius,
+    );
+  }
+}
+
+// Handle sits 32px beyond the exit connector, in the same direction.
+// This always ends up at the visible end of the piece (bottom of a straight,
+// tip of a corner arc) so it is never hidden behind another piece.
+const HANDLE_EXTEND = 32;
+
+function getHandlePos(p: PlacedPiece): { x: number; y: number } {
+  const c  = connectors(p);
+  const ea = Math.atan2(c.exitY, c.exitX);
+  const lx = c.exitX + Math.cos(ea) * HANDLE_EXTEND;
+  const ly = c.exitY + Math.sin(ea) * HANDLE_EXTEND;
+  const [wx, wy] = rotateCW(lx, ly, p.rotation);
+  return { x: p.x + wx, y: p.y + wy };
+}
+
+function getHandleLocalAngle(p: PlacedPiece): number {
+  const c = connectors(p);
+  return Math.atan2(c.exitY, c.exitX);
+}
+
+// Returns the world position of a marker's rotation handle.
+// The handle sits HANDLE_EXTEND px beyond HIT_R_MARKER in the marker's facing direction.
+// Rotation convention: 0 = north (−y), 90 = east (+x), CW.
+function getMarkerHandlePos(mx: number, my: number, rotDeg: number): { x: number; y: number } {
+  const r    = rotDeg * Math.PI / 180;
+  const dist = HIT_R_MARKER + HANDLE_EXTEND;
+  return { x: mx + Math.sin(r) * dist, y: my - Math.cos(r) * dist };
+}
+
+// Snap a raw pointer angle (screen atan2, east=0) to the nearest 15° in
+// north-CW convention, returned as a value in [0, 360).
+function snapMarkerRotation(wx: number, wy: number, cx: number, cy: number): number {
+  const screenAngle = Math.atan2(wy - cy, wx - cx); // east=0, CW
+  const northCW     = screenAngle * 180 / Math.PI + 90;
+  return ((Math.round(northCW / 15) * 15) % 360 + 360) % 360;
+}
+
+function trySnapPiece(dragged: PlacedPiece, idx: number, all: PlacedPiece[]): PlacedPiece | null {
+  const dc = connectors(dragged);
+  const [dex, dey] = rotateCW(dc.entryX, dc.entryY, dragged.rotation);
+  const [dxx, dxy] = rotateCW(dc.exitX,  dc.exitY,  dragged.rotation);
+  const entryW = { x: dragged.x + dex, y: dragged.y + dey };
+  const exitW  = { x: dragged.x + dxx, y: dragged.y + dxy };
+
+  for (let i = 0; i < all.length; i++) {
+    if (i === idx) continue;
+    const oc = worldConnectors(all[i]);
+
+    // dragged comes AFTER other: dragged.entry → other.exit
+    if (Math.hypot(entryW.x - oc.exit.x, entryW.y - oc.exit.y) < SNAP_R) {
+      const newRot = ((oc.exit.heading - dc.entryH) % 360 + 360) % 360;
+      const [nex, ney] = rotateCW(dc.entryX, dc.entryY, newRot);
+      return { ...dragged, rotation: newRot, x: oc.exit.x - nex, y: oc.exit.y - ney };
+    }
+
+    // dragged comes BEFORE other: dragged.exit → other.entry
+    if (Math.hypot(exitW.x - oc.entry.x, exitW.y - oc.entry.y) < SNAP_R) {
+      const newRot = ((oc.entry.heading - dc.exitH) % 360 + 360) % 360;
+      const [nxx, nxy] = rotateCW(dc.exitX, dc.exitY, newRot);
+      return { ...dragged, rotation: newRot, x: oc.entry.x - nxx, y: oc.entry.y - nxy };
+    }
+  }
+  return null;
+}
+
+// ── Palette icon drawing (DOM canvas) ────────────────────────────────────────
+
+const PAL_COLOR = '#22ee55';
+
+function palNeon(ctx: CanvasRenderingContext2D, path: () => void, lw: number): void {
+  ctx.save();
+  ctx.shadowColor = PAL_COLOR; ctx.shadowBlur = lw * 4;
+  ctx.strokeStyle = PAL_COLOR; ctx.lineWidth = lw * 2.5;
+  ctx.lineCap = 'round'; ctx.globalAlpha = 0.45;
+  path(); ctx.stroke();
+  ctx.restore();
+  ctx.save();
+  ctx.strokeStyle = PAL_COLOR; ctx.lineWidth = lw; ctx.lineCap = 'round';
+  path(); ctx.stroke();
+  ctx.restore();
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  ctx.lineWidth = Math.max(0.5, lw * 0.35); ctx.lineCap = 'round';
+  path(); ctx.stroke();
+  ctx.restore();
+}
+
+// Two parallel walls at 45°, using exact piece proportions (HALF_TRACK width, real length).
+// The canvas is rotated 45° so local-space coordinates draw correctly.
+function drawStraightIcon(canvas: HTMLCanvasElement, size: StraightSize, walls: WallVariant = 'both'): void {
+  const ctx = canvas.getContext('2d')!;
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const half    = STRAIGHT_LEN[size] / 2;
+  // Scale fixed to the largest piece so smaller pieces appear proportionally shorter.
+  const maxHalf   = STRAIGHT_LEN[100] / 2;
+  const maxExtent = (Math.SQRT2 / 2) * (HALF_TRACK + maxHalf);
+  const margin    = 2;
+  const scale     = (Math.min(W, H) / 2 - margin) / maxExtent;
+  const hw = HALF_TRACK * scale;
+  const hl = half * scale;
+  const lw = 1.8;
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.rotate(Math.PI / 4);
+  if (walls !== 'inner') palNeon(ctx, () => { ctx.beginPath(); ctx.moveTo(-hw, -hl); ctx.lineTo(-hw, +hl); }, lw);
+  if (walls !== 'outer') palNeon(ctx, () => { ctx.beginPath(); ctx.moveTo(+hw, -hl); ctx.lineTo(+hw, +hl); }, lw);
+  ctx.restore();
+}
+
+// Arc center at bottom-right (flip=false) or bottom-left (flip=true).
+// Scales to fill the canvas regardless of family or angle.
+function drawCornerIcon(
+  canvas: HTMLCanvasElement,
+  family: CornerFamily,
+  angleDeg: CornerAngle,
+  flip: boolean,
+  walls: WallVariant = 'both',
+): void {
+  const ctx = canvas.getContext('2d')!;
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const { outerR: rO, innerR: rI } = family === 'corner' ? TIGHT : BIG;
+  const θ = angleDeg * Math.PI / 180;
+  const margin = Math.max(3, W * 0.06);
+  const avW = W - margin, avH = H - margin;
+  const contentH = rO * Math.sin(θ);
+  const scale = Math.min(avW / rO, contentH > 2 ? avH / contentH : avW / (rO * 0.2));
+  const outerR = rO * scale, innerR = rI * scale;
+  const lw = Math.max(1, W / 32);
+  ctx.save();
+  if (flip) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+  const ax = W - margin, ay = H - margin;
+  const s = Math.PI, e = Math.PI + θ;
+  if (walls !== 'inner') palNeon(ctx, () => { ctx.beginPath(); ctx.arc(ax, ay, outerR, s, e, false); }, lw);
+  if (walls !== 'outer' && innerR > 0.5) {
+    palNeon(ctx, () => { ctx.beginPath(); ctx.arc(ax, ay, innerR, s, e, false); }, lw);
+  }
+  ctx.restore();
+}
+
+// Icon for the wall-toggle button: XS straight drawn vertically (straight tab)
+// or 30° tight corner (corner tabs).  Shows only the active wall(s).
+function drawWallToggleIcon(
+  canvas: HTMLCanvasElement,
+  walls: WallVariant,
+  kind: 'straight' | 'corner',
+): void {
+  const ctx = canvas.getContext('2d')!;
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const lw = Math.max(1, W / 20);
+
+  if (kind === 'straight') {
+    // Two short vertical lines (gap ≈ 52% of canvas width, height ≈ 68% of canvas height).
+    const gap   = W * 0.52;
+    const lineH = H * 0.68;
+    const cx = W / 2, cy = H / 2;
+    if (walls !== 'inner') {
+      palNeon(ctx, () => { ctx.beginPath(); ctx.moveTo(cx - gap / 2, cy - lineH / 2); ctx.lineTo(cx - gap / 2, cy + lineH / 2); }, lw);
+    }
+    if (walls !== 'outer') {
+      palNeon(ctx, () => { ctx.beginPath(); ctx.moveTo(cx + gap / 2, cy - lineH / 2); ctx.lineTo(cx + gap / 2, cy + lineH / 2); }, lw);
+    }
+  } else {
+    // 30° tight corner — same geometry as drawCornerIcon but fixed angle/family.
+    const θ = 30 * Math.PI / 180;
+    const { outerR: rO, innerR: rI } = TIGHT;
+    const margin = Math.max(3, W * 0.06);
+    const contentH = rO * Math.sin(θ);
+    const scale = Math.min((W - margin) / rO, contentH > 2 ? (H - margin) / contentH : (W - margin) / (rO * 0.2));
+    const outerR = rO * scale, innerR = rI * scale;
+    const ax = W - margin, ay = H - margin;
+    const s = Math.PI, e = Math.PI + θ;
+    if (walls !== 'inner') {
+      palNeon(ctx, () => { ctx.beginPath(); ctx.arc(ax, ay, outerR, s, e, false); }, lw);
+    }
+    if (walls !== 'outer' && innerR > 0.5) {
+      palNeon(ctx, () => { ctx.beginPath(); ctx.arc(ax, ay, innerR, s, e, false); }, lw);
+    }
+  }
+}
+
+// ── Scene ──────────────────────────────────────────────────────────────────────
 
 export class TrackEditor extends Scene {
-  // Track chain state
-  private defs:         PieceDef[]    = [];
-  private placed:       PlacedPiece[] = [];
-  private cursor        = { x: DEFAULT_START_X, y: DEFAULT_START_Y, heading: DEFAULT_START_HEADING };
-  private finishMarker:  TrackMarker | null = null;
-  private checkpoints:   TrackMarker[]     = [];
 
-  // Mutable start position / heading (editor can change these)
-  private curStartX       = DEFAULT_START_X;
-  private curStartY       = DEFAULT_START_Y;
-  private curStartHeading = DEFAULT_START_HEADING;
+  // Track state
+  private pieces:       PlacedPiece[]      = [];
+  private finishMarker: TrackMarker | null  = null;
+  private checkpoints:  TrackMarker[]       = [];
+  private curStartX    = DEFAULT_START_X;
+  private curStartY    = DEFAULT_START_Y;
+  private curStartH    = DEFAULT_START_H;
 
-  // Car selection + drag state
-  private isCarSelected   = false;
-  private isDraggingStart = false;
+  // Editor state
+  private selection:   Selection  = null;
+  private snapEnabled              = true;
+  private isDirty                  = false;
+  private clipboard:   PlacedPiece | null = null;
 
-  // Finish line selection + drag state
-  private isFinishSelected      = false;
-  private isDraggingFinish      = false;
+  // Undo / redo
+  private undoStack: EditorSnapshot[] = [];
+  private redoStack: EditorSnapshot[] = [];
 
-  // Checkpoint selection + drag state
-  private selectedCheckpointIdx = -1;
-  private isDraggingCheckpoint  = false;
+  // Drag / pinch
+  private dragOp:    DragOp = null;
+  private touches    = new Map<number, { x: number; y: number }>();
+  private pinchDist  = 0;
+  private pinchZoom  = 1;
 
-  // Ordered undo stack — tracks the sequence in which pieces/markers were added
-  private undoStack: Array<'piece' | 'finish' | 'checkpoint'> = [];
+  // Palette
+  private palTab:   PalTab      = 'straight';
+  private palWalls: WallVariant = 'both';
+  private palFlip   = false;
+  private palAngle: CornerAngle  = 90;
 
-  // Dirty flag — true when track has unsaved changes
-  private isDirty = false;
-
-  // Rotate button refs — enabled when car OR finish is selected
-  private rotateCcwBtn: HTMLButtonElement | null = null;
-  private rotateCwBtn:  HTMLButtonElement | null = null;
-
-  // Selection ring (world-space graphics, redrawn when selection changes)
-  private selectionGfx!: GameObjects.Graphics;
-
-  // Palette state
-  private palTab:    'straight' | 'corner' = 'straight';
-  private palFamily: CornerFamily           = 'corner';
-  private palFlip    = false;
-  private palAngle:  CornerAngle = 90;
-
-  // Camera / drag state — same pattern as Game.ts
-  private dragStartX  = 0;
-  private dragStartY  = 0;
-  private dragScrollX = 0;
-  private dragScrollY = 0;
-  private isDragging  = false;
-  private touches     = new Map<number, { x: number; y: number }>();
-  private pinchDist   = 0;
-  private pinchZoom   = 1;
-
-  // Phaser world-space rendering
+  // Phaser objects
   private markerGfx!:     GameObjects.Graphics;
-  private barrierImg:     GameObjects.Image | null = null;
+  private selectionGfx!:  GameObjects.Graphics;
+  private connGfx!:       GameObjects.Graphics;
+  private barrierImg:       GameObjects.Image | null = null;
+  private barrierExclude:   number | null            = null;
+  private selectedPieceImg: GameObjects.Image | null = null;
   private finishImg:      GameObjects.Image | null = null;
   private checkpointImgs: GameObjects.Image[]      = [];
   private startCarImg:    GameObjects.Image | null = null;
 
   // DOM
-  private palEl:  HTMLElement | null = null;
-  private hintEl: HTMLElement | null = null;
-
-  // Mine track context (set when editing an existing draft)
-  private mineTrackId:   string | null = null;
-  private existingName:  string        = '';
+  private hdrEl:     HTMLElement | null       = null;
+  private palEl:     HTMLElement | null       = null;
+  private propsEl:   HTMLElement | null       = null;
+  private snapBtnEl: HTMLButtonElement | null = null;
+  // Context
+  private mineTrackId: string | null = null;
+  private existingName = '';
 
   constructor() { super('TrackEditor'); }
+
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   preload(): void {
     for (const key of ['tile_finish_0', 'tile_checkpoint_0', 'tile_checkpoint_circle_0']) {
@@ -97,339 +353,259 @@ export class TrackEditor extends Scene {
   }
 
   init(data?: { mineTrackId?: string; track?: TrackEntry; startHeading?: number }): void {
-    this.defs               = [];
-    this.placed             = [];
-    this.finishMarker       = null;
-    this.checkpoints        = [];
-    this.isDirty            = false;
-    this.mineTrackId        = data?.mineTrackId ?? null;
-    this.existingName       = data?.track?.name ?? '';
-    this.isCarSelected         = false;
-    this.isDraggingStart       = false;
-    this.isFinishSelected      = false;
-    this.isDraggingFinish      = false;
-    this.selectedCheckpointIdx = -1;
-    this.isDraggingCheckpoint  = false;
-    this.undoStack             = [];
-    this.startCarImg        = null; // Phaser destroys it on shutdown; clear our reference
+    this.pieces        = [];
+    this.finishMarker  = null;
+    this.checkpoints   = [];
+    this.isDirty       = false;
+    this.mineTrackId   = data?.mineTrackId ?? null;
+    this.existingName  = data?.track?.name ?? '';
+    this.selection     = null;
+    this.dragOp        = null;
+    this.undoStack     = [];
+    this.redoStack     = [];
+    this.clipboard     = null;
+    this.startCarImg   = null;
+    this.barrierExclude = null;
 
-    // Car start position — independent of the track-building origin.
-    this.curStartX       = data?.track?.startX ?? DEFAULT_START_X;
-    this.curStartY       = data?.track?.startY ?? DEFAULT_START_Y;
-    this.curStartHeading = data?.startHeading  ?? DEFAULT_START_HEADING;
-
-    // Track always builds from a fixed origin; cursor starts there.
-    this.cursor = { x: DEFAULT_START_X, y: DEFAULT_START_Y, heading: DEFAULT_START_HEADING };
+    this.curStartX = data?.track?.startX      ?? DEFAULT_START_X;
+    this.curStartY = data?.track?.startY      ?? DEFAULT_START_Y;
+    this.curStartH = data?.startHeading       ?? data?.track?.startHeading ?? DEFAULT_START_H;
 
     const track = data?.track;
     if (track) {
-      this.defs = track.pieces.map(p => {
-        if (p.type === 'straight') {
-          return { type: p.type, size: p.size, walls: p.walls } as PieceDef;
-        }
-        return { type: p.type, angle: (p as CornerDef).angle, walls: p.walls, flip: (p as CornerDef).flip } as PieceDef;
-      });
-      const result = buildTrackWithCursor({
-        startX: DEFAULT_START_X, startY: DEFAULT_START_Y,
-        startHeading: DEFAULT_START_HEADING, pieces: this.defs,
-      });
-      this.placed = result.placed;
-      this.cursor = result.cursor;
-      this.finishMarker = track.markers.find(m => m.kind === 'finish') ?? null;
-      this.checkpoints  = track.markers.filter(m => m.kind === 'checkpoint');
-      // Rebuild undo stack from loaded state (pieces first, then finish, then checkpoints)
-      for (let i = 0; i < this.defs.length; i++) this.undoStack.push('piece');
-      if (this.finishMarker) this.undoStack.push('finish');
-      for (const _ of this.checkpoints) this.undoStack.push('checkpoint');
+      // PlacedPiece[] already has x, y, rotation — use directly
+      this.pieces       = track.pieces.map(p => ({ ...p }));
+      const finish      = track.markers.find(m => m.kind === 'finish');
+      this.finishMarker = finish ? { ...finish } : null;
+      this.checkpoints  = track.markers.filter(m => m.kind === 'checkpoint').map(m => ({ ...m }));
     }
   }
 
-  create() {
+  create(): void {
     const cam = this.cameras.main;
     cam.setBackgroundColor(BG);
     cam.setZoom(0.65);
     cam.centerOn(DEFAULT_START_X, DEFAULT_START_Y);
 
-    // ── DOM header (DOM avoids setScrollFactor(0) + camera-zoom scaling issue)
-    const hdrEl = document.createElement('div');
-    hdrEl.style.cssText = [
-      'position:fixed', 'top:0', 'left:0', 'right:0',
-      `height:${HEADER_H}px`,
-      'background:#12122a', 'border-bottom:1px solid #3a3a6a',
-      'display:flex', 'align-items:center',
-      'z-index:100', 'user-select:none', '-webkit-user-select:none',
-    ].join(';');
-
-    const backBtn = document.createElement('button');
-    backBtn.textContent = '‹ Back';
-    backBtn.style.cssText = [
-      'background:none', 'border:none', 'cursor:pointer',
-      'color:#8888ff', 'font:bold 16px "Arial Black",Arial,sans-serif',
-      'padding:0 16px', `height:${HEADER_H}px`,
-    ].join(';');
-    backBtn.addEventListener('click', () => this.scene.start('ModeSelect'));
-
-    const titleEl = document.createElement('span');
-    titleEl.textContent = 'EDITOR';
-    titleEl.style.cssText = [
-      'position:absolute', 'left:50%', 'transform:translateX(-50%)',
-      'color:#e8e8ff', 'font:bold 18px "Arial Black",Arial,sans-serif',
-      'pointer-events:none',
-    ].join(';');
-
-    const mkHdrBtn = (label: string, clr: string, bg: string, border: string, fn: () => void) => {
-      const b = document.createElement('button');
-      b.textContent = label;
-      b.style.cssText = [
-        'background:' + bg, 'border:1px solid ' + border, 'cursor:pointer',
-        'color:' + clr, 'font:bold 13px Arial,sans-serif',
-        'padding:6px 12px', 'border-radius:6px', 'margin-right:8px',
-        `height:${HEADER_H - 16}px`,
-      ].join(';');
-      b.addEventListener('click', fn);
-      return b;
-    };
-
-    const hdrRight = document.createElement('div');
-    hdrRight.style.cssText = 'margin-left:auto; display:flex; align-items:center;';
-    hdrRight.appendChild(mkHdrBtn('📂', '#aaaaff', '#0a0a22', '#333366', () => this.openDrafts()));
-    hdrRight.appendChild(mkHdrBtn('↩', '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
-    hdrRight.appendChild(mkHdrBtn('✓', '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
-
-    hdrEl.appendChild(backBtn);
-    hdrEl.appendChild(titleEl);
-    hdrEl.appendChild(hdrRight);
-    document.body.appendChild(hdrEl);
-
-    // ── Empty-state hint
-    const hintEl = document.createElement('div');
-    hintEl.textContent = 'Tap a piece below to start building';
-    hintEl.style.cssText = [
-      'position:fixed', `bottom:${PALETTE_H + 40}px`,
-      'left:0', 'right:0', 'text-align:center',
-      'color:rgba(120,120,200,0.6)', 'font:14px Arial,sans-serif',
-      'pointer-events:none', 'z-index:30',
-    ].join(';');
-    document.body.appendChild(hintEl);
-    this.hintEl = hintEl;
-
-    // ── World-space grid (drawn once; camera pan/zoom handles the rest)
+    // World grid
     const gridGfx = this.add.graphics();
     gridGfx.lineStyle(1, 0x1c1c4c, 1);
     const EXT = 4800, CELL = 24;
     for (let x = -EXT; x <= EXT; x += CELL) gridGfx.lineBetween(x, -EXT, x, EXT);
     for (let y = -EXT; y <= EXT; y += CELL) gridGfx.lineBetween(-EXT, y, EXT, y);
 
-    // ── World-space markers + cursor (redrawn on track change)
     this.markerGfx    = this.add.graphics().setDepth(5);
-    this.selectionGfx = this.add.graphics().setDepth(7); // above car (6)
-
-    // ── Input — identical to GridTest / Game.ts; no DOM canvas, no raw pointer events
-    this.input.addPointer(1);
-
-    this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
-      if (ptr.y > this.scale.height - PALETTE_H) return;
-      this.touches.set(ptr.id, { x: ptr.x, y: ptr.y });
-      if (this.touches.size >= 2) {
-        this.isDraggingStart      = false;
-        this.isDraggingCheckpoint = false;
-        const [a, b] = [...this.touches.values()];
-        this.pinchDist = Math.hypot(b.x - a.x, b.y - a.y);
-        this.pinchZoom = cam.zoom;
-        return;
-      }
-      // ptr.worldX/Y is Phaser's own camera-corrected world position — always correct.
-      const hitRadius = 48; // world units; ~31 screen px at default zoom 0.65
-      if (Math.hypot(ptr.worldX - this.curStartX, ptr.worldY - this.curStartY) < hitRadius) {
-        // Tap/press on car — select it and begin drag
-        if (this.isFinishSelected)           this.deselectFinish();
-        if (this.selectedCheckpointIdx >= 0) this.deselectCheckpoint();
-        if (!this.isCarSelected)             this.selectCar();
-        this.isDraggingStart = true;
-        return;
-      }
-      if (this.finishMarker &&
-          Math.hypot(ptr.worldX - this.finishMarker.x, ptr.worldY - this.finishMarker.y) < hitRadius) {
-        // Tap/press on finish line — select it and begin drag
-        if (this.isCarSelected)              this.deselectCar();
-        if (this.selectedCheckpointIdx >= 0) this.deselectCheckpoint();
-        if (!this.isFinishSelected)          this.selectFinish();
-        this.isDraggingFinish = true;
-        return;
-      }
-      // Check checkpoints
-      for (let i = 0; i < this.checkpoints.length; i++) {
-        const cp = this.checkpoints[i];
-        if (Math.hypot(ptr.worldX - cp.x, ptr.worldY - cp.y) < hitRadius) {
-          if (this.isCarSelected)    this.deselectCar();
-          if (this.isFinishSelected) this.deselectFinish();
-          this.selectCheckpoint(i);
-          this.isDraggingCheckpoint = true;
-          return;
-        }
-      }
-      // Tapped elsewhere — deselect everything, start camera pan
-      if (this.isCarSelected)              this.deselectCar();
-      if (this.isFinishSelected)           this.deselectFinish();
-      if (this.selectedCheckpointIdx >= 0) this.deselectCheckpoint();
-      this.isDraggingStart      = false;
-      this.isDraggingFinish     = false;
-      this.isDraggingCheckpoint = false;
-      this.isDragging           = false;
-      this.dragStartX           = ptr.x;
-      this.dragStartY           = ptr.y;
-      this.dragScrollX          = cam.scrollX;
-      this.dragScrollY          = cam.scrollY;
-    });
-
-    this.input.on('pointermove', (ptr: Phaser.Input.Pointer) => {
-      if (this.touches.has(ptr.id)) this.touches.set(ptr.id, { x: ptr.x, y: ptr.y });
-      if (this.touches.size >= 2) {
-        const [a, b] = [...this.touches.values()];
-        const dist = Math.hypot(b.x - a.x, b.y - a.y);
-        if (this.pinchDist > 0) {
-          cam.setZoom(Math.min(Math.max(this.pinchZoom * dist / this.pinchDist, 0.12), 4));
-        }
-        return;
-      }
-      if (!ptr.isDown) return;
-      if (this.isDraggingStart) {
-        this.curStartX = ptr.worldX;
-        this.curStartY = ptr.worldY;
-        this.updateStartCarImg();
-        return;
-      }
-      if (this.isDraggingFinish && this.finishMarker) {
-        this.finishMarker.x = ptr.worldX;
-        this.finishMarker.y = ptr.worldY;
-        this.updateFinishImg();
-        this.updateSelectionRing();
-        return;
-      }
-      if (this.isDraggingCheckpoint && this.selectedCheckpointIdx >= 0) {
-        const cp  = this.checkpoints[this.selectedCheckpointIdx];
-        const img = this.checkpointImgs[this.selectedCheckpointIdx];
-        if (cp && img) {
-          cp.x = ptr.worldX;
-          cp.y = ptr.worldY;
-          img.setPosition(ptr.worldX, ptr.worldY);
-          this.updateSelectionRing();
-        }
-        return;
-      }
-      const dx = ptr.x - this.dragStartX;
-      const dy = ptr.y - this.dragStartY;
-      if (!this.isDragging && Math.abs(dx) + Math.abs(dy) > 5) this.isDragging = true;
-      if (this.isDragging) {
-        const z = cam.zoom;
-        cam.setScroll(this.dragScrollX - dx / z, this.dragScrollY - dy / z);
-      }
-    });
-
-    this.input.on('pointerup', (ptr: Phaser.Input.Pointer) => {
-      const wasPinching = this.touches.size >= 2;
-      this.touches.delete(ptr.id);
-      if (wasPinching) {
-        this.pinchDist = 0;
-        const rem = [...this.touches.values()][0];
-        if (rem) {
-          this.dragStartX  = rem.x;
-          this.dragStartY  = rem.y;
-          this.dragScrollX = cam.scrollX;
-          this.dragScrollY = cam.scrollY;
-        }
-      }
-      if (this.isDraggingStart || this.isDraggingFinish || this.isDraggingCheckpoint) this.isDirty = true;
-      this.isDraggingStart      = false;
-      this.isDraggingFinish     = false;
-      this.isDraggingCheckpoint = false;
-      this.isDragging           = false;
-    });
-
-    this.input.on('wheel', (ptr: Phaser.Input.Pointer) => {
-      if (!ptr.deltaY) return;
-      const z = cam.zoom;
-      cam.setZoom(Math.min(Math.max(z * (ptr.deltaY > 0 ? 1 / 1.12 : 1.12), 0.12), 4));
-    });
-
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') this.scene.start('ModeSelect');
-    };
-    window.addEventListener('keydown', onEsc);
+    this.selectionGfx = this.add.graphics().setDepth(8);
+    this.connGfx      = this.add.graphics().setDepth(7);
 
     this.makeEditorCarTexture();
+    this.createHeader();
     this.createPalette();
-    this.redrawMarkers();
+
+    if (this.pieces.length > 0) {
+      this.updateBarrierImg();
+      const b = trackBounds(this.pieces);
+      cam.centerOn(b.cx, b.cy);
+    }
     this.updateStartCarImg();
     this.updateFinishImg();
     this.updateCheckpointImgs();
-    if (this.placed.length > 0) {
-      this.updateBarrierImg();
-      if (this.hintEl) this.hintEl.style.display = 'none';
-    }
+
+    this.input.addPointer(1);
+    this.input.on('pointerdown', (p: Phaser.Input.Pointer) => this.onDown(p));
+    this.input.on('pointermove', (p: Phaser.Input.Pointer) => this.onMove(p));
+    this.input.on('pointerup',   (p: Phaser.Input.Pointer) => this.onUp(p));
+    this.input.on('wheel',       (p: Phaser.Input.Pointer) => {
+      if (!p.deltaY) return;
+      const z = cam.zoom;
+      cam.setZoom(Math.min(Math.max(z * (p.deltaY > 0 ? 1 / 1.12 : 1.12), 0.12), 4));
+    });
+
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (this.selection) { this.deselectAll(); return; }
+      this.scene.start('ModeSelect');
+    };
+    window.addEventListener('keydown', onEsc);
 
     this.events.once('shutdown', () => {
       window.removeEventListener('keydown', onEsc);
-      hdrEl.remove();
-      hintEl.remove();
+      this.hdrEl?.remove();
       this.palEl?.remove();
-      this.palEl        = null;
-      this.rotateCcwBtn = null;
-      this.rotateCwBtn  = null;
+      this.propsEl?.remove();
+      this.hdrEl = null;
+      this.palEl = null;
+      this.propsEl = null;
     });
   }
 
-  // ── Barrier texture ───────────────────────────────────────────────────────────
+  // ── Header ─────────────────────────────────────────────────────────────────
 
-  private updateBarrierImg(): void {
+  private createHeader(): void {
+    const hdr = document.createElement('div');
+    hdr.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'right:0',
+      `height:${HEADER_H}px`,
+      'background:#12122a', 'border-bottom:1px solid #3a3a6a',
+      'display:flex', 'align-items:center', 'gap:4px',
+      'padding:0 8px', 'z-index:100',
+      'user-select:none', '-webkit-user-select:none',
+    ].join(';');
+
+    const backBtn = document.createElement('button');
+    backBtn.textContent = '‹';
+    backBtn.title = 'Back';
+    backBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#8888ff;font:bold 22px Arial,sans-serif;padding:0 6px;height:100%;flex-shrink:0;';
+    backBtn.addEventListener('click', () => this.scene.start('ModeSelect'));
+
+    const titleEl = document.createElement('div');
+    titleEl.style.cssText = 'flex:1;';
+
+    const mkBtn = (text: string, title: string, color: string, bg: string, border: string, fn: () => void) => {
+      const b = document.createElement('button');
+      b.textContent = text; b.title = title;
+      b.style.cssText = [
+        'border-radius:5px', 'cursor:pointer', 'font:bold 12px Arial,sans-serif',
+        'padding:4px 8px', `color:${color}`, `background:${bg}`, `border:1px solid ${border}`,
+        `height:${HEADER_H - 16}px`, 'white-space:nowrap', 'flex-shrink:0',
+      ].join(';');
+      b.addEventListener('click', fn);
+      return b;
+    };
+
+    const sep = () => {
+      const s = document.createElement('div');
+      s.style.cssText = 'width:1px;height:55%;background:#333366;margin:0 1px;flex-shrink:0;';
+      return s;
+    };
+
+    const snapBtn = document.createElement('button');
+    snapBtn.title = 'Toggle connection snapping';
+    snapBtn.style.cssText = [
+      'border-radius:5px', 'cursor:pointer', 'font:bold 12px Arial,sans-serif',
+      'padding:4px 8px', `height:${HEADER_H - 16}px`, 'flex-shrink:0',
+    ].join(';');
+    snapBtn.addEventListener('click', () => { this.snapEnabled = !this.snapEnabled; this.updateSnapBtn(); });
+    this.snapBtnEl = snapBtn;
+    this.updateSnapBtn();
+
+    hdr.appendChild(backBtn);
+    hdr.appendChild(titleEl);
+    hdr.appendChild(sep());
+    hdr.appendChild(snapBtn);
+    hdr.appendChild(sep());
+    hdr.appendChild(mkBtn('↩', 'Undo', '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
+    hdr.appendChild(mkBtn('↪', 'Redo', '#ffaa44', '#1a0e00', '#553300', () => this.redo()));
+    hdr.appendChild(sep());
+    hdr.appendChild(mkBtn('📂', 'My drafts', '#aaaaff', '#0a0a22', '#333366', () => this.openDrafts()));
+    hdr.appendChild(mkBtn('✓ Save', 'Save track', '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
+
+    document.body.appendChild(hdr);
+    this.hdrEl = hdr;
+  }
+
+  private updateSnapBtn(): void {
+    if (!this.snapBtnEl) return;
+    this.snapBtnEl.textContent = this.snapEnabled ? '🔗 Snap' : '🔗 Snap';
+    this.snapBtnEl.style.background = this.snapEnabled ? '#001a22' : '#111128';
+    this.snapBtnEl.style.color      = this.snapEnabled ? '#44ddff' : '#445566';
+    this.snapBtnEl.style.border     = `1px solid ${this.snapEnabled ? '#226644' : '#2a2a44'}`;
+  }
+
+  // ── Barrier texture ─────────────────────────────────────────────────────────
+
+  private updateBarrierImg(excludeIdx: number | null = null): void {
+    this.barrierExclude = excludeIdx;
     if (this.barrierImg) { this.barrierImg.destroy(); this.barrierImg = null; }
-    if (this.placed.length === 0) return;
+    const drawPieces = excludeIdx !== null
+      ? this.pieces.filter((_, i) => i !== excludeIdx)
+      : this.pieces;
+    if (drawPieces.length === 0) return;
 
-    const b   = trackBounds(this.placed);
+    const b   = trackBounds(drawPieces);
     const pad = 12;
     const w   = Math.ceil(b.width  + pad * 2);
     const h   = Math.ceil(b.height + pad * 2);
     const key = '_ed_barriers';
-
     if (this.textures.exists(key)) this.textures.remove(key);
     const ct = this.textures.createCanvas(key, w, h)!;
-    drawBarriersOnCanvas(ct.getContext(), this.placed,
+    drawBarriersOnCanvas(ct.getContext(), drawPieces,
       b.x - pad, b.y - pad, 1, 1, 0, 0, '#33bb55', 2);
     ct.refresh();
-
-    this.barrierImg = this.add.image(b.x - pad, b.y - pad, key)
-      .setOrigin(0, 0).setDepth(3);
+    this.barrierImg = this.add.image(b.x - pad, b.y - pad, key).setOrigin(0, 0).setDepth(3);
   }
 
-  // ── Markers + cursor ──────────────────────────────────────────────────────────
+  // Rebuild the cyan glow overlay for the selected piece.
+  // Renders the actual barrier walls in cyan so the user can clearly see which
+  // walls the piece has.  Hidden during drag; restored on drop.
+  private updateSelectedHighlight(): void {
+    this.selectedPieceImg?.destroy();
+    this.selectedPieceImg = null;
 
-  private redrawMarkers(): void {
-    this.markerGfx.clear();
-    // Near-closed check: cursor approaching the fixed track-building origin.
-    const nearClosed = this.defs.length >= 3
-      && Math.hypot(this.cursor.x - DEFAULT_START_X, this.cursor.y - DEFAULT_START_Y) < CORRIDOR * 1.5;
-    this.drawWorldDot(this.cursor.x, this.cursor.y, this.cursor.heading,
-      nearClosed ? 0x88ff44 : 0xffee00, 6);
+    if (this.selection?.kind !== 'piece') return;
+    const p = this.pieces[this.selection.idx];
+    if (!p) return;
+    // Corners are drawn as accurate arcs by drawSelectionOverlay (selectionGfx).
+    // Only straights use a canvas-texture glow.
+    if (p.type !== 'straight') return;
+
+    const b   = trackBounds([p]);
+    const pad = 18;
+    const w   = Math.max(4, Math.ceil(b.width  + pad * 2));
+    const h   = Math.max(4, Math.ceil(b.height + pad * 2));
+    const key = '_ed_sel_hl';
+    if (this.textures.exists(key)) this.textures.remove(key);
+    const ct  = this.textures.createCanvas(key, w, h)!;
+    const ctx = ct.getContext();
+
+    // Three-pass glow: thick semi-transparent → medium cyan → thin white
+    drawBarriersOnCanvas(ctx, [p], b.x - pad, b.y - pad, 1, 1, 0, 0, 'rgba(0,220,255,0.30)', 10);
+    drawBarriersOnCanvas(ctx, [p], b.x - pad, b.y - pad, 1, 1, 0, 0, '#00ddff', 3.5);
+    drawBarriersOnCanvas(ctx, [p], b.x - pad, b.y - pad, 1, 1, 0, 0, 'rgba(255,255,255,0.65)', 1.5);
+
+    ct.refresh();
+    this.selectedPieceImg = this.add.image(b.x - pad, b.y - pad, key)
+      .setOrigin(0, 0)
+      .setDepth(3.5); // above barrier canvas (3), below markers (4)
   }
 
-  private drawWorldDot(wx: number, wy: number, heading: number, color: number, r: number): void {
-    const hr = heading * Math.PI / 180;
-    this.markerGfx.lineStyle(1.5, color, 1);
-    this.markerGfx.lineBetween(wx, wy, wx + Math.sin(hr) * 20, wy - Math.cos(hr) * 20);
-    this.markerGfx.fillStyle(color, 1);
-    this.markerGfx.fillCircle(wx, wy, r);
-    this.markerGfx.lineStyle(1, 0xffffff, 1);
-    this.markerGfx.strokeCircle(wx, wy, r);
+  // ── Marker images ───────────────────────────────────────────────────────────
+
+  private makeEditorCarTexture(): void {
+    const KEY = 'editor_car';
+    if (this.textures.exists(KEY)) return;
+    const gPx = 36;
+    const HW = Math.round(gPx * 0.50), HH = Math.round(gPx * 0.85);
+    const PAD = Math.round(gPx * 0.45);
+    const W = (HW + PAD) * 2, H = (HH + PAD) * 2;
+    const cx = W / 2, cy = H / 2;
+    const ct  = this.textures.createCanvas(KEY, W, H)!;
+    const ctx = ct.getContext();
+    ctx.shadowColor = 'hsl(300,100%,60%)'; ctx.shadowBlur = 10;
+    ctx.fillStyle   = 'hsl(300,100%,60%)';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - HH); ctx.lineTo(cx + HW, cy + HH);
+    ctx.lineTo(cx, cy + HH * 0.35); ctx.lineTo(cx - HW, cy + HH);
+    ctx.closePath(); ctx.fill();
+    ctx.shadowBlur = 0; ctx.fillStyle = 'rgba(255,255,255,0.80)';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - HH + 3); ctx.lineTo(cx + HW * 0.45, cy + HH * 0.2);
+    ctx.lineTo(cx, cy + HH * 0.1); ctx.lineTo(cx - HW * 0.45, cy + HH * 0.2);
+    ctx.closePath(); ctx.fill();
+    ct.refresh();
+  }
+
+  private updateStartCarImg(): void {
+    this.startCarImg?.destroy();
+    this.startCarImg = this.add.image(this.curStartX, this.curStartY, 'editor_car')
+      .setAngle(this.curStartH).setOrigin(0.5).setDepth(6);
   }
 
   private updateFinishImg(): void {
-    this.finishImg?.destroy();
-    this.finishImg = null;
+    this.finishImg?.destroy(); this.finishImg = null;
     if (!this.finishMarker) return;
     this.finishImg = this.add.image(this.finishMarker.x, this.finishMarker.y, 'tile_finish_0')
-      .setAngle(this.finishMarker.rotation)
-      .setOrigin(0.5)
-      .setDepth(4);
+      .setAngle(this.finishMarker.rotation).setOrigin(0.5).setDepth(4);
   }
 
   private updateCheckpointImgs(): void {
@@ -443,653 +619,1134 @@ export class TrackEditor extends Scene {
     }
   }
 
-  private makeEditorCarTexture(): void {
-    const KEY = 'editor_car';
-    if (this.textures.exists(KEY)) return;
-    const gPx = 36; // slightly larger than gameplay size for editor visibility
-    const HW  = Math.round(gPx * 0.50);
-    const HH  = Math.round(gPx * 0.85);
-    const PAD = Math.round(gPx * 0.45);
-    const W   = (HW + PAD) * 2;
-    const H   = (HH + PAD) * 2;
-    const cx  = W / 2, cy = H / 2;
-    const ct  = this.textures.createCanvas(KEY, W, H)!;
-    const ctx = ct.getContext();
-    ctx.shadowColor = 'hsl(300,100%,60%)';
-    ctx.shadowBlur  = 10;
-    ctx.fillStyle   = 'hsl(300,100%,60%)';
-    ctx.beginPath();
-    ctx.moveTo(cx,      cy - HH);
-    ctx.lineTo(cx + HW, cy + HH);
-    ctx.lineTo(cx,      cy + HH * 0.35);
-    ctx.lineTo(cx - HW, cy + HH);
-    ctx.closePath();
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle  = 'rgba(255,255,255,0.80)';
-    ctx.beginPath();
-    ctx.moveTo(cx,              cy - HH + 3);
-    ctx.lineTo(cx + HW * 0.45, cy + HH * 0.2);
-    ctx.lineTo(cx,              cy + HH * 0.1);
-    ctx.lineTo(cx - HW * 0.45, cy + HH * 0.2);
-    ctx.closePath();
-    ctx.fill();
-    ct.refresh();
-  }
+  // ── Selection overlay ────────────────────────────────────────────────────────
 
-  private updateStartCarImg(): void {
-    this.startCarImg?.destroy();
-    this.startCarImg = this.add.image(this.curStartX, this.curStartY, 'editor_car')
-      .setAngle(this.curStartHeading) // texture points north; heading 0=N, 90=E, 180=S
-      .setOrigin(0.5)
-      .setDepth(6); // above finish (4) and marker gfx (5)
-    this.updateSelectionRing();
-  }
-
-  private selectCar(): void {
-    this.isCarSelected = true;
-    if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = false;
-    if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = false;
-    this.updateSelectionRing();
-  }
-
-  private deselectCar(): void {
-    this.isCarSelected = false;
-    if (!this.isFinishSelected && this.selectedCheckpointIdx < 0) {
-      if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = true;
-      if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = true;
-    }
-    this.updateSelectionRing();
-  }
-
-  private selectFinish(): void {
-    this.isFinishSelected = true;
-    if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = false;
-    if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = false;
-    this.updateSelectionRing();
-  }
-
-  private deselectFinish(): void {
-    this.isFinishSelected = false;
-    if (!this.isCarSelected && this.selectedCheckpointIdx < 0) {
-      if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = true;
-      if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = true;
-    }
-    this.updateSelectionRing();
-  }
-
-  private selectCheckpoint(i: number): void {
-    this.selectedCheckpointIdx = i;
-    if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = false;
-    if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = false;
-    this.updateSelectionRing();
-  }
-
-  private deselectCheckpoint(): void {
-    this.selectedCheckpointIdx = -1;
-    if (!this.isCarSelected && !this.isFinishSelected) {
-      if (this.rotateCcwBtn) this.rotateCcwBtn.disabled = true;
-      if (this.rotateCwBtn)  this.rotateCwBtn.disabled  = true;
-    }
-    this.updateSelectionRing();
-  }
-
-  private updateSelectionRing(): void {
+  private drawSelectionOverlay(): void {
     this.selectionGfx.clear();
-    if (this.isCarSelected) {
-      const r = 36;
-      this.selectionGfx.lineStyle(2, 0x00eeff, 0.9);
-      this.selectionGfx.strokeCircle(this.curStartX, this.curStartY, r);
-      this.selectionGfx.fillStyle(0x00eeff, 1);
-      for (const [dx, dy] of [[0, -r], [r, 0], [0, r], [-r, 0]] as [number, number][]) {
-        this.selectionGfx.fillCircle(this.curStartX + dx, this.curStartY + dy, 3.5);
+    this.connGfx.clear();
+
+    if (this.selection?.kind === 'car') {
+      this.drawMarkerRing(this.curStartX, this.curStartY, this.curStartH, 0x00eeff); return;
+    }
+    if (this.selection?.kind === 'finish' && this.finishMarker) {
+      this.drawMarkerRing(this.finishMarker.x, this.finishMarker.y, this.finishMarker.rotation, 0xffdd00); return;
+    }
+    if (this.selection?.kind === 'checkpoint') {
+      const cp = this.checkpoints[this.selection.idx];
+      if (cp) this.drawMarkerRing(cp.x, cp.y, cp.rotation, 0x00ccff);
+      return;
+    }
+    if (this.selection?.kind !== 'piece') return;
+
+    const p = this.pieces[this.selection.idx];
+    if (!p) return;
+    const g = this.selectionGfx;
+
+    // Straight drag visual — wall lines at new position (selectedPieceImg is
+    // still at the old position and is hidden during a move drag).
+    if (p.type === 'straight' && this.dragOp?.kind === 'move') {
+      g.lineStyle(4, 0x00ddff, 0.75);
+      const half = STRAIGHT_LEN[(p as StraightDef).size] / 2;
+      const def  = p as StraightDef;
+      if (def.walls !== 'inner') {
+        const [tx, ty] = rotateCW( HALF_TRACK, -half, p.rotation);
+        const [bx, by] = rotateCW( HALF_TRACK,  half, p.rotation);
+        g.lineBetween(p.x + tx, p.y + ty, p.x + bx, p.y + by);
+      }
+      if (def.walls !== 'outer') {
+        const [tx, ty] = rotateCW(-HALF_TRACK, -half, p.rotation);
+        const [bx, by] = rotateCW(-HALF_TRACK,  half, p.rotation);
+        g.lineBetween(p.x + tx, p.y + ty, p.x + bx, p.y + by);
       }
     }
-    if (this.isFinishSelected && this.finishMarker) {
-      const r = 36;
-      this.selectionGfx.lineStyle(2, 0xffdd00, 0.9);
-      this.selectionGfx.strokeCircle(this.finishMarker.x, this.finishMarker.y, r);
-      this.selectionGfx.fillStyle(0xffdd00, 1);
-      for (const [dx, dy] of [[0, -r], [r, 0], [0, r], [-r, 0]] as [number, number][]) {
-        this.selectionGfx.fillCircle(this.finishMarker.x + dx, this.finishMarker.y + dy, 3.5);
+
+    // Corner arc selection indicator — drawn as actual arcs (not full circles),
+    // matching the exact geometry of the visible track walls.
+    if (p.type !== 'straight') {
+      const outerR = p.type === 'corner' ? TIGHT.outerR : BIG.outerR;
+      const innerR = p.type === 'corner' ? TIGHT.innerR : BIG.innerR;
+      const def    = p as CornerDef;
+      if (def.walls !== 'inner') {
+        drawCornerArcOnGfx(g, p, outerR, 9,  0x00ddff, 0.25); // glow
+        drawCornerArcOnGfx(g, p, outerR, 3,  0x00ddff, 0.90); // bright line
+      }
+      if (def.walls !== 'outer' && innerR > 8) {
+        drawCornerArcOnGfx(g, p, innerR, 9,  0x00ddff, 0.25);
+        drawCornerArcOnGfx(g, p, innerR, 3,  0x00ddff, 0.90);
       }
     }
-    if (this.selectedCheckpointIdx >= 0) {
-      const cp = this.checkpoints[this.selectedCheckpointIdx];
-      if (cp) {
-        const r = 36;
-        this.selectionGfx.lineStyle(2, 0x00ccff, 0.9);
-        this.selectionGfx.strokeCircle(cp.x, cp.y, r);
-        this.selectionGfx.fillStyle(0x00ccff, 1);
-        for (const [dx, dy] of [[0, -r], [r, 0], [0, r], [-r, 0]] as [number, number][]) {
-          this.selectionGfx.fillCircle(cp.x + dx, cp.y + dy, 3.5);
-        }
+
+    // Rotate handle — drawn from the exit connector outward
+    const conns = worldConnectors(p);
+    const h     = getHandlePos(p);
+    // Stem line from exit connector to handle
+    g.lineStyle(2, 0x00eeff, 0.6);
+    g.lineBetween(conns.exit.x, conns.exit.y, h.x, h.y);
+    // Outer ring
+    g.lineStyle(3, 0x00eeff, 1);
+    g.strokeCircle(h.x, h.y, HANDLE_HIT_R);
+    // Inner fill
+    g.fillStyle(0x00eeff, 0.85);
+    g.fillCircle(h.x, h.y, HANDLE_HIT_R - 5);
+    // White centre dot
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(h.x, h.y, 4);
+
+    // Connection-point dots (on connGfx so they can be cleared independently)
+    const cg = this.connGfx;
+    cg.fillStyle(0xffee00, 0.9);
+    cg.fillCircle(conns.entry.x, conns.entry.y, 6);
+    cg.fillStyle(0x44ff88, 0.9);
+    cg.fillCircle(conns.exit.x, conns.exit.y, 6);
+
+    // Other pieces' connectors during move drag
+    if (this.snapEnabled && this.dragOp?.kind === 'move') {
+      for (let i = 0; i < this.pieces.length; i++) {
+        if (i === this.selection.idx) continue;
+        const oc = worldConnectors(this.pieces[i]);
+        cg.fillStyle(0xff8844, 0.75); cg.fillCircle(oc.exit.x,  oc.exit.y,  5);
+        cg.fillStyle(0x4488ff, 0.75); cg.fillCircle(oc.entry.x, oc.entry.y, 5);
       }
     }
   }
 
-  // ── Track editing ─────────────────────────────────────────────────────────────
-
-  private rebuildTrack(): void {
-    // Track always builds from a fixed origin; curStart* is the car position only.
-    const result = buildTrackWithCursor({
-      startX: DEFAULT_START_X, startY: DEFAULT_START_Y,
-      startHeading: DEFAULT_START_HEADING, pieces: this.defs,
-    });
-    this.placed = result.placed;
-    this.cursor = result.cursor;
+  private drawMarkerRing(x: number, y: number, rotDeg: number, color: number): void {
+    const r = 38, g = this.selectionGfx;
+    g.lineStyle(2, color, 0.9); g.strokeCircle(x, y, r);
+    g.fillStyle(color, 1);
+    for (const [dx, dy] of [[0,-r],[r,0],[0,r],[-r,0]] as [number,number][]) {
+      g.fillCircle(x + dx, y + dy, 3.5);
+    }
+    // Rotation handle — identical style to piece handles
+    const h = getMarkerHandlePos(x, y, rotDeg);
+    g.lineStyle(2, color, 0.6);
+    g.lineBetween(x, y, h.x, h.y);
+    g.lineStyle(3, color, 1);
+    g.strokeCircle(h.x, h.y, HANDLE_HIT_R);
+    g.fillStyle(color, 0.85);
+    g.fillCircle(h.x, h.y, HANDLE_HIT_R - 5);
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(h.x, h.y, 4);
   }
 
-  // Preserved for future "move/rotate entire track" feature — not called from car UI.
-  private rebuildFromStart(): void {
-    const result = buildTrackWithCursor({
-      startX: this.curStartX, startY: this.curStartY,
-      startHeading: this.curStartHeading, pieces: this.defs,
-    });
-    this.placed = result.placed;
-    this.cursor = result.cursor;
-    this.updateBarrierImg();
-    this.redrawMarkers();
-    this.updateFinishImg();
+  // ── Hit testing ─────────────────────────────────────────────────────────────
+
+  private hitTestPiece(wx: number, wy: number): number | null {
+    for (let i = this.pieces.length - 1; i >= 0; i--) {
+      const p = this.pieces[i];
+      const dx = wx - p.x, dy = wy - p.y;
+      if (p.type === 'straight') {
+        const half = STRAIGHT_LEN[(p as StraightDef).size] / 2;
+        const rad  = p.rotation * Math.PI / 180;
+        const c = Math.cos(rad), s = Math.sin(rad);
+        const lx = dx * c + dy * s, ly = -dx * s + dy * c;
+        if (Math.abs(lx) <= HALF_TRACK * 1.15 && Math.abs(ly) <= half * 1.1) return i;
+      } else {
+        const outerR = p.type === 'corner' ? TIGHT.outerR : BIG.outerR;
+        const innerR = p.type === 'corner' ? TIGHT.innerR : BIG.innerR;
+        const dist   = Math.hypot(dx, dy);
+        // Annular radial check
+        if (dist >= outerR || dist <= Math.max(innerR - 8, 4)) continue;
+        // Angular sector check: transform touch to local piece space, then
+        // verify it falls within the arc's angular sweep.
+        const pRad = p.rotation * Math.PI / 180;
+        const pc = Math.cos(pRad), ps = Math.sin(pRad);
+        const lx = dx * pc + dy * ps;   // undo piece rotation
+        const ly = -dx * ps + dy * pc;
+        const flip   = (p as CornerDef).flip ?? false;
+        const θr     = (p as CornerDef).angle * Math.PI / 180;
+        const c      = connectors(p);
+        const eAngle = Math.atan2(c.entryY, c.entryX);
+        const tAngle = Math.atan2(ly, lx);
+        // Relative angle sweeping CW on screen (= increasing atan2).
+        // Right turn sweeps [0, θ], left turn sweeps [2π-θ, 2π].
+        const rel = ((tAngle - eAngle) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+        const TOL = 8 * Math.PI / 180; // 8° tolerance at arc edges
+        const inArc = flip ? rel >= (2 * Math.PI - θr - TOL) : rel <= (θr + TOL);
+        if (inArc) return i;
+      }
+    }
+    return null;
   }
 
-  private rotateStartHeading(delta: number): void {
-    this.isDirty = true;
-    if (this.selectedCheckpointIdx >= 0) {
-      const cp = this.checkpoints[this.selectedCheckpointIdx];
-      if (cp) {
-        cp.rotation = ((cp.rotation + delta) % 360 + 360) % 360;
-        this.updateCheckpointImgs();
-        this.updateSelectionRing();
+  private hitTestHandle(wx: number, wy: number): boolean {
+    const sel = this.selection;
+    if (!sel) return false;
+    if (sel.kind === 'piece') {
+      const p = this.pieces[sel.idx];
+      if (!p) return false;
+      const h = getHandlePos(p);
+      return Math.hypot(wx - h.x, wy - h.y) < HANDLE_HIT_R;
+    }
+    if (sel.kind === 'car') {
+      const h = getMarkerHandlePos(this.curStartX, this.curStartY, this.curStartH);
+      return Math.hypot(wx - h.x, wy - h.y) < HANDLE_HIT_R;
+    }
+    if (sel.kind === 'finish' && this.finishMarker) {
+      const h = getMarkerHandlePos(this.finishMarker.x, this.finishMarker.y, this.finishMarker.rotation);
+      return Math.hypot(wx - h.x, wy - h.y) < HANDLE_HIT_R;
+    }
+    if (sel.kind === 'checkpoint') {
+      const cp = this.checkpoints[sel.idx];
+      if (!cp) return false;
+      const h = getMarkerHandlePos(cp.x, cp.y, cp.rotation);
+      return Math.hypot(wx - h.x, wy - h.y) < HANDLE_HIT_R;
+    }
+    return false;
+  }
+
+  // ── Input ───────────────────────────────────────────────────────────────────
+
+  private onDown(ptr: Phaser.Input.Pointer): void {
+    if (ptr.y > this.scale.height - PALETTE_H) return;
+    this.touches.set(ptr.id, { x: ptr.x, y: ptr.y });
+
+    if (this.touches.size >= 2) {
+      this.dragOp = null;
+      const [a, b] = [...this.touches.values()];
+      this.pinchDist = Math.hypot(b.x - a.x, b.y - a.y);
+      this.pinchZoom = this.cameras.main.zoom;
+      return;
+    }
+
+    const wx = ptr.worldX, wy = ptr.worldY;
+    const cam = this.cameras.main;
+
+
+    // Rotate handle — highest priority (covers pieces AND markers)
+    if (this.hitTestHandle(wx, wy)) {
+      this.saveUndo();
+      const sel = this.selection!;
+      if (sel.kind === 'piece') {
+        const p = this.pieces[sel.idx];
+        this.updateBarrierImg(sel.idx);
+        this.dragOp = { kind: 'rotate', idx: sel.idx, handleLocalAngle: getHandleLocalAngle(p) };
+      } else if (sel.kind === 'car') {
+        this.dragOp = { kind: 'rotate-car' };
+      } else if (sel.kind === 'finish') {
+        this.dragOp = { kind: 'rotate-finish' };
+      } else if (sel.kind === 'checkpoint') {
+        this.dragOp = { kind: 'rotate-checkpoint', idx: sel.idx };
       }
       return;
     }
-    if (this.isFinishSelected && this.finishMarker) {
-      this.finishMarker.rotation = ((this.finishMarker.rotation + delta) % 360 + 360) % 360;
-      this.updateFinishImg();
-      this.updateSelectionRing();
+
+    // Markers are tested before pieces because they visually sit on top of the
+    // track and must win the hit test when both overlap.
+
+    // Car
+    if (Math.hypot(wx - this.curStartX, wy - this.curStartY) < HIT_R_MARKER) {
+      this.selectMarker({ kind: 'car' });
+      this.saveUndo();
+      this.dragOp = { kind: 'move-car' };
       return;
     }
-    if (!this.isCarSelected) return;
-    this.curStartHeading = ((this.curStartHeading + delta) % 360 + 360) % 360;
-    this.updateStartCarImg();
-    this.updateStartHeadingDisplay();
+
+    // Finish
+    if (this.finishMarker &&
+        Math.hypot(wx - this.finishMarker.x, wy - this.finishMarker.y) < HIT_R_MARKER) {
+      this.selectMarker({ kind: 'finish' });
+      this.saveUndo();
+      this.dragOp = { kind: 'move-finish' };
+      return;
+    }
+
+    // Checkpoints
+    for (let i = 0; i < this.checkpoints.length; i++) {
+      const cp = this.checkpoints[i];
+      if (Math.hypot(wx - cp.x, wy - cp.y) < HIT_R_MARKER) {
+        this.selectMarker({ kind: 'checkpoint', idx: i });
+        this.saveUndo();
+        this.dragOp = { kind: 'move-checkpoint', idx: i };
+        return;
+      }
+    }
+
+    // Piece
+    const pidx = this.hitTestPiece(wx, wy);
+    if (pidx !== null) {
+      this.selectPiece(pidx);
+      this.saveUndo();
+      this.updateBarrierImg(pidx);
+      this.selectedPieceImg?.setVisible(false);
+      const p = this.pieces[pidx];
+      this.dragOp = { kind: 'move', idx: pidx, offX: wx - p.x, offY: wy - p.y };
+      this.drawSelectionOverlay();
+      return;
+    }
+
+    // Empty — deselect + pan
+    this.deselectAll();
+    this.dragOp = { kind: 'pan', sx: ptr.x, sy: ptr.y, scrollX: cam.scrollX, scrollY: cam.scrollY };
   }
 
-  private updateStartHeadingDisplay(): void {
-    const el = document.getElementById('ed-start-heading');
-    if (el) {
-      el.innerHTML =
-        `<span style="display:inline-block;transform:rotate(${this.curStartHeading}deg)">↑</span> ${this.curStartHeading}°`;
+  private onMove(ptr: Phaser.Input.Pointer): void {
+    if (this.touches.has(ptr.id)) this.touches.set(ptr.id, { x: ptr.x, y: ptr.y });
+
+    if (this.touches.size >= 2) {
+      const [a, b] = [...this.touches.values()];
+      const dist = Math.hypot(b.x - a.x, b.y - a.y);
+      if (this.pinchDist > 0)
+        this.cameras.main.setZoom(Math.min(Math.max(this.pinchZoom * dist / this.pinchDist, 0.12), 4));
+      return;
+    }
+
+    if (!ptr.isDown || !this.dragOp) return;
+    const op = this.dragOp;
+    const wx = ptr.worldX, wy = ptr.worldY;
+
+    if (op.kind === 'pan') {
+      const z = this.cameras.main.zoom;
+      this.cameras.main.setScroll(op.scrollX - (ptr.x - op.sx) / z, op.scrollY - (ptr.y - op.sy) / z);
+      return;
+    }
+
+    if (op.kind === 'move') {
+      let updated = { ...this.pieces[op.idx], x: wx - op.offX, y: wy - op.offY };
+      if (this.snapEnabled) {
+        const snapped = trySnapPiece(updated, op.idx, this.pieces);
+        if (snapped) updated = snapped;
+      }
+      this.pieces[op.idx] = updated;
+      this.isDirty = true;
+      this.drawSelectionOverlay();
+      return;
+    }
+
+    if (op.kind === 'rotate') {
+      const p        = this.pieces[op.idx];
+      const ptrAngle = Math.atan2(wy - p.y, wx - p.x);
+      const rawDeg   = (ptrAngle - op.handleLocalAngle) * 180 / Math.PI;
+      const newRot   = ((Math.round(rawDeg / 15) * 15) % 360 + 360) % 360;
+      if (newRot === p.rotation) return; // no 15° snap change — skip redraw
+      this.pieces[op.idx] = { ...p, rotation: newRot };
+      this.isDirty = true;
+      // Keep selectedPieceImg visible and current so the piece stays visible at the new angle.
+      this.updateSelectedHighlight();
+      this.drawSelectionOverlay();
+      return;
+    }
+
+    if (op.kind === 'move-car') {
+      this.curStartX = wx; this.curStartY = wy;
+      this.updateStartCarImg(); this.drawSelectionOverlay(); this.isDirty = true;
+      return;
+    }
+
+    if (op.kind === 'move-finish' && this.finishMarker) {
+      this.finishMarker.x = wx; this.finishMarker.y = wy;
+      this.updateFinishImg(); this.drawSelectionOverlay(); this.isDirty = true;
+      return;
+    }
+
+    if (op.kind === 'move-checkpoint') {
+      const cp = this.checkpoints[op.idx];
+      const img = this.checkpointImgs[op.idx];
+      if (cp && img) {
+        cp.x = wx; cp.y = wy;
+        img.setPosition(wx, wy);
+        this.drawSelectionOverlay(); this.isDirty = true;
+      }
+      return;
+    }
+
+    if (op.kind === 'rotate-car') {
+      const r = snapMarkerRotation(wx, wy, this.curStartX, this.curStartY);
+      if (r === this.curStartH) return;
+      this.curStartH = r;
+      this.updateStartCarImg(); this.drawSelectionOverlay(); this.isDirty = true;
+      return;
+    }
+
+    if (op.kind === 'rotate-finish' && this.finishMarker) {
+      const r = snapMarkerRotation(wx, wy, this.finishMarker.x, this.finishMarker.y);
+      if (r === this.finishMarker.rotation) return;
+      this.finishMarker.rotation = r;
+      this.updateFinishImg(); this.drawSelectionOverlay(); this.isDirty = true;
+      return;
+    }
+
+    if (op.kind === 'rotate-checkpoint') {
+      const cp  = this.checkpoints[op.idx];
+      const img = this.checkpointImgs[op.idx];
+      if (!cp || !img) return;
+      const r = snapMarkerRotation(wx, wy, cp.x, cp.y);
+      if (r === cp.rotation) return;
+      cp.rotation = r;
+      img.setAngle(r);
+      this.drawSelectionOverlay(); this.isDirty = true;
+      return;
     }
   }
 
-  private addPiece(def: PieceDef): void {
-    this.isDirty = true;
-    this.defs.push(def);
-    this.undoStack.push('piece');
-    this.rebuildTrack();
-    this.scrollToCursor();
-    this.updateBarrierImg();
-    this.redrawMarkers();
-    this.rebuildOpts();
-    if (this.hintEl) this.hintEl.style.display = 'none';
-  }
+  private onUp(ptr: Phaser.Input.Pointer): void {
+    const wasPinching = this.touches.size >= 2;
+    this.touches.delete(ptr.id);
+    if (wasPinching) {
+      this.pinchDist = 0;
+      const rem = [...this.touches.values()][0];
+      if (rem) {
+        const cam = this.cameras.main;
+        this.dragOp = { kind: 'pan', sx: rem.x, sy: rem.y, scrollX: cam.scrollX, scrollY: cam.scrollY };
+      }
+      return;
+    }
 
-  private undo(): void {
-    const last = this.undoStack.pop();
-    if (!last) return;
-    this.isDirty = true;
-    if (last === 'finish') {
-      this.finishMarker = null;
-      if (this.isFinishSelected) this.deselectFinish();
-      this.updateFinishImg();
-      this.redrawMarkers();
-    } else if (last === 'checkpoint') {
-      this.checkpoints.pop();
-      if (this.selectedCheckpointIdx >= this.checkpoints.length) this.deselectCheckpoint();
-      this.updateCheckpointImgs();
-      this.redrawMarkers();
-    } else {
-      if (this.defs.length === 0) return;
-      this.defs.pop();
-      this.rebuildTrack();
-      this.scrollToCursor();
+    // Commit drag: rebuild barrier with all pieces, refresh highlight + props
+    if (this.dragOp?.kind === 'move' || this.dragOp?.kind === 'rotate') {
       this.updateBarrierImg();
-      this.redrawMarkers();
-      this.rebuildOpts();
-      if (this.hintEl) this.hintEl.style.display = this.defs.length === 0 ? '' : 'none';
+      this.updateSelectedHighlight();
+      this.drawSelectionOverlay();
+      this.rebuildPropsStrip();
     }
+
+    this.dragOp = null;
   }
 
-  private scrollToCursor(): void {
-    const cam    = this.cameras.main;
-    const W      = this.scale.width;
-    const H      = this.scale.height;
-    const margin = Math.min(W, H - HEADER_H - PALETTE_H) * 0.22;
+  // ── Selection management ──────────────────────────────────────────────────────
 
-    const sx = (this.cursor.x - cam.scrollX) * cam.zoom;
-    const sy = (this.cursor.y - cam.scrollY) * cam.zoom;
+  private selectPiece(idx: number): void {
+    this.selection = { kind: 'piece', idx };
+    this.updateSelectedHighlight();
+    this.rebuildPropsStrip();
+    this.drawSelectionOverlay();
+  }
 
-    if (sx < margin)                        cam.setScroll(cam.scrollX - (margin - sx) / cam.zoom, cam.scrollY);
-    if (sx > W - margin)                    cam.setScroll(cam.scrollX + (sx - W + margin) / cam.zoom, cam.scrollY);
-    if (sy < HEADER_H + margin)             cam.setScroll(cam.scrollX, cam.scrollY - (HEADER_H + margin - sy) / cam.zoom);
-    if (sy > H - PALETTE_H - margin)        cam.setScroll(cam.scrollX, cam.scrollY + (sy - (H - PALETTE_H - margin)) / cam.zoom);
+  private selectMarker(sel: Exclude<Selection, null | { kind: 'piece' }>): void {
+    this.selection = sel;
+    this.rebuildPropsStrip();
+    this.drawSelectionOverlay();
+  }
+
+  private deselectAll(): void {
+    this.selection = null;
+    this.selectionGfx.clear();
+    this.connGfx.clear();
+    this.selectedPieceImg?.destroy();
+    this.selectedPieceImg = null;
+    this.rebuildPropsStrip();
+  }
+
+  // ── Piece & marker management ─────────────────────────────────────────────────
+
+  private addPieceFromPalette(def: PieceDef): void {
+    this.saveUndo();
+    let newX = this.viewCenterX(), newY = this.viewCenterY(), newRot = 0;
+
+    if (this.pieces.length > 0) {
+      const last  = this.pieces[this.pieces.length - 1];
+      const lconn = worldConnectors(last);
+      const dc    = connectors(def);
+      newRot = ((lconn.exit.heading - dc.entryH) % 360 + 360) % 360;
+      const [nex, ney] = rotateCW(dc.entryX, dc.entryY, newRot);
+      newX = lconn.exit.x - nex;
+      newY = lconn.exit.y - ney;
+    }
+
+    const piece: PlacedPiece = { ...def, x: newX, y: newY, rotation: newRot };
+    this.pieces.push(piece);
+    const idx = this.pieces.length - 1;
+    this.updateBarrierImg();
+    this.selectPiece(idx);
+    this.scrollToShowPiece(idx);
+    this.isDirty = true;
+  }
+
+  private deletePiece(idx: number): void {
+    this.pieces.splice(idx, 1);
+    if (this.selection?.kind === 'piece') {
+      const si = this.selection.idx;
+      if (si === idx) {
+        this.deselectAll();
+      } else if (si > idx) {
+        this.selection = { kind: 'piece', idx: si - 1 };
+        this.rebuildPropsStrip();
+      }
+    }
+    this.updateBarrierImg();
+    this.drawSelectionOverlay();
+    this.isDirty = true;
   }
 
   private placeFinish(): void {
-    if (this.defs.length === 0) { this.showToast('Add pieces first'); return; }
-    this.isDirty = true;
-    this.undoStack.push('finish');
-    this.finishMarker = {
-      kind: 'finish', shape: 'gate',
-      x: this.cursor.x, y: this.cursor.y,
-      rotation: this.cursor.heading,
-    };
+    if (this.pieces.length === 0) { this.showToast('Add track pieces first'); return; }
+    this.saveUndo();
+    this.finishMarker = { kind: 'finish', shape: 'gate', x: this.viewCenterX(), y: this.viewCenterY(), rotation: 0 };
     this.updateFinishImg();
-    this.redrawMarkers();
-    this.showToast('Finish line placed  ⚑');
+    this.selectMarker({ kind: 'finish' });
+    this.showToast('Finish placed — drag to position');
+    this.isDirty = true;
   }
 
   private placeCheckpoint(shape: 'gate' | 'circle'): void {
-    if (this.defs.length === 0) { this.showToast('Add pieces first'); return; }
-    this.isDirty = true;
-    this.undoStack.push('checkpoint');
-    this.checkpoints.push({
-      kind: 'checkpoint', shape,
-      x: this.cursor.x, y: this.cursor.y,
-      rotation: this.cursor.heading,
-    });
+    if (this.pieces.length === 0) { this.showToast('Add track pieces first'); return; }
+    this.saveUndo();
+    const idx = this.checkpoints.length;
+    this.checkpoints.push({ kind: 'checkpoint', shape, x: this.viewCenterX(), y: this.viewCenterY(), rotation: 0 });
     this.updateCheckpointImgs();
-    this.redrawMarkers();
-    this.showToast(shape === 'gate' ? 'Rect checkpoint placed' : 'Round checkpoint placed');
+    this.selectMarker({ kind: 'checkpoint', idx });
+    this.showToast('Checkpoint placed — drag to position');
+    this.isDirty = true;
   }
 
-  // ── Palette ───────────────────────────────────────────────────────────────────
+  private rotateSelected(delta: number): void {
+    if (this.selection?.kind === 'piece') {
+      const p = this.pieces[this.selection.idx];
+      this.pieces[this.selection.idx] = { ...p, rotation: ((p.rotation + delta) % 360 + 360) % 360 };
+      this.updateBarrierImg();
+      this.updateSelectedHighlight();
+      this.drawSelectionOverlay();
+      this.rebuildPropsStrip();
+      this.isDirty = true;
+    } else if (this.selection?.kind === 'car') {
+      this.curStartH = ((this.curStartH + delta) % 360 + 360) % 360;
+      this.updateStartCarImg(); this.rebuildPropsStrip(); this.isDirty = true;
+    } else if (this.selection?.kind === 'finish' && this.finishMarker) {
+      this.finishMarker.rotation = ((this.finishMarker.rotation + delta) % 360 + 360) % 360;
+      this.updateFinishImg(); this.rebuildPropsStrip(); this.isDirty = true;
+    } else if (this.selection?.kind === 'checkpoint') {
+      const cp = this.checkpoints[this.selection.idx];
+      if (cp) { cp.rotation = ((cp.rotation + delta) % 360 + 360) % 360; this.updateCheckpointImgs(); this.rebuildPropsStrip(); this.isDirty = true; }
+    }
+  }
+
+  private changePieceWalls(walls: WallVariant): void {
+    if (this.selection?.kind !== 'piece') return;
+    this.saveUndo();
+    this.pieces[this.selection.idx] = { ...this.pieces[this.selection.idx], walls };
+    this.updateBarrierImg(); this.updateSelectedHighlight(); this.drawSelectionOverlay(); this.rebuildPropsStrip(); this.isDirty = true;
+  }
+
+  private changePieceFlip(flip: boolean): void {
+    if (this.selection?.kind !== 'piece') return;
+    const p = this.pieces[this.selection.idx];
+    if (p.type === 'straight') return;
+    this.saveUndo();
+    this.pieces[this.selection.idx] = { ...(p as CornerDef & { x: number; y: number; rotation: number }), flip };
+    this.updateBarrierImg(); this.updateSelectedHighlight(); this.drawSelectionOverlay(); this.rebuildPropsStrip(); this.isDirty = true;
+  }
+
+  private deleteSelectedPiece(): void {
+    if (this.selection?.kind !== 'piece') return;
+    this.saveUndo(); this.deletePiece(this.selection.idx);
+  }
+
+  private copySelected(): void {
+    if (this.selection?.kind !== 'piece') return;
+    this.clipboard = { ...this.pieces[this.selection.idx] };
+    this.showToast('Copied — use Paste in props strip');
+    this.rebuildPropsStrip();
+  }
+
+  private paste(): void {
+    if (!this.clipboard) { this.showToast('Nothing to paste'); return; }
+    this.saveUndo();
+    const copy: PlacedPiece = { ...this.clipboard, x: this.clipboard.x + 60, y: this.clipboard.y + 60 };
+    this.pieces.push(copy);
+    this.updateBarrierImg();
+    this.selectPiece(this.pieces.length - 1);
+    this.scrollToShowPiece(this.pieces.length - 1);
+    this.isDirty = true;
+  }
+
+  // ── Undo / redo ───────────────────────────────────────────────────────────────
+
+  private snapshot(): EditorSnapshot {
+    return {
+      pieces:       this.pieces.map(p => ({ ...p })),
+      finishMarker: this.finishMarker ? { ...this.finishMarker } : null,
+      checkpoints:  this.checkpoints.map(c => ({ ...c })),
+      startX:       this.curStartX, startY: this.curStartY, startHeading: this.curStartH,
+    };
+  }
+
+  private saveUndo(): void {
+    this.undoStack.push(this.snapshot());
+    if (this.undoStack.length > MAX_UNDO) this.undoStack.shift();
+    this.redoStack = [];
+  }
+
+  private restoreSnapshot(s: EditorSnapshot): void {
+    this.pieces       = s.pieces.map(p => ({ ...p }));
+    this.finishMarker = s.finishMarker ? { ...s.finishMarker } : null;
+    this.checkpoints  = s.checkpoints.map(c => ({ ...c }));
+    this.curStartX = s.startX; this.curStartY = s.startY; this.curStartH = s.startHeading;
+    this.deselectAll();
+    this.updateBarrierImg();
+    this.updateStartCarImg();
+    this.updateFinishImg();
+    this.updateCheckpointImgs();
+    this.isDirty = true;
+  }
+
+  private undo(): void {
+    const s = this.undoStack.pop();
+    if (!s) { this.showToast('Nothing to undo'); return; }
+    this.redoStack.push(this.snapshot());
+    this.restoreSnapshot(s);
+  }
+
+  private redo(): void {
+    const s = this.redoStack.pop();
+    if (!s) { this.showToast('Nothing to redo'); return; }
+    this.undoStack.push(this.snapshot());
+    this.restoreSnapshot(s);
+  }
+
+  // ── Palette DOM ───────────────────────────────────────────────────────────────
 
   private createPalette(): void {
     const el = document.createElement('div');
     el.style.cssText = [
       'position:fixed', 'bottom:0', 'left:0', 'right:0',
       `height:${PALETTE_H}px`,
-      'background:#0d0d20',
-      'border-top:1.5px solid #3a3a6a',
-      'z-index:100',
-      'padding:8px 10px max(env(safe-area-inset-bottom,0px),10px)',
+      'background:#0d0d20', 'border-top:1.5px solid #3a3a6a',
+      'z-index:100', 'display:flex', 'flex-direction:column',
+      'padding:4px 6px max(env(safe-area-inset-bottom,0px),8px)',
       'box-sizing:border-box',
-      'display:flex', 'flex-direction:column', 'gap:7px',
-      'user-select:none', '-webkit-user-select:none',
+      'user-select:none', '-webkit-user-select:none', 'gap:4px',
     ].join(';');
 
+    // Content area — justify-content:flex-end pins buttons to the bottom (flush with tabs).
+    const contentEl = document.createElement('div');
+    contentEl.id = 'ed-content';
+    contentEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;flex:1;min-height:0;justify-content:flex-end;';
+    el.appendChild(contentEl);
+
+    // Tab row — always at the very bottom
     const tabRow = document.createElement('div');
     tabRow.id = 'ed-tabs';
-    tabRow.style.cssText = 'display:flex;gap:6px;';
+    tabRow.style.cssText = 'display:flex;gap:4px;flex-shrink:0;';
     el.appendChild(tabRow);
-
-    const optEl = document.createElement('div');
-    optEl.id = 'ed-opts';
-    optEl.style.cssText = 'display:flex;flex-direction:column;gap:6px;flex:1;min-height:0;';
-    el.appendChild(optEl);
-
-    // ── Start heading row
-    const headRow = document.createElement('div');
-    headRow.style.cssText = 'display:flex;gap:6px;align-items:center;';
-
-    const ccwBtn = document.createElement('button') as HTMLButtonElement;
-    ccwBtn.textContent = '↶';
-    ccwBtn.title    = 'Rotate start CCW 15°';
-    ccwBtn.disabled = true;
-    ccwBtn.style.cssText = 'padding:6px 12px;border-radius:5px;border:1px solid #444466;background:#111128;color:#8888ff;font:bold 16px Arial,sans-serif;cursor:pointer;';
-    ccwBtn.addEventListener('click', () => this.rotateStartHeading(-15));
-    this.rotateCcwBtn = ccwBtn;
-
-    const headLabel = document.createElement('span');
-    headLabel.id = 'ed-start-heading';
-    headLabel.style.cssText = 'flex:1;text-align:center;color:#aaaacc;font:13px Arial,sans-serif;min-width:60px;';
-    headLabel.innerHTML =
-      `<span style="display:inline-block;transform:rotate(${this.curStartHeading}deg)">↑</span> ${this.curStartHeading}°`;
-
-    const cwBtn = document.createElement('button') as HTMLButtonElement;
-    cwBtn.textContent = '↷';
-    cwBtn.title    = 'Rotate start CW 15°';
-    cwBtn.disabled = true;
-    cwBtn.style.cssText = 'padding:6px 12px;border-radius:5px;border:1px solid #444466;background:#111128;color:#8888ff;font:bold 16px Arial,sans-serif;cursor:pointer;';
-    cwBtn.addEventListener('click', () => this.rotateStartHeading(15));
-    this.rotateCwBtn = cwBtn;
-
-    const hintSpan = document.createElement('span');
-    hintSpan.textContent = 'tap car or finish to select';
-    hintSpan.style.cssText = 'color:rgba(120,120,180,0.6);font:11px Arial,sans-serif;white-space:nowrap;';
-
-    headRow.appendChild(ccwBtn);
-    headRow.appendChild(headLabel);
-    headRow.appendChild(cwBtn);
-    headRow.appendChild(hintSpan);
-    el.appendChild(headRow);
-
-    const actRow = document.createElement('div');
-    actRow.style.cssText = 'display:flex;gap:8px;';
-
-    const mkAct = (label: string, clr: string, bg: string, border: string, fn: () => void) => {
-      const b = document.createElement('button');
-      b.textContent = label;
-      b.style.cssText = [
-        'flex:1', 'padding:10px 4px',
-        `color:${clr}`, `background:${bg}`, `border:1px solid ${border}`,
-        'border-radius:6px', 'font:bold 13px Arial,sans-serif', 'cursor:pointer',
-      ].join(';');
-      b.addEventListener('click', fn);
-      return b;
-    };
-    actRow.appendChild(mkAct('⚑ Finish', '#ff7070', '#1a0005', '#662233', () => this.placeFinish()));
-
-    // Checkpoint — expand/collapse to pick shape
-    const cpWrap = document.createElement('div');
-    cpWrap.style.cssText = 'flex:1;display:flex;gap:8px;';
-
-    const collapseCp = () => {
-      cpWrap.innerHTML = '';
-      const b = document.createElement('button');
-      b.textContent = '◎ Checkpoint';
-      b.style.cssText = [
-        'flex:1', 'padding:10px 4px',
-        'color:#00ccff', 'background:#001a1a', 'border:1px solid #005566',
-        'border-radius:6px', 'font:bold 13px Arial,sans-serif', 'cursor:pointer',
-      ].join(';');
-      b.addEventListener('click', expandCp);
-      cpWrap.appendChild(b);
-    };
-
-    const expandCp = () => {
-      cpWrap.innerHTML = '';
-      const mkCp = (label: string, shape: 'gate' | 'circle') => {
-        const b = document.createElement('button');
-        b.textContent = label;
-        b.style.cssText = [
-          'flex:1', 'padding:10px 4px',
-          'color:#00ccff', 'background:#001a22', 'border:1.5px solid #00aacc',
-          'border-radius:6px', 'font:bold 13px Arial,sans-serif', 'cursor:pointer',
-        ].join(';');
-        b.addEventListener('click', () => { this.placeCheckpoint(shape); collapseCp(); });
-        return b;
-      };
-      cpWrap.appendChild(mkCp('▭ Rect', 'gate'));
-      cpWrap.appendChild(mkCp('⬤ Round', 'circle'));
-    };
-
-    collapseCp();
-    actRow.appendChild(cpWrap);
-    el.appendChild(actRow);
 
     document.body.appendChild(el);
     this.palEl = el;
-    this.rebuildPalette();
-  }
 
-  private rebuildPalette(): void {
+    // Props bar: separate fixed element that floats above the palette.
+    // It takes zero space in the palette and slides up from the palette edge when shown.
+    const propsEl = document.createElement('div');
+    propsEl.id = 'ed-props';
+    propsEl.style.cssText = [
+      'position:fixed', `bottom:${PALETTE_H}px`, 'left:0', 'right:0',
+      'background:#0d0d20', 'border-top:1px solid #3a3a6a',
+      'display:flex', 'gap:5px', 'align-items:center',
+      'padding:4px 8px', 'z-index:99', 'overflow-x:auto',
+      'transform:translateY(100%)', 'opacity:0', 'pointer-events:none',
+      'transition:transform 0.15s ease-out,opacity 0.1s',
+      'user-select:none', '-webkit-user-select:none',
+    ].join(';');
+    document.body.appendChild(propsEl);
+    this.propsEl = propsEl;
     this.rebuildTabs();
-    this.rebuildOpts();
+    this.rebuildContent();
   }
 
   private rebuildTabs(): void {
     const row = document.getElementById('ed-tabs');
     if (!row) return;
     row.innerHTML = '';
-    const mkTab = (label: string, tab: 'straight' | 'corner') => {
-      const active = this.palTab === tab;
-      const b = document.createElement('button');
-      b.textContent = label;
-      b.style.cssText = [
-        'flex:1', 'padding:8px',
-        active
-          ? 'background:#22224a;color:#ccccff;border:1.5px solid #6666cc;'
-          : 'background:#111128;color:#6666aa;border:1px solid #2a2a44;',
-        'border-radius:5px', 'font:bold 14px Arial,sans-serif', 'cursor:pointer',
-      ].join(';');
-      b.addEventListener('click', () => { this.palTab = tab; this.rebuildPalette(); });
-      return b;
+    // Tab bar: no gap so tabs sit flush against each other like a real tab strip.
+    row.style.gap = '0';
+
+    type TabDef = {
+      tab:      PalTab;
+      label:    string;
+      draw?:    (c: HTMLCanvasElement) => void;
+      imgBase?: string; // e.g. 'assets/markers/tile_finish_' — appended with '0.png'/'1.png'
     };
-    row.appendChild(mkTab('Straight', 'straight'));
-    row.appendChild(mkTab('Corner',   'corner'));
+    const ICO = 36;
+    const defs: TabDef[] = [
+      { tab: 'straight',   label: 'Straight', draw: c => drawStraightIcon(c, 75) },
+      { tab: 'tight',      label: 'Tight',    draw: c => drawCornerIcon(c, 'corner',     90, false) },
+      { tab: 'big',        label: 'Big',      draw: c => drawCornerIcon(c, 'big_corner', 90, false) },
+      { tab: 'finish',     label: 'Finish',   imgBase: 'assets/markers/tile_finish_' },
+      { tab: 'checkpoint', label: 'Chkpt',    imgBase: 'assets/markers/tile_checkpoint_' },
+    ];
+
+    for (const def of defs) {
+      const active = this.palTab === def.tab;
+      const btn = document.createElement('button');
+      btn.style.cssText = [
+        'flex:1', 'min-width:0', 'display:flex', 'flex-direction:column',
+        'align-items:center', 'justify-content:center',
+        'gap:2px', 'padding:4px 2px 3px', 'cursor:pointer',
+        // Rounded top corners only — flat bottom connects to palette edge.
+        'border-radius:7px 7px 0 0',
+        active
+          ? 'background:#192819;border:1.5px solid #44aa55;border-bottom-color:#192819;box-shadow:inset 0 3px 0 #55ff77;'
+          : 'background:#0d0d1e;border:1px solid #1e1e36;border-bottom-color:#0d0d20;',
+      ].join(';');
+
+      if (def.draw) {
+        const c = document.createElement('canvas');
+        c.width = ICO; c.height = ICO;
+        c.style.cssText = `width:${ICO}px;height:${ICO}px;display:block;`;
+        if (!active) c.style.filter = 'brightness(0.35) saturate(0.5)';
+        def.draw(c);
+        btn.appendChild(c);
+      } else if (def.imgBase) {
+        const img = document.createElement('img');
+        img.src = `${def.imgBase}${active ? 1 : 0}.png`;
+        img.style.cssText = `width:${ICO}px;height:${ICO}px;object-fit:contain;transform:rotate(45deg);`;
+        img.onerror = () => { img.style.display = 'none'; };
+        btn.appendChild(img);
+      }
+
+      const sp = document.createElement('span');
+      sp.textContent = def.label;
+      sp.style.cssText = `font:bold 9px Arial,sans-serif;line-height:1;color:${active ? '#77ff99' : '#334455'};`;
+      btn.appendChild(sp);
+
+      btn.addEventListener('click', () => { this.palTab = def.tab; this.rebuildTabs(); this.rebuildContent(); });
+      row.appendChild(btn);
+    }
   }
 
-  private rebuildOpts(): void {
-    const el = document.getElementById('ed-opts');
+  private rebuildContent(): void {
+    const el = document.getElementById('ed-content');
     if (!el) return;
     el.innerHTML = '';
 
+    const ICO = 56; // canvas buffer size — CSS display width adapts via flex
+
+    // Helper: canvas piece button. Canvas fills button width via CSS so 6 buttons
+    // fit without overflow even on narrow phones (min-width:0 allows flex shrinking).
+    const mkCanvasBtn = (
+      draw: (c: HTMLCanvasElement) => void,
+      label: string,
+      active: boolean,
+    ): HTMLButtonElement => {
+      const btn = document.createElement('button');
+      btn.style.cssText = [
+        'flex:1', 'min-width:0', 'display:flex', 'flex-direction:column',
+        'align-items:center', 'justify-content:center',
+        'gap:2px', 'padding:3px 2px', 'border-radius:6px', 'cursor:pointer',
+        active ? 'background:#1a2a1a;border:1.5px solid #44aa55;'
+               : 'background:#111120;border:1px solid #2a2a44;',
+      ].join(';');
+      const c = document.createElement('canvas');
+      c.width = ICO; c.height = ICO;
+      // width:100% makes the canvas fill the button; aspect-ratio keeps it square.
+      c.style.cssText = 'width:100%;aspect-ratio:1;display:block;';
+      draw(c);
+      btn.appendChild(c);
+      if (label) {
+        const sp = document.createElement('span');
+        sp.textContent = label;
+        sp.style.cssText = `font:bold 9px Arial,sans-serif;line-height:1;color:${active ? '#88ff66' : '#5566aa'};`;
+        btn.appendChild(sp);
+      }
+      return btn;
+    };
+
+    // Helper: sprite image button (finish/checkpoint).
+    // Sprites rotated 45° to sit on the top-left→bottom-right diagonal of the piece icons.
+    // displayPx: CSS display size of the image; pass a smaller value for the circle
+    // checkpoint so it appears at the same pixel density as the gate (120px sprite).
+    const mkSpriteBtn = (src: string, label: string, color: string, displayPx = ICO): HTMLButtonElement => {
+      const btn = document.createElement('button');
+      btn.style.cssText = [
+        'flex:1', 'min-width:0', 'display:flex', 'flex-direction:column',
+        'align-items:center', 'justify-content:center',
+        'gap:4px', 'padding:6px 4px', 'border-radius:6px', 'cursor:pointer',
+        `background:#111120;border:1px solid ${color}55;`,
+      ].join(';');
+      const img = document.createElement('img');
+      img.src = src;
+      img.style.cssText = `width:${displayPx}px;height:${displayPx}px;object-fit:contain;transform:rotate(45deg);`;
+      img.onerror = () => { img.style.display = 'none'; };
+      btn.appendChild(img);
+      const sp = document.createElement('span');
+      sp.textContent = label;
+      sp.style.cssText = `font:bold 11px Arial,sans-serif;color:${color};`;
+      btn.appendChild(sp);
+      return btn;
+    };
+
+    // ─ Straight ─
     if (this.palTab === 'straight') {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;gap:6px;';
-      for (const size of STRAIGHT_SIZES) {
-        const b = document.createElement('button');
-        b.textContent = `${size}px`;
-        b.style.cssText = this.pieceBtnStyle(false);
-        b.addEventListener('click', () => this.addPiece({ type: 'straight', size, walls: 'both' }));
+      el.appendChild(this.mkCtrlRow('straight', false));
+      const row = this.mkRow(); row.style.gap = '3px';
+      const sizes: [StraightSize, string][] = [[25,'XS'],[50,'S'],[75,'M'],[100,'L']];
+      for (const [sz, lbl] of sizes) {
+        const b = mkCanvasBtn(c => drawStraightIcon(c, sz, this.palWalls), lbl, false);
+        b.addEventListener('click', () => this.addPieceFromPalette({ type:'straight', size:sz, walls:this.palWalls }));
+        row.appendChild(b);
+      }
+      // Two ghost spacers so each straight button is the same width as a corner button (1/6 of row).
+      for (let i = 0; i < 2; i++) {
+        const sp = document.createElement('div'); sp.style.cssText = 'flex:1;min-width:0;'; row.appendChild(sp);
+      }
+      el.appendChild(row);
+    }
+
+    // ─ Tight corner ─
+    if (this.palTab === 'tight') {
+      el.appendChild(this.mkCtrlRow('corner', true));
+      const row = this.mkRow(); row.style.gap = '3px';
+      for (const ang of CORNER_ANGLES) {
+        const b = mkCanvasBtn(c => drawCornerIcon(c, 'corner', ang, this.palFlip, this.palWalls), `${ang}°`, this.palAngle === ang);
+        b.addEventListener('click', () => {
+          this.palAngle = ang;
+          this.addPieceFromPalette({ type:'corner', angle:ang, walls:this.palWalls, flip:this.palFlip });
+        });
         row.appendChild(b);
       }
       el.appendChild(row);
-    } else {
-      const ctrlRow = document.createElement('div');
-      ctrlRow.style.cssText = 'display:flex;gap:6px;align-items:center;';
-      const mkSel = (label: string, active: boolean, fn: () => void) => {
-        const b = document.createElement('button');
-        b.textContent = label;
-        b.style.cssText = [
-          'padding:7px 11px',
-          active
-            ? 'background:#22224a;color:#ccccff;border:1.5px solid #6666cc;'
-            : 'background:#111128;color:#6666aa;border:1px solid #2a2a44;',
-          'border-radius:5px', 'font:13px Arial,sans-serif', 'cursor:pointer',
-        ].join(';');
-        b.addEventListener('click', () => { fn(); this.rebuildOpts(); });
-        return b;
-      };
-      ctrlRow.appendChild(mkSel('Tight', this.palFamily === 'corner',     () => { this.palFamily = 'corner'; }));
-      ctrlRow.appendChild(mkSel('Big',   this.palFamily === 'big_corner', () => { this.palFamily = 'big_corner'; }));
-      const spacer = document.createElement('div');
-      spacer.style.flex = '1';
-      ctrlRow.appendChild(spacer);
-      ctrlRow.appendChild(mkSel('◀ L', this.palFlip,  () => { this.palFlip = true; }));
-      ctrlRow.appendChild(mkSel('R ▶', !this.palFlip, () => { this.palFlip = false; }));
-      el.appendChild(ctrlRow);
+    }
 
-      const angRow = document.createElement('div');
-      angRow.style.cssText = 'display:flex;gap:5px;';
-      for (const angle of CORNER_ANGLES) {
-        const b = document.createElement('button');
-        b.textContent = `${angle}°`;
-        b.style.cssText = this.pieceBtnStyle(this.palAngle === angle);
+    // ─ Big corner ─
+    if (this.palTab === 'big') {
+      el.appendChild(this.mkCtrlRow('corner', true));
+      const row = this.mkRow(); row.style.gap = '3px';
+      for (const ang of CORNER_ANGLES) {
+        const b = mkCanvasBtn(c => drawCornerIcon(c, 'big_corner', ang, this.palFlip, this.palWalls), `${ang}°`, this.palAngle === ang);
         b.addEventListener('click', () => {
-          this.palAngle = angle;
-          this.addPiece({ type: this.palFamily, angle, walls: 'both', flip: this.palFlip });
+          this.palAngle = ang;
+          this.addPieceFromPalette({ type:'big_corner', angle:ang, walls:this.palWalls, flip:this.palFlip });
         });
-        angRow.appendChild(b);
+        row.appendChild(b);
       }
-      el.appendChild(angRow);
+      el.appendChild(row);
+    }
+
+    // ─ Finish ─
+    if (this.palTab === 'finish') {
+      const row = this.mkRow();
+      const b = mkSpriteBtn('assets/markers/tile_finish_0.png', 'Place Finish Line', '#ff7070');
+      b.addEventListener('click', () => this.placeFinish());
+      row.appendChild(b);
+      el.appendChild(row);
+    }
+
+    // ─ Checkpoint ─
+    if (this.palTab === 'checkpoint') {
+      // Circle sprite is 46×46 vs gate's 120×120; normalize to the same pixel density.
+      const circlePx = Math.round(46 * ICO / 120);
+      const row = this.mkRow();
+      const bG = mkSpriteBtn('assets/markers/tile_checkpoint_0.png',        'Gate',   '#00ccff');
+      const bC = mkSpriteBtn('assets/markers/tile_checkpoint_circle_0.png', 'Circle', '#00ccff', circlePx);
+      bG.addEventListener('click', () => this.placeCheckpoint('gate'));
+      bC.addEventListener('click', () => this.placeCheckpoint('circle'));
+      row.appendChild(bG); row.appendChild(bC);
+      el.appendChild(row);
     }
   }
 
-  private pieceBtnStyle(active: boolean): string {
-    return [
-      'flex:1', 'padding:8px 3px',
-      active
-        ? 'background:#334422;color:#88ff44;border:1.5px solid #557733;'
-        : 'background:#111128;color:#aaaacc;border:1px solid #2a2a44;',
-      'border-radius:5px', 'font:13px Arial,sans-serif', 'cursor:pointer',
+  // Controls row: single cycling wall-toggle button + optional L/R flip buttons.
+  // toggleKind drives the toggle icon: 'straight' → vertical XS lines, 'corner' → 30° arc.
+  private mkCtrlRow(toggleKind: 'straight' | 'corner', showFlip: boolean): HTMLDivElement {
+    const row = this.mkRow();
+
+    if (showFlip) {
+      row.appendChild(this.mkOptBtn('← L', this.palFlip,  () => { this.palFlip = true;  this.rebuildContent(); }));
+      row.appendChild(this.mkOptBtn('R →', !this.palFlip, () => { this.palFlip = false; this.rebuildContent(); }));
+    }
+    // Spacer pushes the wall-toggle to the right regardless of whether flip buttons are shown.
+    { const sp = document.createElement('div'); sp.style.cssText = 'flex:1;min-width:4px;'; row.appendChild(sp); }
+
+    // Wall toggle: one canvas button that cycles both → outer → inner → both.
+    const TSIZE = 28;
+    const togBtn = document.createElement('button');
+    togBtn.style.cssText = [
+      'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
+      'gap:2px', 'padding:3px 5px', 'border-radius:5px', 'cursor:pointer', 'flex-shrink:0',
+      'background:#111128;border:1px solid #3a3a60;',
     ].join(';');
+    const togCanvas = document.createElement('canvas');
+    togCanvas.width = TSIZE; togCanvas.height = TSIZE;
+    togCanvas.style.cssText = `width:${TSIZE}px;height:${TSIZE}px;display:block;`;
+    drawWallToggleIcon(togCanvas, this.palWalls, toggleKind);
+    const wallLabel = document.createElement('span');
+    wallLabel.style.cssText = 'font:bold 7px Arial,sans-serif;line-height:1;color:#5599aa;';
+    const wallNames: Record<WallVariant, string> = { both: 'Both', outer: 'Outer', inner: 'Inner' };
+    wallLabel.textContent = wallNames[this.palWalls];
+    togBtn.appendChild(togCanvas);
+    togBtn.appendChild(wallLabel);
+    togBtn.addEventListener('click', () => {
+      const cycle: WallVariant[] = ['both', 'outer', 'inner'];
+      this.palWalls = cycle[(cycle.indexOf(this.palWalls) + 1) % cycle.length];
+      this.rebuildContent();
+    });
+    row.appendChild(togBtn);
+
+    return row;
   }
 
-  // ── Save ──────────────────────────────────────────────────────────────────────
+  // ── Properties strip ──────────────────────────────────────────────────────────
+
+  private rebuildPropsStrip(): void {
+    const el = this.propsEl;
+    if (!el) return;
+    el.innerHTML = '';
+
+    if (!this.selection) {
+      el.style.transform = 'translateY(100%)';
+      el.style.opacity = '0';
+      el.style.pointerEvents = 'none';
+      el.innerHTML = '';
+      return;
+    }
+    el.style.transform = 'translateY(0)';
+    el.style.opacity = '1';
+    el.style.pointerEvents = 'auto';
+
+    const mkB = (text: string, title: string, color: string, bg: string, border: string, fn: () => void) => {
+      const b = document.createElement('button');
+      b.textContent = text; b.title = title;
+      b.style.cssText = `padding:5px 8px;border-radius:5px;cursor:pointer;font:bold 12px Arial,sans-serif;white-space:nowrap;color:${color};background:${bg};border:1px solid ${border};flex-shrink:0;`;
+      b.addEventListener('click', fn);
+      return b;
+    };
+    const mkOpt = (text: string, active: boolean, fn: () => void) =>
+      mkB(text, text, active ? '#ccccff' : '#6666aa', active ? '#22224a' : '#111128', active ? '#6666cc' : '#2a2a44', fn);
+    const flex = () => { const d = document.createElement('div'); d.style.flex='1'; return d; };
+
+    if (this.selection.kind === 'piece') {
+      const p = this.pieces[this.selection.idx];
+      if (!p) return;
+
+      // Wall toggle — single cycling button matching the palette control style.
+      {
+        const TSIZE = 28;
+        const togKind: 'straight' | 'corner' = p.type === 'straight' ? 'straight' : 'corner';
+        const togBtn = document.createElement('button');
+        togBtn.style.cssText = [
+          'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
+          'gap:2px', 'padding:3px 5px', 'border-radius:5px', 'cursor:pointer', 'flex-shrink:0',
+          'background:#111128;border:1px solid #3a3a60;',
+        ].join(';');
+        const togCanvas = document.createElement('canvas');
+        togCanvas.width = TSIZE; togCanvas.height = TSIZE;
+        togCanvas.style.cssText = `width:${TSIZE}px;height:${TSIZE}px;display:block;`;
+        drawWallToggleIcon(togCanvas, p.walls, togKind);
+        const togLabel = document.createElement('span');
+        togLabel.style.cssText = 'font:bold 7px Arial,sans-serif;line-height:1;color:#5599aa;';
+        const wallNames: Record<WallVariant, string> = { both: 'Both', outer: 'Outer', inner: 'Inner' };
+        togLabel.textContent = wallNames[p.walls];
+        togBtn.appendChild(togCanvas);
+        togBtn.appendChild(togLabel);
+        togBtn.addEventListener('click', () => {
+          const cycle: WallVariant[] = ['both', 'outer', 'inner'];
+          const next = cycle[(cycle.indexOf(p.walls) + 1) % cycle.length];
+          this.changePieceWalls(next);
+        });
+        el.appendChild(togBtn);
+      }
+
+      // Flip toggle (corners only)
+      if (p.type !== 'straight') {
+        const flip = (p as CornerDef).flip ?? false;
+        el.appendChild(mkOpt(flip ? '◀ L' : 'R ▶', false, () => this.changePieceFlip(!flip)));
+      }
+
+      el.appendChild(flex());
+
+      // Rotation
+      el.appendChild(mkB('↶', 'Rotate −15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(-15)));
+      const angEl = document.createElement('span');
+      angEl.textContent = `${p.rotation}°`;
+      angEl.style.cssText = 'color:#8888aa;font:12px Arial,sans-serif;min-width:34px;text-align:center;flex-shrink:0;';
+      el.appendChild(angEl);
+      el.appendChild(mkB('↷', 'Rotate +15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(15)));
+
+      el.appendChild(mkB('✂', 'Copy', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
+      if (this.clipboard)
+        el.appendChild(mkB('📋', 'Paste copy', '#aaaaff', '#0a0a22', '#333366', () => this.paste()));
+      el.appendChild(mkB('🗑', 'Delete', '#ff8888', '#1a0808', '#663333', () => this.deleteSelectedPiece()));
+    } else {
+      // Car / finish / checkpoint
+      const rot =
+        this.selection.kind === 'car'        ? this.curStartH
+        : this.selection.kind === 'finish'   ? (this.finishMarker?.rotation ?? 0)
+        : (this.checkpoints[this.selection.idx]?.rotation ?? 0);
+      const label =
+        this.selection.kind === 'car'        ? '🚗 Start'
+        : this.selection.kind === 'finish'   ? '⚑ Finish'
+        : `◎ CP ${(this.selection as { kind:'checkpoint';idx:number}).idx + 1}`;
+
+      const lEl = document.createElement('span');
+      lEl.textContent = label;
+      lEl.style.cssText = 'color:#aaaacc;font:bold 12px Arial,sans-serif;flex-shrink:0;padding-right:2px;';
+      el.appendChild(lEl);
+      el.appendChild(flex());
+
+      el.appendChild(mkB('↶', '−15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(-15)));
+      const angEl = document.createElement('span');
+      angEl.textContent = `${rot}°`;
+      angEl.style.cssText = 'color:#8888aa;font:12px Arial,sans-serif;min-width:34px;text-align:center;flex-shrink:0;';
+      el.appendChild(angEl);
+      el.appendChild(mkB('↷', '+15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(15)));
+
+      if (this.selection.kind === 'finish') {
+        el.appendChild(mkB('🗑', 'Delete finish', '#ff8888', '#1a0808', '#663333', () => {
+          this.saveUndo(); this.finishMarker = null; this.updateFinishImg(); this.deselectAll(); this.isDirty = true;
+        }));
+      }
+      if (this.selection.kind === 'checkpoint') {
+        const cidx = (this.selection as { kind:'checkpoint';idx:number }).idx;
+        el.appendChild(mkB('🗑', 'Delete checkpoint', '#ff8888', '#1a0808', '#663333', () => {
+          this.saveUndo(); this.checkpoints.splice(cidx, 1); this.updateCheckpointImgs(); this.deselectAll(); this.isDirty = true;
+        }));
+      }
+    }
+  }
+
+  // ── DOM helpers ───────────────────────────────────────────────────────────────
+
+  private mkRow(): HTMLDivElement {
+    const r = document.createElement('div');
+    r.style.cssText = 'display:flex;gap:5px;';
+    return r;
+  }
+
+  private mkOptBtn(label: string, active: boolean, fn: () => void): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = [
+      'padding:5px 8px','border-radius:5px','font:13px Arial,sans-serif','cursor:pointer',
+      active ? 'background:#22224a;color:#ccccff;border:1.5px solid #6666cc;'
+             : 'background:#111128;color:#6666aa;border:1px solid #2a2a44;',
+    ].join(';');
+    b.addEventListener('click', fn);
+    return b;
+  }
+
+  // ── Camera helpers ────────────────────────────────────────────────────────────
+
+  private viewCenterX(): number {
+    const cam = this.cameras.main;
+    return cam.scrollX + cam.width / (2 * cam.zoom);
+  }
+
+  private viewCenterY(): number {
+    const cam = this.cameras.main;
+    return cam.scrollY + (cam.height - PALETTE_H + HEADER_H) / (2 * cam.zoom);
+  }
+
+  private scrollToShowPiece(idx: number): void {
+    const p = this.pieces[idx];
+    if (!p) return;
+    const cam = this.cameras.main;
+    const W = this.scale.width, H = this.scale.height;
+    const margin = Math.min(W, H - HEADER_H - PALETTE_H) * 0.22;
+    const sx = (p.x - cam.scrollX) * cam.zoom;
+    const sy = (p.y - cam.scrollY) * cam.zoom;
+    if (sx < margin)                 cam.setScroll(cam.scrollX - (margin - sx) / cam.zoom, cam.scrollY);
+    if (sx > W - margin)             cam.setScroll(cam.scrollX + (sx - W + margin) / cam.zoom, cam.scrollY);
+    if (sy < HEADER_H + margin)      cam.setScroll(cam.scrollX, cam.scrollY - (HEADER_H + margin - sy) / cam.zoom);
+    if (sy > H - PALETTE_H - margin) cam.setScroll(cam.scrollX, cam.scrollY + (sy - (H - PALETTE_H - margin)) / cam.zoom);
+  }
+
+  // ── Save / drafts ─────────────────────────────────────────────────────────────
 
   private openDrafts(): void {
     if (!this.isDirty) { this.scene.start('TrackSelect', { activeTab: 'drafts' }); return; }
-
-    const overlay = document.createElement('div');
-    overlay.style.cssText = [
-      'position:fixed', 'inset:0', 'z-index:300',
-      'background:rgba(0,0,0,0.78)',
-      'display:flex', 'align-items:center', 'justify-content:center',
-    ].join(';');
-
-    const card = document.createElement('div');
-    card.style.cssText = [
-      'background:#0d0d1e', 'border:1.5px solid #444488', 'border-radius:10px',
-      'padding:20px 18px', 'width:min(300px,calc(100%-32px))',
-      'display:flex', 'flex-direction:column', 'gap:14px',
-    ].join(';');
-
-    const msg = document.createElement('div');
-    msg.textContent = 'Discard unsaved changes?';
-    msg.style.cssText = 'font:bold 17px "Arial Black",Arial,sans-serif;color:#e8e8ff;text-align:center;';
-
-    const btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display:flex;gap:10px;';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Keep editing';
-    cancelBtn.style.cssText = [
-      'flex:1', 'padding:10px', 'border-radius:6px',
-      'border:1px solid #444466', 'background:#1a1a2a',
-      'color:#aaaacc', 'font:14px Arial,sans-serif', 'cursor:pointer',
-    ].join(';');
-    cancelBtn.addEventListener('click', () => overlay.remove());
-
-    const discardBtn = document.createElement('button');
-    discardBtn.textContent = 'Discard';
-    discardBtn.style.cssText = [
-      'flex:1', 'padding:10px', 'border-radius:6px',
-      'border:1px solid #663333', 'background:#1a0808',
-      'color:#ff8888', 'font:bold 14px Arial,sans-serif', 'cursor:pointer',
-    ].join(';');
-    discardBtn.addEventListener('click', () => {
-      overlay.remove();
-      this.scene.start('TrackSelect', { activeTab: 'drafts' });
-    });
-
-    btnRow.appendChild(cancelBtn);
-    btnRow.appendChild(discardBtn);
-    card.appendChild(msg);
-    card.appendChild(btnRow);
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
+    this.showConfirm('Discard unsaved changes?', 'Discard',
+      () => this.scene.start('TrackSelect', { activeTab: 'drafts' }),
+    );
   }
 
   private showSaveDialog(): void {
-    if (!this.finishMarker) {
-      this.showToast('Place a finish line first  (⚑ button)');
-      return;
-    }
-    if (this.defs.length < 2) {
-      this.showToast('Add more pieces first');
-      return;
-    }
+    if (!this.finishMarker) { this.showToast('Place a finish line first  (Finish tab)'); return; }
+    if (this.pieces.length < 2) { this.showToast('Add more track pieces first'); return; }
 
-    const overlay = document.createElement('div');
-    overlay.style.cssText = [
-      'position:fixed', 'inset:0', 'z-index:300',
-      'background:rgba(0,0,0,0.78)',
-      'display:flex', 'align-items:center', 'justify-content:center',
-    ].join(';');
-
-    const card = document.createElement('div');
-    card.style.cssText = [
-      'background:#0d0d1e', 'border:1.5px solid #444488', 'border-radius:10px',
-      'padding:20px 18px', 'width:min(320px,calc(100%-32px))',
-      'display:flex', 'flex-direction:column', 'gap:12px',
-    ].join(';');
+    const overlay = this.mkOverlay();
+    const card    = this.mkCard(overlay);
 
     const title = document.createElement('div');
     title.textContent = 'Save Track';
     title.style.cssText = 'font:bold 20px "Arial Black",Arial,sans-serif;color:#e8e8ff;text-align:center;';
 
     const input = document.createElement('input');
-    input.type        = 'text';
-    input.placeholder = 'Track name…';
-    input.maxLength   = 40;
-    input.value       = this.existingName;
-    input.style.cssText = [
-      'padding:10px', 'border-radius:6px',
-      'border:1px solid #444488', 'background:#1a1a36',
-      'color:#e8e8ff', 'font:16px Arial,sans-serif',
-      'outline:none', 'box-sizing:border-box', 'width:100%',
-    ].join(';');
+    input.type = 'text'; input.placeholder = 'Track name…'; input.maxLength = 40;
+    input.value = this.existingName;
+    input.style.cssText = 'padding:10px;border-radius:6px;border:1px solid #444488;background:#1a1a36;color:#e8e8ff;font:16px Arial,sans-serif;outline:none;box-sizing:border-box;width:100%;';
 
-    const statusEl = document.createElement('div');
-    statusEl.style.cssText = 'font:13px Arial,sans-serif;color:#8899cc;text-align:center;min-height:1.2em;';
+    const status = document.createElement('div');
+    status.style.cssText = 'font:13px Arial,sans-serif;color:#8899cc;text-align:center;min-height:1.2em;';
 
     const btnRow = document.createElement('div');
     btnRow.style.cssText = 'display:flex;gap:10px;';
 
     const cancelBtn = document.createElement('button');
     cancelBtn.textContent = 'Cancel';
-    cancelBtn.style.cssText = [
-      'flex:1', 'padding:10px', 'border-radius:6px',
-      'border:1px solid #444466', 'background:#1a1a2a',
-      'color:#aaaacc', 'font:14px Arial,sans-serif', 'cursor:pointer',
-    ].join(';');
+    cancelBtn.style.cssText = 'flex:1;padding:10px;border-radius:6px;border:1px solid #444466;background:#1a1a2a;color:#aaaacc;font:14px Arial,sans-serif;cursor:pointer;';
     cancelBtn.addEventListener('click', () => overlay.remove());
 
     const saveBtn = document.createElement('button');
     saveBtn.textContent = 'Save';
-    saveBtn.style.cssText = [
-      'flex:1', 'padding:10px', 'border-radius:6px',
-      'border:1px solid #336633', 'background:#0a2a0a',
-      'color:#66ff99', 'font:bold 14px Arial,sans-serif', 'cursor:pointer',
-    ].join(';');
+    saveBtn.style.cssText = 'flex:1;padding:10px;border-radius:6px;border:1px solid #336633;background:#0a2a0a;color:#66ff99;font:bold 14px Arial,sans-serif;cursor:pointer;';
 
     saveBtn.addEventListener('click', async () => {
       const name = input.value.trim();
-      if (!name) { input.focus(); statusEl.textContent = 'Enter a track name.'; return; }
-
-      saveBtn.disabled   = true;
-      cancelBtn.disabled = true;
-      statusEl.textContent = 'Saving…';
-
+      if (!name) { input.focus(); status.textContent = 'Enter a track name.'; return; }
+      saveBtn.disabled = true; cancelBtn.disabled = true; status.textContent = 'Saving…';
       try {
         const payload: TrackPayload = {
-          startX:       this.curStartX,
-          startY:       this.curStartY,
-          startHeading: this.curStartHeading,
-          pieces:       this.placed,
-          markers:      [this.finishMarker!, ...this.checkpoints],
+          startX: this.curStartX, startY: this.curStartY, startHeading: this.curStartH,
+          pieces: this.pieces,
+          markers: [this.finishMarker!, ...this.checkpoints],
         };
         await saveDraft(name, JSON.stringify(payload), this.mineTrackId ?? undefined);
         this.isDirty = false;
         overlay.remove();
         this.scene.start('TrackSelect', { activeTab: 'drafts' });
       } catch (err) {
-        statusEl.textContent = err instanceof Error ? err.message : 'Save failed — try again.';
-        saveBtn.disabled   = false;
-        cancelBtn.disabled = false;
+        status.textContent = err instanceof Error ? err.message : 'Save failed — try again.';
+        saveBtn.disabled = false; cancelBtn.disabled = false;
       }
     });
 
-    btnRow.appendChild(cancelBtn);
-    btnRow.appendChild(saveBtn);
-    card.appendChild(title);
-    card.appendChild(input);
-    card.appendChild(statusEl);
-    card.appendChild(btnRow);
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
+    btnRow.appendChild(cancelBtn); btnRow.appendChild(saveBtn);
+    card.appendChild(title); card.appendChild(input); card.appendChild(status); card.appendChild(btnRow);
     setTimeout(() => input.focus(), 50);
   }
 
-  // ── Utilities ─────────────────────────────────────────────────────────────────
+  private showConfirm(msg: string, actionLabel: string, onConfirm: () => void): void {
+    const overlay = this.mkOverlay();
+    const card    = this.mkCard(overlay);
+    const msgEl   = document.createElement('div');
+    msgEl.textContent = msg;
+    msgEl.style.cssText = 'font:bold 17px "Arial Black",Arial,sans-serif;color:#e8e8ff;text-align:center;';
+    const btnRow = document.createElement('div'); btnRow.style.cssText = 'display:flex;gap:10px;';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Keep editing';
+    cancelBtn.style.cssText = 'flex:1;padding:10px;border-radius:6px;border:1px solid #444466;background:#1a1a2a;color:#aaaacc;font:14px Arial,sans-serif;cursor:pointer;';
+    cancelBtn.addEventListener('click', () => overlay.remove());
+    const actionBtn = document.createElement('button');
+    actionBtn.textContent = actionLabel;
+    actionBtn.style.cssText = 'flex:1;padding:10px;border-radius:6px;border:1px solid #663333;background:#1a0808;color:#ff8888;font:bold 14px Arial,sans-serif;cursor:pointer;';
+    actionBtn.addEventListener('click', () => { overlay.remove(); onConfirm(); });
+    btnRow.appendChild(cancelBtn); btnRow.appendChild(actionBtn);
+    card.appendChild(msgEl); card.appendChild(btnRow);
+  }
+
+  private mkOverlay(): HTMLDivElement {
+    const o = document.createElement('div');
+    o.style.cssText = 'position:fixed;inset:0;z-index:300;background:rgba(0,0,0,0.78);display:flex;align-items:center;justify-content:center;';
+    document.body.appendChild(o);
+    return o;
+  }
+
+  private mkCard(overlay: HTMLDivElement): HTMLDivElement {
+    const c = document.createElement('div');
+    c.style.cssText = 'background:#0d0d1e;border:1.5px solid #444488;border-radius:10px;padding:20px 18px;width:min(320px,calc(100%-32px));display:flex;flex-direction:column;gap:12px;';
+    overlay.appendChild(c);
+    return c;
+  }
 
   private showToast(msg: string): void {
     const t = document.createElement('div');
     t.textContent = msg;
     t.style.cssText = [
       'position:fixed', `bottom:${PALETTE_H + 10}px`, 'left:50%',
-      'transform:translateX(-50%)',
-      'background:#2a2a50', 'border:1px solid #5555aa', 'border-radius:6px',
-      'padding:8px 16px', 'color:#ccccff', 'font:13px Arial,sans-serif',
+      'transform:translateX(-50%)', 'background:#2a2a50', 'border:1px solid #5555aa',
+      'border-radius:6px', 'padding:8px 16px', 'color:#ccccff', 'font:13px Arial,sans-serif',
       'z-index:400', 'pointer-events:none', 'white-space:nowrap',
     ].join(';');
     document.body.appendChild(t);
-    setTimeout(() => t.remove(), 2200);
+    setTimeout(() => t.remove(), 2500);
   }
 
   override update(): void { /* event-driven */ }

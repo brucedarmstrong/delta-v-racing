@@ -49,7 +49,7 @@ function rotateCW(x: number, y: number, deg: number): [number, number] {
 //   arc sweeps CW from angle π (left) by θ, exit heading turns right by θ.
 //
 // Corner left turn (flip=true): mirror about Y axis at arc centre.
-function connectors(piece: PieceDef) {
+export function connectors(piece: PieceDef) {
   if (piece.type === 'straight') {
     const half = STRAIGHT_LEN[piece.size] / 2;
     return { entryX: 0, entryY: -half, entryH: 180, exitX: 0, exitY: half, exitH: 180 };
