@@ -920,6 +920,8 @@ export class TrackEditor extends Scene {
       if (newRot === p.rotation) return; // no 15° snap change — skip redraw
       this.pieces[op.idx] = { ...p, rotation: newRot };
       this.isDirty = true;
+      const angEl = document.getElementById('ed-ctrl-angle');
+      if (angEl) angEl.textContent = `${newRot}°`;
       // Keep selectedPieceImg visible and current so the piece stays visible at the new angle.
       this.updateSelectedHighlight();
       this.drawSelectionOverlay();
@@ -953,6 +955,8 @@ export class TrackEditor extends Scene {
       const r = snapMarkerRotation(wx, wy, this.curStartX, this.curStartY);
       if (r === this.curStartH) return;
       this.curStartH = r;
+      const angEl = document.getElementById('ed-ctrl-angle');
+      if (angEl) angEl.textContent = `${r}°`;
       this.updateStartCarImg(); this.drawSelectionOverlay(); this.isDirty = true;
       return;
     }
@@ -961,6 +965,8 @@ export class TrackEditor extends Scene {
       const r = snapMarkerRotation(wx, wy, this.finishMarker.x, this.finishMarker.y);
       if (r === this.finishMarker.rotation) return;
       this.finishMarker.rotation = r;
+      const angEl = document.getElementById('ed-ctrl-angle');
+      if (angEl) angEl.textContent = `${r}°`;
       this.updateFinishImg(); this.drawSelectionOverlay(); this.isDirty = true;
       return;
     }
@@ -973,6 +979,8 @@ export class TrackEditor extends Scene {
       if (r === cp.rotation) return;
       cp.rotation = r;
       img.setAngle(r);
+      const angEl = document.getElementById('ed-ctrl-angle');
+      if (angEl) angEl.textContent = `${r}°`;
       this.drawSelectionOverlay(); this.isDirty = true;
       return;
     }
@@ -1537,6 +1545,7 @@ export class TrackEditor extends Scene {
         : selPiece!.rotation;
       el.appendChild(mkB('-', 'Rotate −15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(-15)));
       const angEl = document.createElement('span');
+      angEl.id = 'ed-ctrl-angle';
       angEl.textContent = `${rot}°`;
       angEl.style.cssText = 'color:#8888aa;font:12px Arial,sans-serif;min-width:34px;text-align:center;flex-shrink:0;';
       el.appendChild(angEl);
