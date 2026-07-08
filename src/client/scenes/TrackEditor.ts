@@ -1139,6 +1139,7 @@ export class TrackEditor extends Scene {
     if (!this.clipboard) { this.showToast('Nothing to paste'); return; }
     this.saveUndo();
     const copy: PlacedPiece = { ...this.clipboard, x: this.clipboard.x + 60, y: this.clipboard.y + 60 };
+    this.clipboard = { ...copy }; // advance clipboard so each subsequent paste offsets further
     this.pieces.push(copy);
     this.updateBarrierImg();
     this.selectPiece(this.pieces.length - 1);
