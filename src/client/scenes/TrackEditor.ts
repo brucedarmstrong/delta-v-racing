@@ -1134,10 +1134,40 @@ export class TrackEditor extends Scene {
 
   private changePieceFlip(flip: boolean): void {
     if (this.selection?.kind !== 'piece') return;
-    const p = this.pieces[this.selection.idx];
+    const idx = this.selection.idx;
+    const p = this.pieces[idx];
     if (p.type === 'straight') return;
     this.saveUndo();
-    this.pieces[this.selection.idx] = { ...(p as CornerDef & { x: number; y: number; rotation: number }), flip };
+
+    // Build the flipped piece with the same position/rotation as a starting point.
+    let flipped: PlacedPiece = { ...(p as CornerDef & { x: number; y: number; rotation: number }), flip };
+    const newC = connectors(flipped);
+
+    // If any neighbor is snapped to our entry or exit, keep that connector fixed
+    // as the anchor point so the flip doesn't break the connection.
+    const { entry: oldEntry, exit: oldExit } = worldConnectors(p);
+    for (let i = 0; i < this.pieces.length; i++) {
+      if (i === idx) continue;
+      const oc = worldConnectors(this.pieces[i]);
+
+      // Our entry is snapped to their exit — anchor on entry
+      if (Math.hypot(oldEntry.x - oc.exit.x, oldEntry.y - oc.exit.y) < SNAP_R) {
+        const newRot = ((oldEntry.heading - newC.entryH) % 360 + 360) % 360;
+        const [nex, ney] = rotateCW(newC.entryX, newC.entryY, newRot);
+        flipped = { ...flipped, rotation: newRot, x: oldEntry.x - nex, y: oldEntry.y - ney };
+        break;
+      }
+
+      // Our exit is snapped to their entry — anchor on exit
+      if (Math.hypot(oldExit.x - oc.entry.x, oldExit.y - oc.entry.y) < SNAP_R) {
+        const newRot = ((oldExit.heading - newC.exitH) % 360 + 360) % 360;
+        const [nxx, nxy] = rotateCW(newC.exitX, newC.exitY, newRot);
+        flipped = { ...flipped, rotation: newRot, x: oldExit.x - nxx, y: oldExit.y - nxy };
+        break;
+      }
+    }
+
+    this.pieces[idx] = flipped;
     this.updateBarrierImg(); this.updateSelectedHighlight(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
   }
 
