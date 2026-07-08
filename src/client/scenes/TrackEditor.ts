@@ -591,14 +591,17 @@ export class TrackEditor extends Scene {
     ctx.clearRect(0, 0, this.selCanvasTex.width, this.selCanvasTex.height);
     ctx.save();
     ctx.translate(pad - b.x, pad - b.y);
+    ctx.lineWidth = 2.5;
+    ctx.lineCap   = 'round';
+    // Black base — fills the gaps so they read as black instead of transparent
+    ctx.setLineDash([]);
+    ctx.strokeStyle = '#000000';
+    ctx.beginPath(); addPiecePaths(ctx, p); ctx.stroke();
+    // Cyan dashes on top
     ctx.setLineDash([10, 8]);
     ctx.lineDashOffset = -this.selDashOffset;
     ctx.strokeStyle = '#00ddff';
-    ctx.lineWidth   = 2.5;
-    ctx.lineCap     = 'round';
-    ctx.beginPath();
-    addPiecePaths(ctx, p);
-    ctx.stroke();
+    ctx.beginPath(); addPiecePaths(ctx, p); ctx.stroke();
     ctx.restore();
     this.selCanvasTex.refresh();
   }
