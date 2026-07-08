@@ -588,21 +588,37 @@ export class TrackEditor extends Scene {
     const b   = trackBounds([p]);
     const pad = 14;
     const ctx = this.selCanvasTex.getContext();
-    ctx.clearRect(0, 0, this.selCanvasTex.width, this.selCanvasTex.height);
-    ctx.save();
-    ctx.translate(pad - b.x, pad - b.y);
+    const cw  = this.selCanvasTex.width;
+    const ch  = this.selCanvasTex.height;
+
+    // Hard-reset all state that could have drifted across frames or canvas reuse.
+    // Using setTransform instead of save/restore avoids any stack imbalance issues.
+    ctx.globalAlpha             = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cw, ch);
+
+    // Apply the world-to-canvas offset
+    ctx.setTransform(1, 0, 0, 1, pad - b.x, pad - b.y);
     ctx.lineWidth = 2.5;
     ctx.lineCap   = 'round';
+
     // Black base — fills the gaps so they read as black instead of transparent
     ctx.setLineDash([]);
+    ctx.lineDashOffset = 0;
     ctx.strokeStyle = '#000000';
     ctx.beginPath(); addPiecePaths(ctx, p); ctx.stroke();
+
     // Cyan dashes on top
     ctx.setLineDash([10, 8]);
     ctx.lineDashOffset = -this.selDashOffset;
     ctx.strokeStyle = '#00ddff';
     ctx.beginPath(); addPiecePaths(ctx, p); ctx.stroke();
-    ctx.restore();
+
+    // Leave the context in a clean identity state
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.setLineDash([]);
+
     this.selCanvasTex.refresh();
   }
 
