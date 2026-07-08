@@ -1475,7 +1475,39 @@ export class TrackEditor extends Scene {
         active ? '#6666cc' : '#2a2a44',
         fn);
 
-    // Marker label (car / finish / checkpoint)
+    // Wall toggle — always leftmost when visible; same size as other buttons;
+    // 20×20 canvas icon inline with text label.
+    if (showWall) {
+      const curWalls: WallVariant = selPiece ? selPiece.walls : this.palWalls;
+      const togKind: 'straight' | 'corner' =
+        (selPiece ? selPiece.type !== 'straight' : isCornerTab) ? 'corner' : 'straight';
+      const ICON = 20;
+      const togBtn = document.createElement('button');
+      togBtn.style.cssText = [
+        'display:flex', 'align-items:center', 'gap:5px',
+        'padding:5px 8px', 'border-radius:5px', 'cursor:pointer', 'flex-shrink:0',
+        'background:#111128;border:1px solid #3a3a60;white-space:nowrap;',
+      ].join(';');
+      const togCanvas = document.createElement('canvas');
+      togCanvas.width = ICON; togCanvas.height = ICON;
+      togCanvas.style.cssText = `width:${ICON}px;height:${ICON}px;display:block;flex-shrink:0;`;
+      drawWallToggleIcon(togCanvas, curWalls, togKind);
+      const wallNames: Record<WallVariant, string> = { both: 'Both', outer: 'Outer', inner: 'Inner' };
+      const togLabel = document.createElement('span');
+      togLabel.style.cssText = 'font:bold 12px Arial,sans-serif;line-height:1;color:#8899bb;';
+      togLabel.textContent = wallNames[curWalls];
+      togBtn.appendChild(togCanvas);
+      togBtn.appendChild(togLabel);
+      togBtn.addEventListener('click', () => {
+        const cycle: WallVariant[] = ['both', 'outer', 'inner'];
+        const next = cycle[(cycle.indexOf(curWalls) + 1) % cycle.length];
+        if (selPiece) this.changePieceWalls(next);
+        else { this.palWalls = next; this.rebuildContent(); }
+      });
+      el.appendChild(togBtn);
+    }
+
+    // Marker label (car / finish / checkpoint) — leftmost when wall toggle absent
     if (showLabel) {
       const label =
         sel!.kind === 'car'          ? '🚗 Start'
@@ -1500,39 +1532,8 @@ export class TrackEditor extends Scene {
       }));
     }
 
-    // Spacer — pushes wall toggle to the right
+    // Spacer — pushes rotate/copy/delete to the right
     { const sp = document.createElement('div'); sp.style.cssText = 'flex:1;min-width:4px;'; el.appendChild(sp); }
-
-    // Wall toggle — cycles palWalls (no selection) or piece walls (piece selected)
-    if (showWall) {
-      const curWalls: WallVariant = selPiece ? selPiece.walls : this.palWalls;
-      const togKind: 'straight' | 'corner' =
-        (selPiece ? selPiece.type !== 'straight' : isCornerTab) ? 'corner' : 'straight';
-      const TSIZE = 28;
-      const togBtn = document.createElement('button');
-      togBtn.style.cssText = [
-        'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
-        'gap:2px', 'padding:3px 5px', 'border-radius:5px', 'cursor:pointer', 'flex-shrink:0',
-        'background:#111128;border:1px solid #3a3a60;',
-      ].join(';');
-      const togCanvas = document.createElement('canvas');
-      togCanvas.width = TSIZE; togCanvas.height = TSIZE;
-      togCanvas.style.cssText = `width:${TSIZE}px;height:${TSIZE}px;display:block;`;
-      drawWallToggleIcon(togCanvas, curWalls, togKind);
-      const wallNames: Record<WallVariant, string> = { both: 'Both', outer: 'Outer', inner: 'Inner' };
-      const togLabel = document.createElement('span');
-      togLabel.style.cssText = 'font:bold 7px Arial,sans-serif;line-height:1;color:#5599aa;';
-      togLabel.textContent = wallNames[curWalls];
-      togBtn.appendChild(togCanvas);
-      togBtn.appendChild(togLabel);
-      togBtn.addEventListener('click', () => {
-        const cycle: WallVariant[] = ['both', 'outer', 'inner'];
-        const next = cycle[(cycle.indexOf(curWalls) + 1) % cycle.length];
-        if (selPiece) this.changePieceWalls(next);
-        else { this.palWalls = next; this.rebuildContent(); }
-      });
-      el.appendChild(togBtn);
-    }
 
     // Rotate ↶ angle ↷ — visible whenever anything is selected
     if (showRotate) {
