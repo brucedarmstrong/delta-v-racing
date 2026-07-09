@@ -1195,10 +1195,19 @@ export class TrackEditor extends Scene {
     this.isDirty = true;
   }
 
+  // Spawn position for a new marker: exit connector of the last placed piece,
+  // oriented to match the track heading at that point.
+  private markerSpawnPos(): { x: number; y: number; rotation: number } {
+    const last = this.pieces[this.pieces.length - 1];
+    const { exit } = worldConnectors(last);
+    return { x: exit.x, y: exit.y, rotation: exit.heading };
+  }
+
   private placeFinish(): void {
     if (this.pieces.length === 0) { this.showToast('Add track pieces first'); return; }
     this.saveUndo();
-    this.finishMarker = { kind: 'finish', shape: 'gate', x: this.viewCenterX(), y: this.viewCenterY(), rotation: 0 };
+    const { x, y, rotation } = this.markerSpawnPos();
+    this.finishMarker = { kind: 'finish', shape: 'gate', x, y, rotation };
     this.updateFinishImg();
     this.selectMarker({ kind: 'finish' });
     this.showToast('Finish placed — drag to position');
@@ -1208,8 +1217,9 @@ export class TrackEditor extends Scene {
   private placeCheckpoint(shape: 'gate' | 'circle'): void {
     if (this.pieces.length === 0) { this.showToast('Add track pieces first'); return; }
     this.saveUndo();
+    const { x, y, rotation } = this.markerSpawnPos();
     const idx = this.checkpoints.length;
-    this.checkpoints.push({ kind: 'checkpoint', shape, x: this.viewCenterX(), y: this.viewCenterY(), rotation: 0 });
+    this.checkpoints.push({ kind: 'checkpoint', shape, x, y, rotation });
     this.updateCheckpointImgs();
     this.selectMarker({ kind: 'checkpoint', idx });
     this.showToast('Checkpoint placed — drag to position');
