@@ -705,33 +705,6 @@ export class TrackEditor extends Scene {
     if (!p) return;
     const g = this.selectionGfx;
 
-    // Straight drag visual — wall lines at new position (selectedPieceImg is
-    // still at the old position and is hidden during a move drag).
-    if (p.type === 'straight' && this.dragOp?.kind === 'move') {
-      g.lineStyle(4, 0x00ddff, 0.75);
-      const half = STRAIGHT_LEN[(p as StraightDef).size] / 2;
-      const def  = p as StraightDef;
-      if (def.walls !== 'inner') {
-        const [tx, ty] = rotateCW( HALF_TRACK, -half, p.rotation);
-        const [bx, by] = rotateCW( HALF_TRACK,  half, p.rotation);
-        g.lineBetween(p.x + tx, p.y + ty, p.x + bx, p.y + by);
-      }
-      if (def.walls !== 'outer') {
-        const [tx, ty] = rotateCW(-HALF_TRACK, -half, p.rotation);
-        const [bx, by] = rotateCW(-HALF_TRACK,  half, p.rotation);
-        g.lineBetween(p.x + tx, p.y + ty, p.x + bx, p.y + by);
-      }
-    }
-
-    // Corner drag preview — only while dragging; at rest the canvas texture handles it.
-    if (p.type !== 'straight' && this.dragOp?.kind === 'move') {
-      const outerR = p.type === 'corner' ? TIGHT.outerR : BIG.outerR;
-      const innerR = p.type === 'corner' ? TIGHT.innerR : BIG.innerR;
-      const def    = p as CornerDef;
-      if (def.walls !== 'inner') drawCornerArcOnGfx(g, p, outerR, 2.5, 0x00ddff, 0.90);
-      if (def.walls !== 'outer' && innerR > 8) drawCornerArcOnGfx(g, p, innerR, 2.5, 0x00ddff, 0.90);
-    }
-
     // Rotate handle — drawn from the exit connector outward
     const conns = worldConnectors(p);
     const h     = getHandlePos(p);
@@ -924,7 +897,6 @@ export class TrackEditor extends Scene {
       this.selectPiece(pidx);
       this.saveUndo();
       this.updateBarrierImg(pidx);
-      this.selectedPieceImg?.setVisible(false);
       const p = this.pieces[pidx];
       this.dragOp = { kind: 'move', idx: pidx, offX: wx - p.x, offY: wy - p.y };
       this.drawSelectionOverlay();
@@ -965,6 +937,11 @@ export class TrackEditor extends Scene {
       }
       this.pieces[op.idx] = updated;
       this.isDirty = true;
+      // Keep the marching-ants image anchored to the piece as it moves
+      if (this.selectedPieceImg) {
+        const b = trackBounds([updated]);
+        this.selectedPieceImg.setPosition(b.x - 14, b.y - 14);
+      }
       this.drawSelectionOverlay();
       return;
     }
@@ -1858,7 +1835,7 @@ export class TrackEditor extends Scene {
 
   override update(_time: number, delta: number): void {
     // Advance marching-ants dash offset; redraw only when a piece is selected and not being moved
-    if (this.selCanvasTex && this.selection?.kind === 'piece' && this.dragOp?.kind !== 'move') {
+    if (this.selCanvasTex && this.selection?.kind === 'piece') {
       this.selDashOffset = (this.selDashOffset + delta * 0.03) % 18;
       this.redrawSelectionDashes();
     }
