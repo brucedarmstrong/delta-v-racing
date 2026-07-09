@@ -518,18 +518,30 @@ export class TrackEditor extends Scene {
     this.snapBtnEl = snapBtn;
     this.updateSnapBtn();
 
+    const helpBtn = document.createElement('button');
+    helpBtn.innerHTML = '<span style="font:bold 13px Arial,sans-serif;line-height:1;">?</span>';
+    helpBtn.title = 'Help';
+    helpBtn.style.cssText = [
+      'border-radius:50%', 'cursor:pointer', 'width:28px', 'height:28px',
+      'display:inline-flex', 'align-items:center', 'justify-content:center',
+      'color:#8888cc', 'background:#111128', 'border:1px solid #3a3a60', 'flex-shrink:0',
+    ].join(';');
+    helpBtn.addEventListener('click', () => this.showHelp());
+
     hdr.appendChild(backBtn);
     hdr.appendChild(titleEl);
     hdr.appendChild(sep());
     hdr.appendChild(snapBtn);
     hdr.appendChild(sep());
-    hdr.appendChild(mkBtn(ic('undo'),                    'Undo',              '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
-    hdr.appendChild(mkBtn(ic('redo'),                    'Redo',              '#ffaa44', '#1a0e00', '#553300', () => this.redo()));
+    hdr.appendChild(mkBtn(ic('undo'),          'Undo',       '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
+    hdr.appendChild(mkBtn(ic('redo'),          'Redo',       '#ffaa44', '#1a0e00', '#553300', () => this.redo()));
     hdr.appendChild(sep());
-    hdr.appendChild(mkBtn(ic('folder-open',  'Drafts'), 'My drafts',         '#aaaaff', '#0a0a22', '#333366', () => this.openDrafts()));
+    hdr.appendChild(mkBtn(ic('folder-open'),   'My drafts',  '#aaaaff', '#0a0a22', '#333366', () => this.openDrafts()));
     hdr.appendChild(sep());
-    hdr.appendChild(mkBtn(ic('play',         'Test'),   'Test track',        '#44ffcc', '#001a12', '#226644', () => this.testTrack()));
-    hdr.appendChild(mkBtn(ic('content-save', 'Save'),   'Save track',        '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
+    hdr.appendChild(mkBtn(ic('play'),          'Test track', '#44ffcc', '#001a12', '#226644', () => this.testTrack()));
+    hdr.appendChild(mkBtn(ic('content-save'),  'Save track', '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
+    hdr.appendChild(sep());
+    hdr.appendChild(helpBtn);
 
     document.body.appendChild(hdr);
     this.hdrEl = hdr;
@@ -537,10 +549,83 @@ export class TrackEditor extends Scene {
 
   private updateSnapBtn(): void {
     if (!this.snapBtnEl) return;
-    this.snapBtnEl.innerHTML = ic('link-variant', 'Snap');
+    this.snapBtnEl.innerHTML = ic('link-variant');
     this.snapBtnEl.style.background = this.snapEnabled ? '#001a22' : '#111128';
     this.snapBtnEl.style.color      = this.snapEnabled ? '#44ddff' : '#445566';
     this.snapBtnEl.style.border     = `1px solid ${this.snapEnabled ? '#226644' : '#2a2a44'}`;
+  }
+
+  private showHelp(): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:500;display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:16px;box-sizing:border-box;';
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#12122a;border:1px solid #3a3a6a;border-radius:10px;width:100%;max-width:400px;padding:16px 16px 20px;position:relative;margin:auto;';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.innerHTML = ic('close');
+    closeBtn.title = 'Close';
+    closeBtn.style.cssText = 'position:absolute;top:10px;right:10px;background:none;border:none;color:#8888aa;font-size:18px;cursor:pointer;padding:4px;line-height:1;';
+    closeBtn.addEventListener('click', () => overlay.remove());
+
+    const title = document.createElement('div');
+    title.textContent = 'Editor Help';
+    title.style.cssText = 'color:#aaaaff;font:bold 15px Arial,sans-serif;margin-bottom:14px;';
+
+    type HelpRow = [string, string, string]; // [icon html, label, description]
+    const section = (heading: string, rows: HelpRow[]) => {
+      const sec = document.createElement('div');
+      sec.style.cssText = 'margin-bottom:14px;';
+      const h = document.createElement('div');
+      h.textContent = heading;
+      h.style.cssText = 'font:bold 10px Arial,sans-serif;color:#5566aa;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a2a4a;padding-bottom:4px;margin-bottom:8px;';
+      sec.appendChild(h);
+      for (const [iconHtml, label, desc] of rows) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:baseline;gap:8px;margin-bottom:5px;';
+        const left = document.createElement('div');
+        left.innerHTML = `${iconHtml} <strong>${label}</strong>`;
+        left.style.cssText = 'color:#ccccff;font:12px Arial,sans-serif;min-width:100px;flex-shrink:0;';
+        const right = document.createElement('div');
+        right.textContent = desc;
+        right.style.cssText = 'color:#8888aa;font:12px Arial,sans-serif;line-height:1.4;';
+        row.appendChild(left); row.appendChild(right);
+        sec.appendChild(row);
+      }
+      return sec;
+    };
+
+    card.appendChild(closeBtn);
+    card.appendChild(title);
+    card.appendChild(section('Toolbar', [
+      [ic('arrow-left'),    'Back',   'Exit the editor'],
+      [ic('link-variant'),  'Snap',   'Toggle connector snapping — pieces snap together at endpoints when on'],
+      [ic('undo'),          'Undo',   'Undo the last change'],
+      [ic('redo'),          'Redo',   'Redo the last undone change'],
+      [ic('folder-open'),   'Drafts', 'Open your saved draft tracks'],
+      [ic('play'),          'Test',   'Test drive the current track'],
+      [ic('content-save'),  'Save',   'Save and publish the track'],
+    ]));
+    card.appendChild(section('Palette — nothing selected', [
+      ['', 'Walls',  'Default wall layout for new pieces: Both walls / Outer only / Inner only'],
+      ['', 'Flip',   'Default turn direction for new corners: right turn / left turn'],
+    ]));
+    card.appendChild(section('Piece selected', [
+      ['', 'Walls',                                         'Cycle wall layout on the selected piece'],
+      [ic('flip-horizontal'),                'Flip',        'Mirror a corner piece to switch turn direction'],
+      [ic('rotate-left') + ic('rotate-right'), '±15°',     'Rotate the selected piece in 15° steps'],
+      [ic('content-copy'),                   'Copy',        'Copy the selected piece'],
+      [ic('content-paste'),                  'Paste',       'Paste the last copied piece'],
+      [ic('delete'),                         'Delete',      'Remove the selected piece from the track'],
+    ]));
+    card.appendChild(section('Marker selected  (finish / checkpoint)', [
+      [ic('rotate-left') + ic('rotate-right'), '±15°',  'Rotate the marker in 15° steps'],
+      [ic('delete'),                           'Delete', 'Remove the finish line or checkpoint'],
+    ]));
+
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
   }
 
   // ── Barrier texture ─────────────────────────────────────────────────────────
