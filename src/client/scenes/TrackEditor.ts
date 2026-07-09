@@ -1393,16 +1393,31 @@ export class TrackEditor extends Scene {
       ].join(';');
       const c = document.createElement('canvas');
       c.width = ICO; c.height = ICO;
-      // width:100% makes the canvas fill the button; aspect-ratio keeps it square.
       c.style.cssText = 'width:100%;aspect-ratio:1;display:block;';
       draw(c, active);
       btn.appendChild(c);
+      let sp: HTMLSpanElement | null = null;
       if (label) {
-        const sp = document.createElement('span');
+        sp = document.createElement('span');
         sp.textContent = label;
         sp.style.cssText = `font:bold 9px Arial,sans-serif;line-height:1;color:${active ? '#88ff66' : '#5566aa'};`;
         btn.appendChild(sp);
       }
+      // Press flash: light up on pointerdown, restore on release/cancel
+      btn.addEventListener('pointerdown', () => {
+        btn.style.background = '#1a2a1a';
+        btn.style.border = '1.5px solid #44aa55';
+        if (sp) sp.style.color = '#88ff66';
+        draw(c, true);
+      });
+      const onRelease = () => {
+        btn.style.background = active ? '#1a2a1a' : '#111120';
+        btn.style.border = active ? '1.5px solid #44aa55' : '1px solid #2a2a44';
+        if (sp) sp.style.color = active ? '#88ff66' : '#5566aa';
+        draw(c, active);
+      };
+      btn.addEventListener('pointerup', onRelease);
+      btn.addEventListener('pointercancel', onRelease);
       return btn;
     };
 
