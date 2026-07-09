@@ -54,6 +54,7 @@ const HEADER_H  = 52;
 const PALETTE_H = 210;
 const SNAP_R    = 55;
 const MAX_UNDO  = 40;
+const MAX_PIECES = 60;
 const HIT_R_MARKER = 46;
 const HANDLE_HIT_R = 22;   // hit radius for the rotate handle
 
@@ -1157,6 +1158,10 @@ export class TrackEditor extends Scene {
   // ── Piece & marker management ─────────────────────────────────────────────────
 
   private addPieceFromPalette(def: PieceDef): void {
+    if (this.pieces.length >= MAX_PIECES) {
+      this.showToast(`Track limit reached (${MAX_PIECES} pieces)`);
+      return;
+    }
     this.saveUndo();
     let newX = this.viewCenterX(), newY = this.viewCenterY(), newRot = 0;
 
@@ -1307,6 +1312,10 @@ export class TrackEditor extends Scene {
 
   private paste(): void {
     if (!this.clipboard) { this.showToast('Nothing to paste'); return; }
+    if (this.pieces.length >= MAX_PIECES) {
+      this.showToast(`Track limit reached (${MAX_PIECES} pieces)`);
+      return;
+    }
     this.saveUndo();
     const copy: PlacedPiece = { ...this.clipboard, x: this.clipboard.x + 60, y: this.clipboard.y + 60 };
     this.clipboard = { ...copy }; // advance clipboard so each subsequent paste offsets further

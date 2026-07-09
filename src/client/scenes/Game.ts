@@ -25,6 +25,7 @@ type GhostState = {
   data:      GhostData;
   carImg:    GameObjects.Image;
   trailGfx:  GameObjects.Graphics;
+  trailSegs: TrailSeg[];
   gx:        number;
   gy:        number;
   moveIdx:   number;
@@ -38,6 +39,51 @@ const MAX_ZOOM = 5.0;
 // Slow-motion multiplier applied from crash contact until car reappears.
 // Set to 1 to disable once the animation is tuned.
 const CRASH_SLO = 0.4;
+
+// Trail culling: keep at most TRAIL_FADE_START + TRAIL_FADE_LEN segments.
+// Segments older than TRAIL_FADE_START steps fade linearly to zero over TRAIL_FADE_LEN steps.
+const TRAIL_FADE_START = 100;
+const TRAIL_FADE_LEN   =  20;
+const TRAIL_MAX        = TRAIL_FADE_START + TRAIL_FADE_LEN;
+
+type TrailSeg = {
+  fromGX: number; fromGY: number;
+  toGX:   number; toGY:   number;
+  color:  number;
+  crash:  boolean;
+};
+
+function trailFade(age: number): number {
+  if (age < TRAIL_FADE_START) return 1;
+  return Math.max(0, 1 - (age - TRAIL_FADE_START) / TRAIL_FADE_LEN);
+}
+
+function pushTrailSeg(segs: TrailSeg[], seg: TrailSeg): void {
+  segs.push(seg);
+  while (segs.length > TRAIL_MAX) segs.shift();
+}
+
+function redrawTrailGfx(gfx: GameObjects.Graphics, segs: TrailSeg[]): void {
+  gfx.clear();
+  const n = segs.length;
+  for (let i = 0; i < n; i++) {
+    const fade = trailFade(n - 1 - i); // age 0 = newest
+    if (fade <= 0) continue;
+    const { fromGX, fromGY, toGX, toGY, color, crash } = segs[i];
+    const lineAlpha = (crash ? 0.30 : 0.45) * fade;
+    const fromWX = fromGX * gridPx, fromWY = fromGY * gridPx;
+    const toWX   = toGX   * gridPx, toWY   = toGY   * gridPx;
+    gfx.lineStyle(2, color, lineAlpha);
+    gfx.beginPath();
+    gfx.moveTo(fromWX, fromWY);
+    gfx.lineTo(toWX, toWY);
+    gfx.strokePath();
+    if (!crash) {
+      gfx.fillStyle(color, 0.55 * fade);
+      gfx.fillCircle(fromWX, fromWY, 3);
+    }
+  }
+}
 
 
 export class Game extends Scene {
@@ -75,7 +121,8 @@ export class Game extends Scene {
   private velGfx!:   GameObjects.Graphics;
   private pickGfx!:  GameObjects.Graphics;
   private dotGfx!:   GameObjects.Graphics;
-  private trailGfx!: GameObjects.Graphics;
+  private trailGfx!:  GameObjects.Graphics;
+  private trailSegs:  TrailSeg[] = [];
 
   // Ghost recording
   private ghostMoves:   GhostMove[] = [];
@@ -197,6 +244,7 @@ export class Game extends Scene {
     this.ghostMoves   = [];
     this.currentGhost = null;
     this.ghostStates  = [];
+    this.trailSegs    = [];
     this.trailGfx = this.add.graphics().setDepth(3);
 
     this.makeSpark();
@@ -1362,7 +1410,7 @@ export class Game extends Scene {
       const trailGfx = this.add.graphics().setDepth(2);
 
       const state: GhostState = {
-        data: ghost, carImg, trailGfx,
+        data: ghost, carImg, trailGfx, trailSegs: [],
         gx: ghost.startGX, gy: ghost.startGY,
         moveIdx: 0, tint, trailTint: trail,
       };
@@ -1391,13 +1439,11 @@ export class Game extends Scene {
 
     if (!move.crash) {
       if (!silent) {
-        state.trailGfx.lineStyle(2, state.trailTint, 0.45);
-        state.trailGfx.beginPath();
-        state.trailGfx.moveTo(fromGX * gridPx, fromGY * gridPx);
-        state.trailGfx.lineTo(move.gx * gridPx, move.gy * gridPx);
-        state.trailGfx.strokePath();
-        state.trailGfx.fillStyle(state.trailTint, 0.55);
-        state.trailGfx.fillCircle(fromGX * gridPx, fromGY * gridPx, 3);
+        pushTrailSeg(state.trailSegs, {
+          fromGX, fromGY, toGX: move.gx, toGY: move.gy,
+          color: state.trailTint, crash: false,
+        });
+        redrawTrailGfx(state.trailGfx, state.trailSegs);
       }
 
       state.gx = move.gx;
@@ -1422,11 +1468,11 @@ export class Game extends Scene {
     } else {
       // Crash — ghost stays at current position; draw dim trail to the attempted cell.
       if (!silent) {
-        state.trailGfx.lineStyle(2, 0xff9933, 0.30);
-        state.trailGfx.beginPath();
-        state.trailGfx.moveTo(fromGX * gridPx, fromGY * gridPx);
-        state.trailGfx.lineTo(move.gx * gridPx, move.gy * gridPx);
-        state.trailGfx.strokePath();
+        pushTrailSeg(state.trailSegs, {
+          fromGX, fromGY, toGX: move.gx, toGY: move.gy,
+          color: 0xff9933, crash: true,
+        });
+        redrawTrailGfx(state.trailGfx, state.trailSegs);
       }
       // state.gx/gy unchanged — ghost returns to safe position just like the real car
     }
@@ -1863,21 +1909,12 @@ export class Game extends Scene {
   }
 
   private drawTrailSegment(fromGX: number, fromGY: number, toGX: number, toGY: number, crash: boolean): void {
-    const fromWX = fromGX * gridPx, fromWY = fromGY * gridPx;
-    const toWX   = toGX   * gridPx, toWY   = toGY   * gridPx;
-    const color  = crash ? 0xff4422 : 0xff33ff;
-    const alpha  = crash ? 0.80     : 0.65;
-
-    // Segment line
-    this.trailGfx.lineStyle(2, color, alpha);
-    this.trailGfx.beginPath();
-    this.trailGfx.moveTo(fromWX, fromWY);
-    this.trailGfx.lineTo(toWX, toWY);
-    this.trailGfx.strokePath();
-
-    // Joint dot at the origin (future: customizable icon/pattern)
-    this.trailGfx.fillStyle(color, Math.min(alpha + 0.15, 1));
-    this.trailGfx.fillCircle(fromWX, fromWY, 3);
+    pushTrailSeg(this.trailSegs, {
+      fromGX, fromGY, toGX, toGY,
+      color: crash ? 0xff4422 : 0xff33ff,
+      crash,
+    });
+    redrawTrailGfx(this.trailGfx, this.trailSegs);
   }
 
   private drawGrid() {
