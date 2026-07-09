@@ -11,6 +11,7 @@ import {
   type TrackPayload, type LocalDraft,
 } from '../track/TrackUpload';
 import { fetchRaceGhosts } from '../track/RaceGhosts';
+import { deserializeGhost, serializeGhost } from '../track/GhostData';
 import { generateAndUploadAiGhosts } from '../track/AiGhost';
 import { solveTrack } from '../track/GhostSolver';
 import { navigateTo } from '@devvit/web/client';
@@ -1219,6 +1220,25 @@ export class TrackSelect extends Scene {
             if (!uploadRes.ok) { await restoreOnError(uploadRes); return; }
             const json = await uploadRes.json() as { id: string; postUrl: string };
             const communityId = json.id;
+
+            // Transfer the maker's validation ghost from mine-track to community ID.
+            if (username) {
+              try {
+                const gRes = await fetch(`/api/ghost/${encodeURIComponent(serverId)}/${encodeURIComponent(username)}`);
+                if (gRes.ok) {
+                  const gJson = await gRes.json() as { ghost?: string };
+                  if (gJson.ghost) {
+                    const gData = deserializeGhost(gJson.ghost);
+                    gData.trackId = communityId;
+                    await fetch('/api/ghost', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ trackId: communityId, score: gData.score, ghost: serializeGhost(gData) }),
+                    });
+                  }
+                }
+              } catch { /* ghost transfer is best-effort — don't block publish */ }
+            }
 
             await generateAndUploadAiGhosts({ ...entry, id: communityId }, ['average', 'rookie']);
             await deleteMineTrack(serverId);
