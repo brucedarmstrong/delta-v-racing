@@ -40,6 +40,15 @@ const MAX_ZOOM = 5.0;
 // Set to 1 to disable once the animation is tuned.
 const CRASH_SLO = 0.4;
 
+type MmSnap = 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left' | 'minimized';
+
+function migrateMmSnap(v: string | null): MmSnap {
+  if (v === 'top')    return 'top-right';
+  if (v === 'bottom') return 'bottom-right';
+  const valid: MmSnap[] = ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'minimized'];
+  return valid.includes(v as MmSnap) ? (v as MmSnap) : 'top-right';
+}
+
 // Trail culling: keep at most TRAIL_FADE_START + TRAIL_FADE_LEN segments.
 // Segments older than TRAIL_FADE_START steps fade linearly to zero over TRAIL_FADE_LEN steps.
 const TRAIL_FADE_START = 100;
@@ -141,9 +150,8 @@ export class Game extends Scene {
   private pauseBtnEl: HTMLElement | null = null;
 
   // Minimap state — persisted across sessions
-  private mmSnap:       'top' | 'bottom' | 'minimized' =
-    (localStorage.getItem('dv-mm-snap') as 'top' | 'bottom' | 'minimized') ?? 'top';
-  private mmLastVisible: 'top' | 'bottom' = 'top';
+  private mmSnap:        MmSnap = migrateMmSnap(localStorage.getItem('dv-mm-snap'));
+  private mmLastVisible: MmSnap = 'top-right';
   private mmContainer:   HTMLElement | null = null;
   private mmRestoreBtn:  HTMLElement | null = null;
 
@@ -437,11 +445,11 @@ export class Game extends Scene {
     this.mmH = Math.round(this.mmWH * scaleToFit);
 
     // ── Container (positions the minimap; canvas + controls live inside) ────────
-    this.mmLastVisible = this.mmSnap === 'minimized' ? 'top' : this.mmSnap;
+    this.mmLastVisible = this.mmSnap === 'minimized' ? 'top-right' : this.mmSnap;
 
     const container = document.createElement('div');
     container.style.cssText = [
-      'position:fixed', 'right:8px', 'z-index:1000',
+      'position:fixed', 'z-index:1000',
       'border:1px solid rgba(102,102,170,0.8)', 'border-radius:4px',
       'overflow:hidden', 'touch-action:none',
     ].join(';');
@@ -509,7 +517,7 @@ export class Game extends Scene {
       'display:none', 'align-items:center', 'justify-content:center', 'flex-shrink:0',
     ].join(';');
     restoreBtn.addEventListener('click', () => {
-      this.mmSnap = this.mmLastVisible;
+      this.mmSnap = this.mmLastVisible as MmSnap;
       localStorage.setItem('dv-mm-snap', this.mmSnap);
       this.applyMmSnap(container, restoreBtn);
       showStrip();
@@ -531,16 +539,23 @@ export class Game extends Scene {
         'padding:6px 4px', 'display:flex', 'flex-direction:column', 'gap:2px',
       ].join(';');
       const rect = container.getBoundingClientRect();
-      dlg.style.right = `${window.innerWidth - rect.right}px`;
-      if (this.mmSnap === 'bottom') {
+      const snapOnLeft = this.mmSnap.endsWith('-left');
+      if (snapOnLeft) {
+        dlg.style.left  = `${rect.left}px`;
+      } else {
+        dlg.style.right = `${window.innerWidth - rect.right}px`;
+      }
+      if (this.mmSnap.startsWith('bottom')) {
         dlg.style.bottom = `${window.innerHeight - rect.top + 4}px`;
       } else {
         dlg.style.top = `${rect.bottom + 4}px`;
       }
-      const options: Array<{ label: string; value: 'top' | 'bottom' | 'minimized' }> = [
-        { label: 'Top',       value: 'top'       },
-        { label: 'Bottom',    value: 'bottom'    },
-        { label: 'Minimized', value: 'minimized' },
+      const options: Array<{ label: string; value: MmSnap }> = [
+        { label: '↖ Top Left',     value: 'top-left'     },
+        { label: '↗ Top Right',    value: 'top-right'    },
+        { label: '↙ Bottom Left',  value: 'bottom-left'  },
+        { label: '↘ Bottom Right', value: 'bottom-right' },
+        { label: '   Minimized',   value: 'minimized'    },
       ];
       for (const opt of options) {
         const row = document.createElement('button');
@@ -576,19 +591,25 @@ export class Game extends Scene {
     // ── Drag-to-snap on canvas ────────────────────────────────────────────────
     // (strip buttons stop propagation so they never start a drag)
     ctrlStrip.addEventListener('pointerdown', (e) => e.stopPropagation());
-    let dragging = false, dragOffY = 0, hasMoved = false;
+    let dragging = false, dragOffX = 0, dragOffY = 0, hasMoved = false;
     canvas.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
       dragging = true; hasMoved = false;
-      dragOffY = e.clientY - container.getBoundingClientRect().top;
+      const r  = container.getBoundingClientRect();
+      dragOffX = e.clientX - r.left;
+      dragOffY = e.clientY - r.top;
       container.style.cursor = 'grabbing';
     });
     canvas.addEventListener('pointermove', (e) => {
       if (!dragging) return;
       e.preventDefault();
-      const newTop = e.clientY - dragOffY;
-      if (Math.abs(newTop - container.getBoundingClientRect().top) > 5) hasMoved = true;
+      const newLeft = e.clientX - dragOffX;
+      const newTop  = e.clientY - dragOffY;
+      const r = container.getBoundingClientRect();
+      if (Math.abs(newLeft - r.left) > 5 || Math.abs(newTop - r.top) > 5) hasMoved = true;
+      container.style.left   = `${newLeft}px`;
+      container.style.right  = 'auto';
       container.style.top    = `${newTop}px`;
       container.style.bottom = 'auto';
     });
@@ -597,8 +618,12 @@ export class Game extends Scene {
       dragging = false;
       container.style.cursor = '';
       if (!hasMoved) return;
+      const r    = container.getBoundingClientRect();
+      const midX = window.innerWidth  / 2;
       const midY = window.innerHeight / 2;
-      this.mmSnap = (container.getBoundingClientRect().top + this.mmH / 2) < midY ? 'top' : 'bottom';
+      const vert  = (r.top  + this.mmH / 2) < midY ? 'top'   : 'bottom';
+      const horiz = (r.left + this.mmW / 2) < midX ? 'left'  : 'right';
+      this.mmSnap = `${vert}-${horiz}` as MmSnap;
       localStorage.setItem('dv-mm-snap', this.mmSnap);
       this.applyMmSnap(container, restoreBtn);
       showStrip();
@@ -1776,9 +1801,8 @@ export class Game extends Scene {
     const view = cam.worldView;
     const done = () => { this.picking = true; this.drawUI(); this.updateHud(); };
 
-    // Minimap sits at top-right (8px gap, 1px border each side).
-    // Reserve right column only when minimap is at the top (overlaps the picker area).
-    const mmPxW     = (this.minimapCanvas && this.mmSnap === 'top') ? this.mmW + 18 : 0;
+    // Reserve a column when the minimap is in the top-right (overlaps the picker area).
+    const mmPxW     = (this.minimapCanvas && this.mmSnap === 'top-right') ? this.mmW + 18 : 0;
     const mmInset   = mmPxW / cam.zoom;                        // world-space equivalent
     const safeRight = view.right - mmInset;
 
@@ -2167,13 +2191,12 @@ export class Game extends Scene {
     } else {
       container.style.display = 'block';
       if (rb) { rb.style.display = 'none'; }
-      if (this.mmSnap === 'bottom') {
-        container.style.top    = 'auto';
-        container.style.bottom = '8px';
-      } else {
-        container.style.top    = '48px';
-        container.style.bottom = 'auto';
-      }
+      const onBottom = this.mmSnap.startsWith('bottom');
+      const onLeft   = this.mmSnap.endsWith('-left');
+      container.style.top    = onBottom ? 'auto' : '48px';
+      container.style.bottom = onBottom ? '8px'  : 'auto';
+      container.style.left   = onLeft   ? '8px'  : 'auto';
+      container.style.right  = onLeft   ? 'auto' : '8px';
       this.mmLastVisible = this.mmSnap;
     }
   }
