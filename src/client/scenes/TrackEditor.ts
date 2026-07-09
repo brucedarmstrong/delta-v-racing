@@ -392,6 +392,7 @@ export class TrackEditor extends Scene {
     this.clipboard     = null;
     this.startCarImg   = null;
     this.barrierExclude = null;
+    this.selCanvasTex  = null; // null on scene restart so stale texture isn't reused
 
     this.curStartX = data?.track?.startX      ?? DEFAULT_START_X;
     this.curStartY = data?.track?.startY      ?? DEFAULT_START_Y;
@@ -558,7 +559,6 @@ export class TrackEditor extends Scene {
   private updateSelectedHighlight(): void {
     this.selectedPieceImg?.destroy();
     this.selectedPieceImg = null;
-    this.selCanvasTex = null;
 
     if (this.selection?.kind !== 'piece') return;
     const p = this.pieces[this.selection.idx];
@@ -569,8 +569,14 @@ export class TrackEditor extends Scene {
     const w   = Math.max(4, Math.ceil(b.width  + pad * 2));
     const h   = Math.max(4, Math.ceil(b.height + pad * 2));
     const key = '_ed_sel_hl';
-    if (this.textures.exists(key)) this.textures.remove(key);
-    this.selCanvasTex = this.textures.createCanvas(key, w, h)!;
+
+    // Reuse the existing canvas texture when it's already the right size.
+    // Remove/recreate only when dimensions change — the remove+recreate cycle
+    // can cause Phaser to lose the WebGL texture binding on the new canvas.
+    if (!this.selCanvasTex || this.selCanvasTex.width !== w || this.selCanvasTex.height !== h) {
+      if (this.textures.exists(key)) this.textures.remove(key);
+      this.selCanvasTex = this.textures.createCanvas(key, w, h)!;
+    }
 
     this.selectedPieceImg = this.add.image(b.x - pad, b.y - pad, key)
       .setOrigin(0, 0)
@@ -1078,7 +1084,7 @@ export class TrackEditor extends Scene {
     this.connGfx.clear();
     this.selectedPieceImg?.destroy();
     this.selectedPieceImg = null;
-    this.selCanvasTex = null;
+    // selCanvasTex is intentionally kept alive so the next selection can reuse it.
     this.rebuildCtrlRow();
   }
 
