@@ -1288,15 +1288,19 @@ export class Game extends Scene {
 
     if (isLoggedIn) {
       if (this.mineTrackId) {
-        // Draft proof-of-solvability run — verify but don't record on leaderboard.
         const id = this.mineTrackId;
         if (id.startsWith('local-')) {
+          // Local draft: mark verified locally, no server track to upload ghost to yet.
           markLocalDraftVerified(id);
           if (statusEl) statusEl.textContent = 'Track verified ✓';
         } else {
-          verifyMineTrack(id)
-            .then(() => { if (statusEl) statusEl.textContent = 'Track verified ✓'; })
-            .catch(() => { if (statusEl) statusEl.textContent = 'Verify failed'; });
+          // Published track test run: verify solvability (fire-and-forget) and
+          // upload the maker's run as a ghost so others can race against them.
+          verifyMineTrack(id).catch(() => console.warn('[verify mine track]', id));
+          if (this.currentGhost) {
+            this.currentGhost = { ...this.currentGhost, trackId: id };
+          }
+          this.uploadGhost(statusEl);
         }
       } else {
         this.uploadGhost(statusEl);
