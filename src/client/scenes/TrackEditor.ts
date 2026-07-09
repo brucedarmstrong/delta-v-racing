@@ -1450,7 +1450,7 @@ export class TrackEditor extends Scene {
     if (this.palTab === 'tight') {
       const row = this.mkRow(); row.style.gap = '3px';
       for (const ang of CORNER_ANGLES) {
-        const b = mkCanvasBtn((c, g) => drawCornerIcon(c, 'corner', ang, this.palFlip, this.palWalls, g), `${ang}°`, this.palAngle === ang);
+        const b = mkCanvasBtn((c, g) => drawCornerIcon(c, 'corner', ang, this.palFlip, this.palWalls, g), `${ang}°`, false);
         b.addEventListener('click', () => {
           this.palAngle = ang;
           this.addPieceFromPalette({ type:'corner', angle:ang, walls:this.palWalls, flip:this.palFlip });
@@ -1464,7 +1464,7 @@ export class TrackEditor extends Scene {
     if (this.palTab === 'big') {
       const row = this.mkRow(); row.style.gap = '3px';
       for (const ang of CORNER_ANGLES) {
-        const b = mkCanvasBtn((c, g) => drawCornerIcon(c, 'big_corner', ang, this.palFlip, this.palWalls, g), `${ang}°`, this.palAngle === ang);
+        const b = mkCanvasBtn((c, g) => drawCornerIcon(c, 'big_corner', ang, this.palFlip, this.palWalls, g), `${ang}°`, false);
         b.addEventListener('click', () => {
           this.palAngle = ang;
           this.addPieceFromPalette({ type:'big_corner', angle:ang, walls:this.palWalls, flip:this.palFlip });
