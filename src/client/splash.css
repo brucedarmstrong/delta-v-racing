@@ -109,6 +109,25 @@
   min-height: 1.4em;
 }
 
+.attract-thumb {
+  border: 1px solid #33335a;
+  border-radius: 6px;
+  background: #0a0a16;
+  max-width: 100%;
+  display: block;
+}
+
+@keyframes playPulse {
+  0%, 100% {
+    box-shadow: 0 0 12px #334488;
+    border-color: #5566cc;
+  }
+  50% {
+    box-shadow: 0 0 28px #5566ccaa, 0 0 48px #3344aa33;
+    border-color: #99aaff;
+  }
+}
+
 .play-btn {
   margin-top: 6px;
   background: #1a1a44;
@@ -123,6 +142,7 @@
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
   box-shadow: 0 0 12px #334488;
+  animation: playPulse 2.4s ease-in-out infinite;
 }
 
 .play-btn:hover,
@@ -131,10 +151,12 @@
   border-color: #8899ff;
   box-shadow: 0 0 20px #5566cc88;
   outline: none;
+  animation-play-state: paused;
 }
 
 .play-btn:active {
   background: #0f1030;
+  animation-play-state: paused;
 }
 
 .track-info {

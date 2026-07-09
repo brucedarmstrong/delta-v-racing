@@ -2,6 +2,8 @@ import { requestExpandedMode } from '@devvit/web/client';
 import { username, appVersion, postData } from './devvitContext';
 import { drawBarriersOnCanvas, drawMarkersOnCanvas } from './track/TrackBarrierCanvas';
 import { trackBounds } from './track/TrackLayout';
+import { convertGmsTrack, convertGmsMarkers, type GmsTrack } from './track/convertGmsTrack';
+import ovalSmallJson from './tracks/gms/Oval_Small.json';
 import type { CommunityTrackResponse } from '../shared/api';
 import type { TrackPayload } from './track/TrackUpload';
 
@@ -13,6 +15,7 @@ const createBtn     = document.getElementById('create-btn')        as HTMLButton
 const buildStampEl  = document.getElementById('build-stamp')       as HTMLDivElement;
 const trackInfoEl   = document.getElementById('track-info')        as HTMLDivElement;
 const trackThumb    = document.getElementById('track-thumb')       as HTMLCanvasElement;
+const attractThumb  = document.getElementById('attract-thumb')     as HTMLCanvasElement;
 const trackNameEl   = document.getElementById('track-info-name')   as HTMLDivElement;
 const trackAuthorEl = document.getElementById('track-info-author') as HTMLDivElement;
 
@@ -211,6 +214,9 @@ function startGhostAnimation(p: ThumbParams, trackId: string): void {
 // ── Track post ────────────────────────────────────────────────────────────────
 
 if (postData?.trackId) {
+  // Community-post view: hide attract thumb, show track info card instead.
+  attractThumb.style.display = 'none';
+
   const trackId = postData.trackId;
   trackInfoEl.style.display = 'flex';
   trackNameEl.textContent   = postData.trackName ?? '';
@@ -243,6 +249,32 @@ if (postData?.trackId) {
       startGhostAnimation(p, trackId);
     })
     .catch(() => { /* thumbnail stays blank */ });
+}
+
+// ── Attract-mode thumbnail (Oval Small, always shown unless a community post overrides) ──
+
+if (!postData?.trackId) {
+  const pieces  = convertGmsTrack(ovalSmallJson as unknown as GmsTrack);
+  const markers = convertGmsMarkers(ovalSmallJson as unknown as GmsTrack);
+  const b       = trackBounds(pieces);
+  const pad     = 14;
+  const scaleX  = (attractThumb.width  - pad * 2) / b.width;
+  const scaleY  = (attractThumb.height - pad * 2) / b.height;
+  const scale   = Math.min(scaleX, scaleY);
+  const ctx     = attractThumb.getContext('2d')!;
+  const offX    = (attractThumb.width  - b.width  * scale) / 2;
+  const offY    = (attractThumb.height - b.height * scale) / 2;
+
+  const p: ThumbParams = {
+    canvas: attractThumb, ctx,
+    pieces, markers,
+    startX: 1080, startY: 504, startH: 90,
+    originX: b.x, originY: b.y,
+    scale, offX, offY,
+  };
+
+  drawStaticThumb(p);
+  startGhostAnimation(p, 'oval_small');
 }
 
 // ── Navigation buttons ────────────────────────────────────────────────────────
