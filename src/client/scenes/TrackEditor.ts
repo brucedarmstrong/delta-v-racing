@@ -392,7 +392,9 @@ export class TrackEditor extends Scene {
     this.clipboard     = null;
     this.startCarImg   = null;
     this.barrierExclude = null;
-    this.selCanvasTex  = null; // null on scene restart so stale texture isn't reused
+    // Null both on scene restart — they'll be in a destroyed state already
+    this.selCanvasTex     = null;
+    this.selectedPieceImg = null;
 
     this.curStartX = data?.track?.startX      ?? DEFAULT_START_X;
     this.curStartY = data?.track?.startY      ?? DEFAULT_START_Y;
@@ -553,16 +555,17 @@ export class TrackEditor extends Scene {
     this.barrierImg = buildTrackTexture(this, drawPieces, NEON_GREEN, '_ed_barriers').setDepth(3);
   }
 
-  // Marching-ants selection outline for the selected piece (both straights and corners).
-  // Allocates a canvas texture sized to the piece bounds, then redraws each frame
-  // in update() via redrawSelectionDashes().  Hidden during move-drag; restored on drop.
+  // Marching-ants selection outline.  One canvas texture + one Image are kept alive
+  // for the life of the scene.  Only the canvas content and Image position change.
+  // Destroying and re-creating the Image each time causes Phaser's WebGL backend
+  // to silently lose the texture binding after the first remove/recreate cycle.
   private updateSelectedHighlight(): void {
-    this.selectedPieceImg?.destroy();
-    this.selectedPieceImg = null;
-
-    if (this.selection?.kind !== 'piece') return;
+    if (this.selection?.kind !== 'piece') {
+      this.selectedPieceImg?.setVisible(false);
+      return;
+    }
     const p = this.pieces[this.selection.idx];
-    if (!p) return;
+    if (!p) { this.selectedPieceImg?.setVisible(false); return; }
 
     const b   = trackBounds([p]);
     const pad = 14;
@@ -570,18 +573,19 @@ export class TrackEditor extends Scene {
     const h   = Math.max(4, Math.ceil(b.height + pad * 2));
     const key = '_ed_sel_hl';
 
-    // Reuse the existing canvas texture when it's already the right size.
-    // Remove/recreate only when dimensions change — the remove+recreate cycle
-    // can cause Phaser to lose the WebGL texture binding on the new canvas.
+    // Only remove/recreate when the canvas size must change (different piece family).
+    // When reusing, keep the same Image object — just reposition and show it.
     if (!this.selCanvasTex || this.selCanvasTex.width !== w || this.selCanvasTex.height !== h) {
       if (this.textures.exists(key)) this.textures.remove(key);
       this.selCanvasTex = this.textures.createCanvas(key, w, h)!;
+      this.selectedPieceImg?.destroy();
+      this.selectedPieceImg = this.add.image(0, 0, key).setOrigin(0, 0).setDepth(3.5);
+    } else if (!this.selectedPieceImg) {
+      this.selectedPieceImg = this.add.image(0, 0, key).setOrigin(0, 0).setDepth(3.5);
     }
 
-    this.selectedPieceImg = this.add.image(b.x - pad, b.y - pad, key)
-      .setOrigin(0, 0)
-      .setDepth(3.5); // above barrier canvas (3), below markers (4)
-
+    this.selectedPieceImg.setPosition(b.x - pad, b.y - pad);
+    this.selectedPieceImg.setVisible(true);
     this.redrawSelectionDashes();
   }
 
@@ -1082,9 +1086,7 @@ export class TrackEditor extends Scene {
     this.selection = null;
     this.selectionGfx.clear();
     this.connGfx.clear();
-    this.selectedPieceImg?.destroy();
-    this.selectedPieceImg = null;
-    // selCanvasTex is intentionally kept alive so the next selection can reuse it.
+    this.selectedPieceImg?.setVisible(false); // hide but keep alive for reuse
     this.rebuildCtrlRow();
   }
 
