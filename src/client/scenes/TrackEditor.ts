@@ -622,7 +622,7 @@ export class TrackEditor extends Scene {
     // Cyan dashes on top
     ctx.setLineDash([10, 8]);
     ctx.lineDashOffset = -this.selDashOffset;
-    ctx.strokeStyle = '#00ddff';
+    ctx.strokeStyle = '#ff0000';
     ctx.beginPath(); addPiecePaths(ctx, p); ctx.stroke();
 
     // Leave the context in a clean identity state
