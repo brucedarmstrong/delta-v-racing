@@ -622,7 +622,7 @@ export class TrackEditor extends Scene {
     // Cyan dashes on top
     ctx.setLineDash([10, 8]);
     ctx.lineDashOffset = -this.selDashOffset;
-    ctx.strokeStyle = '#ff0000';
+    ctx.strokeStyle = '#00ddff';
     ctx.beginPath(); addPiecePaths(ctx, p); ctx.stroke();
 
     // Leave the context in a clean identity state
@@ -1056,15 +1056,17 @@ export class TrackEditor extends Scene {
       return;
     }
 
-    // Commit drag: rebuild barrier with all pieces, refresh highlight + props
-    if (this.dragOp?.kind === 'move' || this.dragOp?.kind === 'rotate') {
+    // Commit drag: rebuild barrier with all pieces, refresh highlight + props.
+    // dragOp is nulled BEFORE drawSelectionOverlay so it doesn't draw drag-preview
+    // lines (cyan straight/arc outlines) that should only appear while dragging.
+    const endedDrag = this.dragOp?.kind === 'move' || this.dragOp?.kind === 'rotate';
+    this.dragOp = null;
+    if (endedDrag) {
       this.updateBarrierImg();
       this.updateSelectedHighlight();
       this.drawSelectionOverlay();
       this.rebuildCtrlRow();
     }
-
-    this.dragOp = null;
   }
 
   // ── Selection management ──────────────────────────────────────────────────────
