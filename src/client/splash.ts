@@ -17,6 +17,7 @@ const sCtx        = starsCanvas.getContext('2d')!;
 let   starDots:   StarDot[]   = [];
 let   shootStars: ShootStar[] = [];
 let   shootCooldown = 4000 + Math.random() * 4000; // ms until first shooting star
+const SHOOT_ANGLE   = Math.random() * Math.PI * 2; // fixed direction for this session
 
 function initStarField(): void {
   starsCanvas.width  = window.innerWidth;
@@ -42,11 +43,12 @@ function initStarField(): void {
 
 function spawnShootingStar(): void {
   const w = starsCanvas.width, h = starsCanvas.height;
-  const angle = Math.random() * Math.PI * 2;
+  // Small per-star jitter so they fan slightly, like a real meteor shower radiant.
+  const angle = SHOOT_ANGLE + (Math.random() - 0.5) * 0.35;
   const speed = 420 + Math.random() * 320;
   const vx = Math.cos(angle) * speed;
   const vy = Math.sin(angle) * speed;
-  // Start just off the edge that the star is moving away from
+  // Entry point: random position along the edge the star enters from.
   let x: number, y: number;
   if (Math.abs(vx) >= Math.abs(vy)) {
     x = vx > 0 ? -10 : w + 10;
