@@ -7,6 +7,125 @@ import ovalSmallJson from './tracks/gms/Oval_Small.json';
 import type { CommunityTrackResponse } from '../shared/api';
 import type { TrackPayload } from './track/TrackUpload';
 
+// ── Star field ────────────────────────────────────────────────────────────────
+
+type StarDot   = { x: number; y: number; r: number; baseA: number; twinkleAmt: number; phase: number; freq: number; color: string };
+type ShootStar = { x: number; y: number; vx: number; vy: number; alpha: number; trailLen: number };
+
+const starsCanvas = document.getElementById('stars-canvas') as HTMLCanvasElement;
+const sCtx        = starsCanvas.getContext('2d')!;
+let   starDots:   StarDot[]   = [];
+let   shootStars: ShootStar[] = [];
+let   shootCooldown = 4000 + Math.random() * 4000; // ms until first shooting star
+
+function initStarField(): void {
+  starsCanvas.width  = window.innerWidth;
+  starsCanvas.height = window.innerHeight;
+  const w = starsCanvas.width, h = starsCanvas.height;
+  starDots = [];
+  const count = Math.round((w * h) / 7000);
+  const colors = ['255,255,255', '210,225,255', '255,245,210'];
+  for (let i = 0; i < count; i++) {
+    const r = Math.random() ** 2 * 1.6 + 0.3; // bias toward small
+    starDots.push({
+      x:          Math.random() * w,
+      y:          Math.random() * h,
+      r,
+      baseA:      Math.random() * 0.45 + 0.2,
+      twinkleAmt: r > 1.0 ? 0.25 : 0.10,
+      phase:      Math.random() * Math.PI * 2,
+      freq:       Math.random() * 1.2 + 0.4,
+      color:      colors[Math.floor(Math.random() * colors.length)],
+    });
+  }
+}
+
+function spawnShootingStar(): void {
+  const w = starsCanvas.width, h = starsCanvas.height;
+  const angle = Math.random() * Math.PI * 2;
+  const speed = 420 + Math.random() * 320;
+  const vx = Math.cos(angle) * speed;
+  const vy = Math.sin(angle) * speed;
+  // Start just off the edge that the star is moving away from
+  let x: number, y: number;
+  if (Math.abs(vx) >= Math.abs(vy)) {
+    x = vx > 0 ? -10 : w + 10;
+    y = Math.random() * h;
+  } else {
+    x = Math.random() * w;
+    y = vy > 0 ? -10 : h + 10;
+  }
+  shootStars.push({ x, y, vx, vy, alpha: 0.9 + Math.random() * 0.1, trailLen: 70 + Math.random() * 70 });
+}
+
+let lastStarT = 0;
+function tickStars(now: number): void {
+  const dt = lastStarT ? Math.min((now - lastStarT) / 1000, 0.1) : 0;
+  lastStarT = now;
+
+  shootCooldown -= dt * 1000;
+  if (shootCooldown <= 0) {
+    spawnShootingStar();
+    shootCooldown = 4000 + Math.random() * 6000;
+  }
+
+  const w = starsCanvas.width, h = starsCanvas.height;
+  sCtx.clearRect(0, 0, w, h);
+
+  // Twinkling dots
+  for (const s of starDots) {
+    s.phase += s.freq * dt;
+    const a = Math.max(0, s.baseA + s.twinkleAmt * Math.sin(s.phase));
+    sCtx.beginPath();
+    sCtx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    sCtx.fillStyle = `rgba(${s.color},${a.toFixed(3)})`;
+    sCtx.fill();
+  }
+
+  // Shooting stars
+  shootStars = shootStars.filter(ss => {
+    ss.x += ss.vx * dt;
+    ss.y += ss.vy * dt;
+    const pad = ss.trailLen + 10;
+    if (ss.x < -pad || ss.x > w + pad || ss.y < -pad || ss.y > h + pad) return false;
+
+    const spd = Math.sqrt(ss.vx * ss.vx + ss.vy * ss.vy);
+    const nx  = ss.vx / spd, ny = ss.vy / spd;
+    const tx  = ss.x - nx * ss.trailLen;
+    const ty  = ss.y - ny * ss.trailLen;
+
+    const grad = sCtx.createLinearGradient(tx, ty, ss.x, ss.y);
+    grad.addColorStop(0,    `rgba(255,255,255,0)`);
+    grad.addColorStop(0.55, `rgba(255,255,255,${(ss.alpha * 0.25).toFixed(3)})`);
+    grad.addColorStop(1,    `rgba(255,255,255,${ss.alpha.toFixed(3)})`);
+
+    sCtx.save();
+    sCtx.lineWidth   = 1.5;
+    sCtx.strokeStyle = grad;
+    sCtx.beginPath();
+    sCtx.moveTo(tx, ty);
+    sCtx.lineTo(ss.x, ss.y);
+    sCtx.stroke();
+
+    // Bright head
+    sCtx.beginPath();
+    sCtx.arc(ss.x, ss.y, 1.8, 0, Math.PI * 2);
+    sCtx.fillStyle = `rgba(255,255,255,${ss.alpha.toFixed(3)})`;
+    sCtx.fill();
+    sCtx.restore();
+
+    return true;
+  });
+
+  requestAnimationFrame(tickStars);
+}
+
+initStarField();
+window.addEventListener('resize', initStarField);
+requestAnimationFrame(tickStars);
+
+// ── DOM element references ─────────────────────────────────────────────────────
+
 const usernameEl    = document.getElementById('username')          as HTMLDivElement;
 const playBtn       = document.getElementById('play-btn')          as HTMLButtonElement;
 const communityBtn  = document.getElementById('community-btn')     as HTMLButtonElement;
