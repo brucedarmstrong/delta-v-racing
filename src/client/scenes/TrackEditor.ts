@@ -54,7 +54,7 @@ const HEADER_H  = 52;
 const PALETTE_H = 210;
 const SNAP_R    = 55;
 const MAX_UNDO  = 40;
-const MAX_PIECES = 60;
+const MAX_PIECES = 120;
 const HIT_R_MARKER = 46;
 const HANDLE_HIT_R = 22;   // hit radius for the rotate handle
 
@@ -159,6 +159,7 @@ function trySnapPiece(dragged: PlacedPiece, idx: number, all: PlacedPiece[]): Pl
     // dragged comes AFTER other: dragged.entry → other.exit
     if (Math.hypot(entryW.x - oc.exit.x, entryW.y - oc.exit.y) < SNAP_R) {
       const newRot = ((oc.exit.heading - dc.entryH) % 360 + 360) % 360;
+      if (newRot !== dragged.rotation) continue; // would require rotating — don't snap
       const [nex, ney] = rotateCW(dc.entryX, dc.entryY, newRot);
       return { ...dragged, rotation: newRot, x: oc.exit.x - nex, y: oc.exit.y - ney };
     }
@@ -166,6 +167,7 @@ function trySnapPiece(dragged: PlacedPiece, idx: number, all: PlacedPiece[]): Pl
     // dragged comes BEFORE other: dragged.exit → other.entry
     if (Math.hypot(exitW.x - oc.entry.x, exitW.y - oc.entry.y) < SNAP_R) {
       const newRot = ((oc.entry.heading - dc.exitH) % 360 + 360) % 360;
+      if (newRot !== dragged.rotation) continue; // would require rotating — don't snap
       const [nxx, nxy] = rotateCW(dc.exitX, dc.exitY, newRot);
       return { ...dragged, rotation: newRot, x: oc.entry.x - nxx, y: oc.entry.y - nxy };
     }
@@ -519,15 +521,18 @@ export class TrackEditor extends Scene {
     this.snapBtnEl = snapBtn;
     this.updateSnapBtn();
 
-    const helpBtn = document.createElement('button');
-    helpBtn.innerHTML = '<span style="font:bold 13px Arial,sans-serif;line-height:1;">?</span>';
-    helpBtn.title = 'Help';
-    helpBtn.style.cssText = [
-      'border-radius:50%', 'cursor:pointer', 'width:28px', 'height:28px',
-      'display:inline-flex', 'align-items:center', 'justify-content:center',
-      'color:#8888cc', 'background:#111128', 'border:1px solid #3a3a60', 'flex-shrink:0',
-    ].join(';');
-    helpBtn.addEventListener('click', () => this.showHelp());
+    const circleBtn = (label: string, title: string, onClick: () => void) => {
+      const b = document.createElement('button');
+      b.innerHTML = `<span style="font:bold 13px Arial,sans-serif;line-height:1;">${label}</span>`;
+      b.title = title;
+      b.style.cssText = [
+        'border-radius:50%', 'cursor:pointer', 'width:28px', 'height:28px',
+        'display:inline-flex', 'align-items:center', 'justify-content:center',
+        'color:#8888cc', 'background:#111128', 'border:1px solid #3a3a60', 'flex-shrink:0',
+      ].join(';');
+      b.addEventListener('click', onClick);
+      return b;
+    };
 
     hdr.appendChild(backBtn);
     hdr.appendChild(titleEl);
@@ -542,7 +547,8 @@ export class TrackEditor extends Scene {
     hdr.appendChild(mkBtn(ic('play'),          'Test track', '#44ffcc', '#001a12', '#226644', () => this.testTrack()));
     hdr.appendChild(mkBtn(ic('content-save'),  'Save track', '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
     hdr.appendChild(sep());
-    hdr.appendChild(helpBtn);
+    hdr.appendChild(circleBtn('i', 'Track info', () => this.showInfo()));
+    hdr.appendChild(circleBtn('?', 'Help',       () => this.showHelp()));
 
     document.body.appendChild(hdr);
     this.hdrEl = hdr;
@@ -554,6 +560,115 @@ export class TrackEditor extends Scene {
     this.snapBtnEl.style.background = this.snapEnabled ? '#001a22' : '#111128';
     this.snapBtnEl.style.color      = this.snapEnabled ? '#44ddff' : '#445566';
     this.snapBtnEl.style.border     = `1px solid ${this.snapEnabled ? '#226644' : '#2a2a44'}`;
+  }
+
+  private showInfo(): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.80);z-index:500;display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:16px;box-sizing:border-box;';
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#12122a;border:1px solid #3a3a6a;border-radius:10px;width:100%;max-width:340px;padding:16px 16px 20px;position:relative;margin:auto;';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.innerHTML = ic('close');
+    closeBtn.title = 'Close';
+    closeBtn.style.cssText = 'position:absolute;top:10px;right:10px;background:none;border:none;color:#8888aa;font-size:18px;cursor:pointer;padding:4px;line-height:1;';
+    closeBtn.addEventListener('click', () => overlay.remove());
+
+    const heading = document.createElement('div');
+    heading.textContent = 'Track Status';
+    heading.style.cssText = 'color:#aaaaff;font:bold 15px Arial,sans-serif;margin-bottom:14px;';
+
+    card.appendChild(closeBtn);
+    card.appendChild(heading);
+
+    const sectionHead = (label: string) => {
+      const h = document.createElement('div');
+      h.textContent = label;
+      h.style.cssText = 'font:bold 10px Arial,sans-serif;color:#5566aa;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a2a4a;padding-bottom:4px;margin-bottom:8px;';
+      return h;
+    };
+
+    const statRow = (label: string, value: string, accent = '#ccccff') => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;';
+      const l = document.createElement('div');
+      l.style.cssText = 'font:12px Arial,sans-serif;color:#8888aa;';
+      l.textContent = label;
+      const v = document.createElement('div');
+      v.style.cssText = `font:bold 12px Arial,sans-serif;color:${accent};`;
+      v.textContent = value;
+      row.appendChild(l);
+      row.appendChild(v);
+      return row;
+    };
+
+    // ── Name ──────────────────────────────────────────────────────────────────
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = 'margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid #2a2a4a;';
+    const nameLbl = document.createElement('div');
+    nameLbl.style.cssText = 'font:10px Arial,sans-serif;color:#5566aa;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;';
+    nameLbl.textContent = 'Track';
+    const nameVal = document.createElement('div');
+    nameVal.style.cssText = 'font:bold 13px Arial,sans-serif;color:#ccccff;';
+    nameVal.textContent = this.existingName || 'Untitled';
+    nameEl.appendChild(nameLbl);
+    nameEl.appendChild(nameVal);
+    card.appendChild(nameEl);
+
+    // ── Pieces ────────────────────────────────────────────────────────────────
+    const total    = this.pieces.length;
+    const straights = this.pieces.filter(p => p.type === 'straight').length;
+    const tight     = this.pieces.filter(p => p.type === 'corner').length;
+    const big       = this.pieces.filter(p => p.type === 'big_corner').length;
+    const pct       = total / MAX_PIECES;
+    const barColor  = pct >= 1 ? '#ff5555' : pct >= 0.8 ? '#ffaa44' : '#44ff99';
+
+    const pieceSec = document.createElement('div');
+    pieceSec.style.marginBottom = '14px';
+    pieceSec.appendChild(sectionHead('Pieces'));
+
+    const barWrap = document.createElement('div');
+    barWrap.style.cssText = 'height:5px;background:#1a1a3a;border-radius:3px;margin-bottom:10px;overflow:hidden;';
+    const barFill = document.createElement('div');
+    barFill.style.cssText = `height:100%;width:${Math.min(100, pct * 100).toFixed(1)}%;background:${barColor};border-radius:3px;`;
+    barWrap.appendChild(barFill);
+    pieceSec.appendChild(barWrap);
+
+    pieceSec.appendChild(statRow('Total',         `${total} / ${MAX_PIECES}`, barColor));
+    pieceSec.appendChild(statRow('Straights',     String(straights)));
+    pieceSec.appendChild(statRow('Tight corners', String(tight)));
+    pieceSec.appendChild(statRow('Big corners',   String(big)));
+    card.appendChild(pieceSec);
+
+    // ── Markers ───────────────────────────────────────────────────────────────
+    const markerSec = document.createElement('div');
+    markerSec.style.marginBottom = '14px';
+    markerSec.appendChild(sectionHead('Markers'));
+    markerSec.appendChild(statRow(
+      'Finish line',
+      this.finishMarker ? '✓ Placed' : '✗ Not placed',
+      this.finishMarker ? '#66ff99' : '#ff6666',
+    ));
+    markerSec.appendChild(statRow(
+      'Checkpoints',
+      this.checkpoints.length === 0 ? 'None' : String(this.checkpoints.length),
+    ));
+    card.appendChild(markerSec);
+
+    // ── Session ───────────────────────────────────────────────────────────────
+    const sessionSec = document.createElement('div');
+    sessionSec.appendChild(sectionHead('Session'));
+    sessionSec.appendChild(statRow(
+      'Unsaved changes',
+      this.isDirty ? 'Yes' : 'None',
+      this.isDirty ? '#ffaa44' : '#8888aa',
+    ));
+    card.appendChild(sessionSec);
+
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
   }
 
   private showHelp(): void {

@@ -25,6 +25,7 @@ const GHOST_COLORS = [
 type GhostState = {
   data:      GhostData;
   carImg:    GameObjects.Image;
+  glowImg:   GameObjects.Arc;
   trailGfx:  GameObjects.Graphics;
   trailSegs: TrailSeg[];
   gx:        number;
@@ -51,7 +52,8 @@ function migrateMmSnap(v: string | null): MmSnap {
 }
 
 // Trail culling: keep at most TRAIL_FADE_START + TRAIL_FADE_LEN segments.
-// Segments older than TRAIL_FADE_START steps fade linearly to zero over TRAIL_FADE_LEN steps.
+// Newest TRAIL_FADE_IN_LEN segments ramp in; oldest fade out over TRAIL_FADE_LEN steps.
+const TRAIL_FADE_IN    =   4;
 const TRAIL_FADE_START = 100;
 const TRAIL_FADE_LEN   =  20;
 const TRAIL_MAX        = TRAIL_FADE_START + TRAIL_FADE_LEN;
@@ -64,8 +66,9 @@ type TrailSeg = {
 };
 
 function trailFade(age: number): number {
-  if (age < TRAIL_FADE_START) return 1;
-  return Math.max(0, 1 - (age - TRAIL_FADE_START) / TRAIL_FADE_LEN);
+  const fadeIn = Math.min(1, (age + 1) / TRAIL_FADE_IN);
+  if (age < TRAIL_FADE_START) return fadeIn;
+  return fadeIn * Math.max(0, 1 - (age - TRAIL_FADE_START) / TRAIL_FADE_LEN);
 }
 
 function pushTrailSeg(segs: TrailSeg[], seg: TrailSeg): void {
@@ -786,6 +789,9 @@ export class Game extends Scene {
     this.ghostMoves.push({ gx: newGX, gy: newGY, crash: false });
     this.drawTrailSegment(this.gx, this.gy, newGX, newGY, false);
 
+    // Commit ripple — pulse from the destination dot.
+    this.spawnCommitRipple(newGX * gridPx, newGY * gridPx);
+
     const newVX      = this.velX + dvx;
     const newVY      = this.velY + dvy;
     const headingDeg = Math.atan2(newVX, -newVY) * (180 / Math.PI);
@@ -1502,10 +1508,17 @@ export class Game extends Scene {
         `ghost-car-${i}`,
       ).setAngle(90).setDepth(9).setAlpha(0.55);
 
+      // Soft glow halo behind the ghost car — tweened alongside carImg.
+      const glowImg = this.add.arc(
+        ghost.startGX * gridPx,
+        ghost.startGY * gridPx,
+        gridPx * 0.95,
+      ).setFillStyle(tint, 0.18).setDepth(8);
+
       const trailGfx = this.add.graphics().setDepth(2);
 
       const state: GhostState = {
-        data: ghost, carImg, trailGfx, trailSegs: [],
+        data: ghost, carImg, glowImg, trailGfx, trailSegs: [],
         gx: ghost.startGX, gy: ghost.startGY,
         moveIdx: 0, tint, trailTint: trail,
       };
@@ -1524,6 +1537,7 @@ export class Game extends Scene {
   private stepGhostState(state: GhostState, silent: boolean): void {
     if (state.moveIdx >= state.data.moves.length) {
       state.carImg.setVisible(false);
+      state.glowImg.setVisible(false);
       return;
     }
 
@@ -1551,7 +1565,7 @@ export class Game extends Scene {
 
       if (!silent) {
         this.tweens.add({
-          targets:  state.carImg,
+          targets:  [state.carImg, state.glowImg],
           x:        state.gx * gridPx,
           y:        state.gy * gridPx,
           duration: 180,
@@ -1562,6 +1576,7 @@ export class Game extends Scene {
         });
       } else {
         state.carImg.setPosition(state.gx * gridPx, state.gy * gridPx);
+        state.glowImg.setPosition(state.gx * gridPx, state.gy * gridPx);
       }
     } else {
       // Crash — ghost stays at current position; draw dim trail to the attempted cell.
@@ -2034,6 +2049,21 @@ export class Game extends Scene {
     el.addEventListener('transitionend', () => el.remove(), { once: true });
   }
 
+  private spawnCommitRipple(worldX: number, worldY: number): void {
+    const ring = this.add.graphics();
+    ring.lineStyle(2, 0xffffff, 0.7);
+    ring.strokeCircle(0, 0, gridPx * 0.55);
+    ring.setPosition(worldX, worldY);
+    ring.setDepth(12);
+    this.tweens.add({
+      targets: ring,
+      scaleX: 2.2, scaleY: 2.2, alpha: 0,
+      duration: 280,
+      ease: 'Quad.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+  }
+
   private spawnCheckpointRing(worldX: number, worldY: number): void {
     const ring = this.add.graphics();
     ring.lineStyle(3, 0x33ee88, 1.0);
@@ -2382,13 +2412,27 @@ export class Game extends Scene {
       this.finishOverlayEl = null;
       this.viewTrackBackBtn?.remove();
       this.viewTrackBackBtn = null;
-      for (const s of this.ghostStates) { s.carImg.destroy(); s.trailGfx.destroy(); }
+      for (const s of this.ghostStates) { s.carImg.destroy(); s.glowImg.destroy(); s.trailGfx.destroy(); }
       this.ghostStates = [];
     });
   }
 
+  private static _hudCssInjected = false;
+
   private updateHud(): void {
-    if (this.hudDiv) this.hudDiv.textContent = this.hudString();
+    if (!this.hudDiv) return;
+    this.hudDiv.textContent = this.hudString();
+    if (this.turn > 0) {
+      if (!Game._hudCssInjected) {
+        Game._hudCssInjected = true;
+        const s = document.createElement('style');
+        s.textContent = `@keyframes hudPop{0%{transform:scale(1.45);color:#ffee00}60%{transform:scale(0.92)}100%{transform:scale(1);color:inherit}}`;
+        document.head.appendChild(s);
+      }
+      this.hudDiv.style.animation = 'none';
+      void this.hudDiv.offsetWidth; // force reflow to retrigger
+      this.hudDiv.style.animation = 'hudPop 0.35s ease-out';
+    }
   }
 
   private applyMmSnap(container: HTMLElement, restoreBtn?: HTMLElement): void {
