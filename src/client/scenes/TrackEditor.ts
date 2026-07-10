@@ -344,6 +344,11 @@ export class TrackEditor extends Scene {
   private pinchDist  = 0;
   private pinchZoom  = 1;
 
+  // Toast
+  private toastEl:        HTMLDivElement | null = null;
+  private toastHideTimer: ReturnType<typeof setTimeout> | null = null;
+  private toastRemoveTimer: ReturnType<typeof setTimeout> | null = null;
+
   // Palette
   private palTab:   PalTab      = 'straight';
   private palWalls: WallVariant = 'both';
@@ -453,15 +458,51 @@ export class TrackEditor extends Scene {
       cam.setZoom(Math.min(Math.max(z * (p.deltaY > 0 ? 1 / 1.12 : 1.12), 0.12), 4));
     });
 
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      if (this.selection) { this.deselectAll(); return; }
-      this.scene.start('ModeSelect');
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (this.selection) { this.deselectAll(); return; }
+        this.scene.start('ModeSelect');
+        return;
+      }
+
+      // Don't hijack standard edit shortcuts while the user is typing
+      // somewhere (e.g. the Save Track name field).
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+
+      const mod = e.ctrlKey || e.metaKey;
+
+      if (mod && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) this.redo(); else this.undo();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        this.redo();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'c') {
+        e.preventDefault();
+        this.copySelected();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        this.paste();
+        return;
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        this.deleteSelection();
+        return;
+      }
     };
-    window.addEventListener('keydown', onEsc);
+    window.addEventListener('keydown', onKeyDown);
 
     this.events.once('shutdown', () => {
-      window.removeEventListener('keydown', onEsc);
+      window.removeEventListener('keydown', onKeyDown);
       this.hdrEl?.remove();
       this.palEl?.remove();
       this.hdrEl = null;
@@ -517,7 +558,11 @@ export class TrackEditor extends Scene {
       'display:inline-flex', 'align-items:center', 'gap:3px',
       'padding:4px 8px', `height:${HEADER_H - 16}px`, 'flex-shrink:0',
     ].join(';');
-    snapBtn.addEventListener('click', () => { this.snapEnabled = !this.snapEnabled; this.updateSnapBtn(); });
+    snapBtn.addEventListener('click', () => {
+      this.snapEnabled = !this.snapEnabled;
+      this.updateSnapBtn();
+      this.showToast(this.snapEnabled ? 'Snap On' : 'Snap Off');
+    });
     this.snapBtnEl = snapBtn;
     this.updateSnapBtn();
 
@@ -1042,6 +1087,12 @@ export class TrackEditor extends Scene {
     const wx = ptr.worldX, wy = ptr.worldY;
     const cam = this.cameras.main;
 
+    // Middle mouse button — always pans the camera, regardless of what's under
+    // the pointer, without disturbing the current selection.
+    if (ptr.button === 1) {
+      this.dragOp = { kind: 'pan', sx: ptr.x, sy: ptr.y, scrollX: cam.scrollX, scrollY: cam.scrollY };
+      return;
+    }
 
     // Rotate handle — highest priority (covers pieces AND markers)
     if (this.hitTestHandle(wx, wy)) {
@@ -1365,6 +1416,7 @@ export class TrackEditor extends Scene {
       const cp = this.checkpoints[this.selection.idx];
       if (cp) { cp.rotation = ((cp.rotation + delta) % 360 + 360) % 360; this.updateCheckpointImgs(); this.rebuildCtrlRow(); this.isDirty = true; }
     }
+    this.showToast(delta > 0 ? 'Rotated +15°' : 'Rotated −15°');
   }
 
   private changePieceWalls(walls: WallVariant): void {
@@ -1416,6 +1468,24 @@ export class TrackEditor extends Scene {
   private deleteSelectedPiece(): void {
     if (this.selection?.kind !== 'piece') return;
     this.saveUndo(); this.deletePiece(this.selection.idx);
+    this.showToast('Deleted');
+  }
+
+  // Deletes whatever is currently selected — piece, finish, or checkpoint
+  // (car start can't be deleted). Shared by the ctrl-row Delete button and
+  // the Delete/Backspace keyboard shortcut.
+  private deleteSelection(): void {
+    const sel = this.selection;
+    if (!sel) return;
+    if (sel.kind === 'piece') {
+      this.deleteSelectedPiece();
+    } else if (sel.kind === 'finish') {
+      this.saveUndo(); this.finishMarker = null; this.updateFinishImg(); this.deselectAll(); this.isDirty = true;
+      this.showToast('Deleted');
+    } else if (sel.kind === 'checkpoint') {
+      this.saveUndo(); this.checkpoints.splice(sel.idx, 1); this.updateCheckpointImgs(); this.deselectAll(); this.isDirty = true;
+      this.showToast('Deleted');
+    }
   }
 
   private copySelected(): void {
@@ -1439,6 +1509,7 @@ export class TrackEditor extends Scene {
     this.selectPiece(this.pieces.length - 1);
     this.scrollToShowPiece(this.pieces.length - 1);
     this.isDirty = true;
+    this.showToast('Pasted');
   }
 
   // ── Undo / redo ───────────────────────────────────────────────────────────────
@@ -1476,11 +1547,13 @@ export class TrackEditor extends Scene {
     if (!s) { this.showToast('Nothing to undo'); return; }
     this.redoStack.push(this.snapshot());
     this.restoreSnapshot(s);
+    this.showToast('Undo');
   }
 
   private redo(): void {
     const s = this.redoStack.pop();
     if (!s) { this.showToast('Nothing to redo'); return; }
+    this.showToast('Redo');
     this.undoStack.push(this.snapshot());
     this.restoreSnapshot(s);
   }
@@ -1800,6 +1873,7 @@ export class TrackEditor extends Scene {
         const next = cycle[(cycle.indexOf(curWalls) + 1) % cycle.length];
         if (selPiece) this.changePieceWalls(next);
         else { this.palWalls = next; this.rebuildContent(); }
+        this.showToast(`Walls: ${wallNames[next]}`);
       });
       el.appendChild(togBtn);
     }
@@ -1824,6 +1898,7 @@ export class TrackEditor extends Scene {
         () => {
           if (isCornerSel) this.changePieceFlip(!curFlip);
           else { this.palFlip = !curFlip; this.rebuildContent(); }
+          this.showToast('Flipped');
         }));
     }
 
@@ -1855,16 +1930,7 @@ export class TrackEditor extends Scene {
 
     // Delete — pieces + finish + checkpoint (not car start)
     if (showDelete) {
-      let delFn: () => void;
-      if (selPiece) {
-        delFn = () => this.deleteSelectedPiece();
-      } else if (sel!.kind === 'finish') {
-        delFn = () => { this.saveUndo(); this.finishMarker = null; this.updateFinishImg(); this.deselectAll(); this.isDirty = true; };
-      } else {
-        const cidx = (sel as { kind: 'checkpoint'; idx: number }).idx;
-        delFn = () => { this.saveUndo(); this.checkpoints.splice(cidx, 1); this.updateCheckpointImgs(); this.deselectAll(); this.isDirty = true; };
-      }
-      el.appendChild(mkB(ic('delete'), 'Delete', '#ff8888', '#1a0808', '#663333', delFn));
+      el.appendChild(mkB(ic('delete'), 'Delete', '#ff8888', '#1a0808', '#663333', () => this.deleteSelection()));
     }
   }
 
@@ -2055,6 +2121,12 @@ export class TrackEditor extends Scene {
   }
 
   private showToast(msg: string): void {
+    // Replace any toast already in flight so rapid button presses (e.g. holding
+    // rotate) refresh a single line instead of piling up overlapping toasts.
+    if (this.toastHideTimer)   clearTimeout(this.toastHideTimer);
+    if (this.toastRemoveTimer) clearTimeout(this.toastRemoveTimer);
+    this.toastEl?.remove();
+
     const t = document.createElement('div');
     t.textContent = msg;
     t.style.cssText = [
@@ -2066,15 +2138,19 @@ export class TrackEditor extends Scene {
       'z-index:400', 'pointer-events:none', 'white-space:nowrap',
     ].join(';');
     document.body.appendChild(t);
+    this.toastEl = t;
     requestAnimationFrame(() => requestAnimationFrame(() => {
       t.style.opacity   = '1';
       t.style.transform = 'translateX(-50%) translateY(0)';
     }));
-    setTimeout(() => {
+    this.toastHideTimer = setTimeout(() => {
       t.style.opacity   = '0';
       t.style.transform = 'translateX(-50%) translateY(-8px)';
     }, 2220);
-    setTimeout(() => t.remove(), 2500);
+    this.toastRemoveTimer = setTimeout(() => {
+      t.remove();
+      if (this.toastEl === t) this.toastEl = null;
+    }, 2500);
   }
 
   override update(_time: number, delta: number): void {
