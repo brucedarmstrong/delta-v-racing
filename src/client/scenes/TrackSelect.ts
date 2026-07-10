@@ -795,7 +795,9 @@ export class TrackSelect extends Scene {
     t.textContent = msg;
     t.style.cssText = [
       'position:fixed', 'bottom:28px', 'left:50%',
-      'transform:translateX(-50%)',
+      'transform:translateX(-50%) translateY(16px)',
+      'opacity:0',
+      'transition:opacity 0.22s ease, transform 0.22s ease',
       'background:rgba(20,20,48,0.96)',
       'color:#e8e8ff',
       'padding:10px 20px',
@@ -811,6 +813,14 @@ export class TrackSelect extends Scene {
       'box-shadow:0 2px 16px rgba(0,0,0,0.6)',
     ].join(';');
     document.body.appendChild(t);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      t.style.opacity   = '1';
+      t.style.transform = 'translateX(-50%) translateY(0)';
+    }));
+    setTimeout(() => {
+      t.style.opacity   = '0';
+      t.style.transform = 'translateX(-50%) translateY(-8px)';
+    }, duration - 280);
     setTimeout(() => t.remove(), duration);
   }
 

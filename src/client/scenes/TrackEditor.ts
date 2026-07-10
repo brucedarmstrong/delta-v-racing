@@ -1944,11 +1944,21 @@ export class TrackEditor extends Scene {
     t.textContent = msg;
     t.style.cssText = [
       'position:fixed', `bottom:${this.paletteH() + 10}px`, 'left:50%',
-      'transform:translateX(-50%)', 'background:#2a2a50', 'border:1px solid #5555aa',
+      'transform:translateX(-50%) translateY(12px)', 'opacity:0',
+      'transition:opacity 0.2s ease, transform 0.2s ease',
+      'background:#2a2a50', 'border:1px solid #5555aa',
       'border-radius:6px', 'padding:8px 16px', 'color:#ccccff', 'font:13px Arial,sans-serif',
       'z-index:400', 'pointer-events:none', 'white-space:nowrap',
     ].join(';');
     document.body.appendChild(t);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      t.style.opacity   = '1';
+      t.style.transform = 'translateX(-50%) translateY(0)';
+    }));
+    setTimeout(() => {
+      t.style.opacity   = '0';
+      t.style.transform = 'translateX(-50%) translateY(-8px)';
+    }, 2220);
     setTimeout(() => t.remove(), 2500);
   }
 

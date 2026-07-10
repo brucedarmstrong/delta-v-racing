@@ -10,6 +10,7 @@ import type { TrackMarker } from '../track/convertGmsTrack';
 import { username, isLoggedIn } from '../devvitContext';
 import { fetchOrGenerateAiGhost, generateAndUploadAiGhosts } from '../track/AiGhost';
 import { verifyMineTrack, markLocalDraftVerified } from '../track/TrackUpload';
+import { PhaserStarField } from '../starfield';
 
 // ── Grid / camera constants ────────────────────────────────────────────────────
 const gridPx = 24;
@@ -132,6 +133,7 @@ export class Game extends Scene {
   private dotGfx!:   GameObjects.Graphics;
   private trailGfx!:  GameObjects.Graphics;
   private trailSegs:  TrailSeg[] = [];
+  private starField:  PhaserStarField | null = null;
 
   // Ghost recording
   private ghostMoves:   GhostMove[] = [];
@@ -171,6 +173,9 @@ export class Game extends Scene {
 
   // Mouse hover state during picking phase (null = no target under cursor).
   private hoverTarget: { tx: number; ty: number; valid: boolean } | null = null;
+
+  // RAF id for the picker animation loop (dot pulse, danger glow).
+  private pickRafId = 0;
 
   // Pause menu
   private paused           = false;
@@ -246,6 +251,8 @@ export class Game extends Scene {
     this.crashes = 0;
     this.picking = false;
     this.shownCoachTurns = new Set();
+
+    this.starField = new PhaserStarField(this, { depth: -10, parallax: 0.08, texKey: 'starfield_game' });
 
     this.dotGfx   = this.add.graphics().setDepth(-1);
     this.drawGrid();
@@ -724,6 +731,7 @@ export class Game extends Scene {
 
     // Clean up DOM elements on scene shutdown.
     this.events.once('shutdown', () => {
+      cancelAnimationFrame(this.pickRafId);
       cancelAnimationFrame(rafId);
       closeSettingsDlg();
       container.remove();
@@ -765,6 +773,7 @@ export class Game extends Scene {
   }
 
   private commitMove(newGX: number, newGY: number, dvx: number, dvy: number) {
+    this.stopPickAnim();
     this.picking = false;
     this.velGfx.clear();
     this.pickGfx.clear();
@@ -782,20 +791,54 @@ export class Game extends Scene {
     const headingDeg = Math.atan2(newVX, -newVY) * (180 / Math.PI);
     this.carImg.setAngle(headingDeg);
 
+    // Speed lines — drawn into velGfx (cleared at tween start, reset in onComplete).
+    const spd       = Math.hypot(newVX, newVY);
+    const showLines = spd >= 2.5;
+    const snx = newVX / (spd || 1), sny = newVY / (spd || 1); // unit velocity
+    const spx = -sny, spy = snx;                               // perpendicular
+
     this.tweens.add({
       targets:  this.carImg,
       x:        newGX * gridPx,
       y:        newGY * gridPx,
       duration: 180,
       ease:     'Quad.easeInOut',
-      onUpdate:   () => this.checkMarkerCrossing(),
+      onUpdate: () => {
+        this.checkMarkerCrossing();
+        if (!showLines) return;
+        const cx = this.carImg.x, cy = this.carImg.y;
+        this.velGfx.clear();
+        for (let i = 0; i < 5; i++) {
+          const t      = i / 4;
+          const spread = (i - 2) * gridPx * 0.28;
+          const back   = gridPx * (0.5 + t * 1.1) * (spd / 3);
+          const len    = gridPx * (0.3 + t * 0.45) * (spd / 3);
+          const a      = 0.5 * (1 - t * 0.55);
+          const lx     = cx - snx * back + spx * spread;
+          const ly     = cy - sny * back + spy * spread;
+          this.velGfx.lineStyle(1.2, 0xffffff, a);
+          this.velGfx.beginPath();
+          this.velGfx.moveTo(lx, ly);
+          this.velGfx.lineTo(lx - snx * len, ly - sny * len);
+          this.velGfx.strokePath();
+        }
+      },
       onComplete: () => {
+        if (showLines) this.velGfx.clear();
         this.gx   = newGX;
         this.gy   = newGY;
         this.velX = newVX;
         this.velY = newVY;
         this.turn++;
         this.updateHud();
+
+        // Landing squash-and-stretch wobble.
+        this.carImg.setScale(1.22, 0.78);
+        this.tweens.add({
+          targets: this.carImg, scaleX: 1, scaleY: 1,
+          duration: 220, ease: 'Back.easeOut',
+        });
+
         this.advanceGhosts();
 
         this.checkMarkerCrossing();
@@ -841,6 +884,7 @@ export class Game extends Scene {
   // already counted by a preceding commitMove (forced crash).
   private commitCrash(crashGX: number, crashGY: number, countTurn: boolean) {
     if (this.crashing) return;
+    this.stopPickAnim();
     this.crashing           = true;
     this.pendingForcedCrash = false;
     this.picking            = false;
@@ -913,6 +957,16 @@ export class Game extends Scene {
         // Count the crash NOW — car has physically reached the barrier.
         this.crashes++;
         this.updateHud();
+
+        this.cameras.main.shake(180, 0.009);
+
+        // Car flash: two red pulses before fragments take over.
+        this.carImg.setTint(0xff2200);
+        this.time.delayedCall( 60, () => { this.carImg.clearTint(); });
+        this.time.delayedCall(120, () => { this.carImg.setTint(0xff4400); });
+        this.time.delayedCall(180, () => { this.carImg.clearTint(); });
+
+        this.showCrashPopup(contactWX, contactWY);
 
         this.tweens.timeScale = CRASH_SLO;
         this.time.timeScale   = CRASH_SLO;
@@ -1162,6 +1216,7 @@ export class Game extends Scene {
         this.markerImgList[mi].setTexture(
           m.shape === 'circle' ? 'tile_checkpoint_circle_1' : 'tile_checkpoint_1',
         );
+        this.spawnCheckpointRing(m.x, m.y);
         anyNewlyTouched = true;
       }
     }
@@ -1210,6 +1265,21 @@ export class Game extends Scene {
     this.picking = false;
     this.velGfx.clear();
     this.pickGfx.clear();
+
+    // Flash + brief zoom-out.
+    this.spawnFinishFlash();
+    const cam     = this.cameras.main;
+    const curZoom = cam.zoom;
+    this.tweens.add({
+      targets: cam, zoom: curZoom * 0.7,
+      duration: 550, ease: 'Quad.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets: cam, zoom: curZoom,
+          duration: 450, ease: 'Quad.easeIn',
+        });
+      },
+    });
 
     const finesse = this.findFinishContactFraction(
       this.moveFromWX, this.moveFromWY,
@@ -1486,6 +1556,9 @@ export class Game extends Scene {
           y:        state.gy * gridPx,
           duration: 180,
           ease:     'Quad.easeInOut',
+          onComplete: () => {
+            if (state.data.author) this.showGhostLabel(state);
+          },
         });
       } else {
         state.carImg.setPosition(state.gx * gridPx, state.gy * gridPx);
@@ -1799,7 +1872,7 @@ export class Game extends Scene {
 
     const cam  = this.cameras.main;
     const view = cam.worldView;
-    const done = () => { this.picking = true; this.drawUI(); this.updateHud(); };
+    const done = () => { this.picking = true; this.drawUI(); this.updateHud(); this.startPickAnim(); };
 
     // Reserve a column when the minimap is in the top-right (overlaps the picker area).
     const mmPxW     = (this.minimapCanvas && this.mmSnap === 'top-right') ? this.mmW + 18 : 0;
@@ -1870,18 +1943,134 @@ export class Game extends Scene {
     }
   }
 
+  private startPickAnim(): void {
+    cancelAnimationFrame(this.pickRafId);
+    const tick = () => {
+      if (!this.picking || this.crashing || this.paused) {
+        this.pickRafId = 0;
+        return;
+      }
+      this.drawUI();
+      this.pickRafId = requestAnimationFrame(tick);
+    };
+    this.pickRafId = requestAnimationFrame(tick);
+  }
+
+  private stopPickAnim(): void {
+    cancelAnimationFrame(this.pickRafId);
+    this.pickRafId = 0;
+  }
+
+  private static _crashCssInjected = false;
+
+  private showCrashPopup(worldX: number, worldY: number): void {
+    if (!Game._crashCssInjected) {
+      Game._crashCssInjected = true;
+      const style = document.createElement('style');
+      style.textContent = `
+        @keyframes crashBounce {
+          0%   { transform: translate(-50%,-50%) scale(0.3); opacity: 1; }
+          35%  { transform: translate(-50%,-80%) scale(1.25); opacity: 1; }
+          55%  { transform: translate(-50%,-88%) scale(0.92); opacity: 1; }
+          72%  { transform: translate(-50%,-94%) scale(1.06); opacity: 1; }
+          100% { transform: translate(-50%,-115%) scale(1); opacity: 0; }
+        }
+        .crash-popup {
+          position: fixed;
+          pointer-events: none;
+          font-family: "Arial Black", Arial, sans-serif;
+          font-size: 22px;
+          font-weight: 900;
+          color: #ff3300;
+          text-shadow: 0 0 10px #ff0000cc, 0 2px 4px #000;
+          letter-spacing: 0.1em;
+          animation: crashBounce 0.9s ease-out forwards;
+          z-index: 9999;
+          user-select: none;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    const cam  = this.cameras.main;
+    const rect = this.game.canvas.getBoundingClientRect();
+    const sx   = rect.left + (worldX - cam.scrollX) * cam.zoom;
+    const sy   = rect.top  + (worldY - cam.scrollY) * cam.zoom;
+
+    const el = document.createElement('div');
+    el.className = 'crash-popup';
+    el.textContent = 'CRASH!';
+    el.style.left = `${sx}px`;
+    el.style.top  = `${sy}px`;
+    document.body.appendChild(el);
+    el.addEventListener('animationend', () => el.remove());
+  }
+
+  private showGhostLabel(state: GhostState): void {
+    const cam  = this.cameras.main;
+    const rect = this.game.canvas.getBoundingClientRect();
+    const sx   = rect.left + (state.carImg.x - cam.scrollX) * cam.zoom;
+    const sy   = rect.top  + (state.carImg.y - cam.scrollY) * cam.zoom;
+
+    const el = document.createElement('div');
+    el.textContent = state.data.author!;
+    el.style.cssText = [
+      'position:fixed', 'pointer-events:none', 'z-index:9998',
+      `left:${sx}px`, `top:${sy - 18}px`,
+      'transform:translate(-50%,-100%)',
+      'font:bold 11px Arial,sans-serif',
+      `color:#${state.tint.toString(16).padStart(6,'0')}`,
+      'text-shadow:0 1px 3px #000',
+      'opacity:1',
+      'transition:opacity 0.6s ease, transform 0.9s ease',
+      'white-space:nowrap',
+    ].join(';');
+    document.body.appendChild(el);
+
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      el.style.opacity   = '0';
+      el.style.transform = 'translate(-50%,-220%)';
+    }));
+    el.addEventListener('transitionend', () => el.remove(), { once: true });
+  }
+
+  private spawnCheckpointRing(worldX: number, worldY: number): void {
+    const ring = this.add.graphics();
+    ring.lineStyle(3, 0x33ee88, 1.0);
+    ring.strokeCircle(0, 0, gridPx);
+    ring.setPosition(worldX, worldY);
+    ring.setDepth(10);
+    this.tweens.add({
+      targets: ring,
+      scaleX: 3.5, scaleY: 3.5, alpha: 0,
+      duration: 550,
+      ease: 'Quad.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+  }
+
+  private spawnFinishFlash(): void {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;background:#ffffff;opacity:0.72;pointer-events:none;z-index:1001;transition:opacity 0.5s ease-out;';
+    document.body.appendChild(el);
+    requestAnimationFrame(() => requestAnimationFrame(() => { el.style.opacity = '0'; }));
+    el.addEventListener('transitionend', () => el.remove());
+  }
+
   private drawUI() {
     this.velGfx.clear();
     this.pickGfx.clear();
 
+    const t     = performance.now();
     const carWX = this.gx * gridPx;
     const carWY = this.gy * gridPx;
     const natWX = (this.gx + this.velX) * gridPx;
     const natWY = (this.gy + this.velY) * gridPx;
 
     // Yellow line points to the hovered valid target; falls back to natural position.
-    const lineToWX = this.hoverTarget?.valid ? this.hoverTarget.tx * gridPx : natWX;
-    const lineToWY = this.hoverTarget?.valid ? this.hoverTarget.ty * gridPx : natWY;
+    const hovCrash   = this.hoverTarget && !this.hoverTarget.valid;
+    const lineToWX   = this.hoverTarget?.valid ? this.hoverTarget.tx * gridPx : natWX;
+    const lineToWY   = this.hoverTarget?.valid ? this.hoverTarget.ty * gridPx : natWY;
 
     this.velGfx.lineStyle(1.5, 0xffee00, 0.7);
     this.velGfx.beginPath();
@@ -1891,9 +2080,22 @@ export class Game extends Scene {
     this.velGfx.fillStyle(0xffee00, 0.6);
     this.velGfx.fillCircle(lineToWX, lineToWY, 2.5);
 
-    const natGX = this.gx + this.velX;
-    const natGY = this.gy + this.velY;
-    const pickR = Math.floor(gridPx / 2) - 1;
+    // Red preview line to hovered crash dot.
+    if (hovCrash) {
+      const hx = this.hoverTarget!.tx * gridPx;
+      const hy = this.hoverTarget!.ty * gridPx;
+      this.velGfx.lineStyle(1.5, 0xff3300, 0.55);
+      this.velGfx.beginPath();
+      this.velGfx.moveTo(carWX, carWY);
+      this.velGfx.lineTo(hx, hy);
+      this.velGfx.strokePath();
+    }
+
+    const natGX        = this.gx + this.velX;
+    const natGY        = this.gy + this.velY;
+    const pickR        = Math.floor(gridPx / 2) - 1;
+    const breathe      = Math.sin(t * 0.0039) * 0.5 + 0.5; // 0→1, ~1.6 s cycle
+    const dangerPulse  = Math.sin(t * 0.0055) * 0.5 + 0.5;
 
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
@@ -1906,6 +2108,12 @@ export class Game extends Scene {
         if (!valid) {
           const r   = isHovered ? pickR + 2 : pickR;
           const arm = Math.max(Math.round(r * 0.55), 3);
+
+          // Outer danger glow ring.
+          const glowR = r + 3 + dangerPulse * 3;
+          this.pickGfx.lineStyle(2, 0xff3300, 0.2 + dangerPulse * 0.3);
+          this.pickGfx.strokeCircle(twx, twy, glowR);
+
           this.pickGfx.fillStyle(isHovered ? 0x880000 : 0x550000, 0.80);
           this.pickGfx.fillCircle(twx, twy, r);
           this.pickGfx.lineStyle(1.5, isHovered ? 0xff3333 : 0xaa0000, 0.90);
@@ -1920,14 +2128,14 @@ export class Game extends Scene {
           continue;
         }
 
-        const fill = isNatural ? 0xffee00 : 0x33ee88;
-        const r    = isHovered ? pickR + 2 : pickR;
-        this.pickGfx.fillStyle(fill, isHovered ? 1.0 : 0.80);
+        // Breathing size + alpha for non-hovered valid dots (float radius = smooth).
+        const r     = isHovered ? pickR + 2 : pickR * (0.88 + breathe * 0.24);
+        const alpha = isHovered ? 1.0 : 0.68 + breathe * 0.22;
+        const fill  = isNatural ? 0xffee00 : 0x33ee88;
+        this.pickGfx.fillStyle(fill, alpha);
         this.pickGfx.fillCircle(twx, twy, r);
-        this.pickGfx.lineStyle(isHovered ? 2 : 1, isHovered ? 0xffffff : 0xffffff, isHovered ? 1.0 : 0.35);
+        this.pickGfx.lineStyle(isHovered ? 2 : 1, 0xffffff, isHovered ? 1.0 : 0.35);
         this.pickGfx.strokeCircle(twx, twy, r);
-
-
       }
     }
   }
@@ -2221,7 +2429,7 @@ export class Game extends Scene {
     this.pauseOverlayEl = null;
     if (this.mmContainer)   this.applyMmSnap(this.mmContainer);
     if (this.topBarEl)      this.topBarEl.style.display      = 'flex';
-    if (!this.won && !this.crashing && this.picking) this.drawUI();
+    if (!this.won && !this.crashing && this.picking) { this.drawUI(); this.startPickAnim(); }
   }
 
   private clearPauseAndGo(fn: () => void): void {

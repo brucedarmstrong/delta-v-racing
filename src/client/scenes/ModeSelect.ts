@@ -2,6 +2,7 @@ import { Scene } from 'phaser';
 import { appVersion, postData } from '../devvitContext';
 import { fetchCommunityTrack } from '../track/TrackUpload';
 import { fetchRaceGhosts } from '../track/RaceGhosts';
+import { PhaserStarField } from '../starfield';
 
 const BG      = 0x0a0a16;
 const SURFACE = 0x12122a;
@@ -25,9 +26,10 @@ export class ModeSelect extends Scene {
   private ftueResetTaps  = 0;
   private ftueResetTimer: ReturnType<typeof setTimeout> | null = null;
 
-  private gridGfx: Phaser.GameObjects.Graphics | null = null;
-  private gridOX   = 0;
-  private gridOY   = 0;
+  private gridGfx:   Phaser.GameObjects.Graphics | null = null;
+  private gridOX     = 0;
+  private gridOY     = 0;
+  private starField: PhaserStarField | null = null;
 
   constructor() { super('ModeSelect'); }
 
@@ -100,6 +102,9 @@ export class ModeSelect extends Scene {
     cam.setBackgroundColor(BG);
     cam.setScroll(0, 0);
     cam.setZoom(1);
+
+    this.starField?.destroy();
+    this.starField = new PhaserStarField(this, { depth: -2, parallax: 0, texKey: 'starfield_menu' });
 
     this.startGrid();
 
@@ -318,15 +323,23 @@ export class ModeSelect extends Scene {
     const el = document.createElement('div');
     el.textContent = msg;
     el.style.cssText = [
-      'position:fixed', 'bottom:32px', 'left:50%', 'transform:translateX(-50%)',
+      'position:fixed', 'bottom:32px', 'left:50%',
+      'transform:translateX(-50%) translateY(12px)', 'opacity:0',
+      'transition:opacity 0.2s ease, transform 0.2s ease',
       'background:#22224a', 'color:#aaccff', 'border:1px solid #6666cc',
       'border-radius:6px', 'padding:8px 18px', 'font:13px Arial,sans-serif',
       'z-index:9500', 'pointer-events:none', 'white-space:nowrap',
-      'transition:opacity 0.4s', 'opacity:1',
     ].join(';');
     document.body.appendChild(el);
-    setTimeout(() => { el.style.opacity = '0'; }, 1800);
-    setTimeout(() => { el.remove(); }, 2300);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      el.style.opacity   = '1';
+      el.style.transform = 'translateX(-50%) translateY(0)';
+    }));
+    setTimeout(() => {
+      el.style.opacity   = '0';
+      el.style.transform = 'translateX(-50%) translateY(-8px)';
+    }, 2020);
+    setTimeout(() => el.remove(), 2300);
   }
 
   private layout(): void {
