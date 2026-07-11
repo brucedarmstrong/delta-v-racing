@@ -1,6 +1,6 @@
 import { requestExpandedMode } from '@devvit/web/client';
 import { username, appVersion, postData } from './devvitContext';
-import { drawBarriersOnCanvas, drawMarkersOnCanvas } from './track/TrackBarrierCanvas';
+import { drawBarriersOnCanvas, drawMarkersOnCanvas, onMarkerSpritesReady } from './track/TrackBarrierCanvas';
 import { drawMiniCar } from './track/CarShape';
 import { trackBounds } from './track/TrackLayout';
 import { convertGmsTrack, convertGmsMarkers, type GmsTrack } from './track/convertGmsTrack';
@@ -364,6 +364,7 @@ if (postData?.trackId) {
       };
 
       drawStaticThumb(p);
+      onMarkerSpritesReady(() => drawStaticThumb(p));
       startGhostAnimation(p, trackId);
     })
     .catch(() => { /* thumbnail stays blank */ });
@@ -392,6 +393,7 @@ if (!postData?.trackId) {
   };
 
   drawStaticThumb(p);
+  onMarkerSpritesReady(() => drawStaticThumb(p));
   startGhostAnimation(p, 'oval_small');
 }
 
