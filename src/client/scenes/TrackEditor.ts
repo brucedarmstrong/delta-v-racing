@@ -1263,8 +1263,11 @@ export class TrackEditor extends Scene {
         { x: minX, y: minY }, { x: maxX, y: minY },
         { x: maxX, y: maxY }, { x: minX, y: maxY },
       ];
-      const color = isSelected ? 0xccccff : 0x6666aa;
-      const alpha = isSelected ? 0.9 : 0.45;
+      // Idle color bumped up from the original muted grey-blue (0x6666aa @
+      // 0.45 alpha) — that blended into the background grid badly enough to
+      // read as "not there" at a glance on a real track.
+      const color = isSelected ? 0xccccff : 0x8888ff;
+      const alpha = isSelected ? 0.9 : 0.75;
       drawDashedPolyline(g, pts, true, 6, 5, 0, color, alpha, isSelected ? 2 : 1.5);
     }
   }
