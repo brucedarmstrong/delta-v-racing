@@ -105,8 +105,8 @@ export class Leaderboard extends Scene {
         <div style="color:#8899bb;">9th: 2</div>
         <div style="color:#8899bb;">10th: 1</div>
       </div>
-      <p style="margin:0 0 10px;"><strong style="color:#88ccff;">Points</strong> is the sum of everything you've earned across every track — placing well on more tracks beats being #1 on just one.</p>
-      <p style="margin:0;"><strong style="color:#888899;">Tracks</strong> is how many different tracks you've placed top 10 on.</p>
+      <p style="margin:0 0 10px;">Your total <strong>Points</strong> is the sum of everything you've earned across every track — placing well on more tracks beats being #1 on just one.</p>
+      <p style="margin:0;">Your <strong>Tracks</strong> count is how many different tracks you've placed top 10 on.</p>
     `;
 
     card.appendChild(closeBtn);
