@@ -40,7 +40,7 @@ type SelItem =
 
 type DragOp =
   | { kind: 'pan'; sx: number; sy: number; scrollX: number; scrollY: number; tapDeselect?: boolean }
-  | { kind: 'move'; idx: number; offX: number; offY: number; touchTapAddTo?: MultiSel | null }
+  | { kind: 'move'; idx: number; offX: number; offY: number }
   | {
       kind: 'move-multi';
       pieces: number[]; finish: boolean; checkpoints: number[];
@@ -52,8 +52,8 @@ type DragOp =
   | { kind: 'marquee';          startWX: number; startWY: number; startSX: number; startSY: number }
   | { kind: 'rotate';           idx: number; handleLocalAngle: number }
   | { kind: 'move-car' }
-  | { kind: 'move-finish'; touchTapAddTo?: MultiSel | null }
-  | { kind: 'move-checkpoint'; idx: number; touchTapAddTo?: MultiSel | null }
+  | { kind: 'move-finish' }
+  | { kind: 'move-checkpoint'; idx: number }
   | { kind: 'rotate-car' }
   | { kind: 'rotate-finish' }
   | { kind: 'rotate-checkpoint'; idx: number }
@@ -487,6 +487,9 @@ export class TrackEditor extends Scene {
   private selectModeOn             = false;
   private isDirty                  = false;
   private clipboard: { pieces: PlacedPiece[]; checkpoints: TrackMarker[] } | null = null;
+  // Double-tap-to-reverse (touch only — desktop uses the 'R' key instead).
+  private lastTapPieceIdx: number | null = null;
+  private lastTapTime = 0;
 
   // Undo / redo
   private undoStack: EditorSnapshot[] = [];
@@ -689,6 +692,21 @@ export class TrackEditor extends Scene {
       if (e.key === '-' && this.selection?.kind === 'piece') {
         e.preventDefault();
         this.cyclePieceSize(-1);
+        return;
+      }
+      if (e.key.toLowerCase() === 'r' && !mod && this.selection?.kind === 'piece') {
+        e.preventDefault();
+        this.reverseSelectedPiece();
+        return;
+      }
+      if (
+        (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+        && this.selection
+      ) {
+        e.preventDefault();
+        const dx = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+        const dy = e.key === 'ArrowUp'   ? -1 : e.key === 'ArrowDown'  ? 1 : 0;
+        this.nudgeSelection(dx, dy, !e.repeat);
         return;
       }
     };
@@ -1115,14 +1133,17 @@ export class TrackEditor extends Scene {
       [ic('flip-horizontal'),                'Flip',        'Mirror a corner piece to switch turn direction'],
       [ic('rotate-left') + ic('rotate-right'), '±15°',     'Rotate the selected piece in 15° steps'],
       ['', '+ / −', 'Cycle corner angle or straight length (wraps at min/max)'],
+      ['', 'Arrow keys', 'Nudge the piece 1px in that direction'],
       [ic('content-copy'),                   'Copy',        'Copy the selected piece'],
       [ic('content-paste'),                  'Paste',       'Paste the last copied piece'],
+      ['', 'R / double-tap', 'Reverse the piece\'s entry/exit ends — the palette then extends the track from its other end'],
       [ic('delete'),                         'Delete',      'Remove the selected piece from the track'],
     ]));
-    card.appendChild(section('Multiple items selected  (desktop)', [
-      ['', 'Drag-select',   'Drag from empty canvas space to rubber-band select everything fully inside the rectangle'],
-      ['', 'Shift+click',   'Add/remove a piece, checkpoint, or the finish line from the selection'],
+    card.appendChild(section('Multiple items selected', [
+      ['', 'Drag-select',   'In Select Mode, drag from empty canvas space to rubber-band select everything fully inside the rectangle'],
+      ['', 'Shift+click',   'Add/remove a piece, checkpoint, or the finish line from the selection (desktop)'],
       [ic('rotate-left') + ic('rotate-right'), '±15°', 'Rotate the whole selection as a rigid group'],
+      ['', 'Arrow keys', 'Nudge the whole selection 1px in that direction'],
       [ic('content-copy') + ic('content-paste'), 'Copy/Paste', 'Copy/paste every selected piece and checkpoint together'],
       [ic('group'),   'Ctrl+G', 'Group the selection — clicking any one piece afterward selects, drags, and copies the whole group'],
       [ic('ungroup'), 'Ctrl+G', 'While a group is selected, ungroup it'],
@@ -1130,6 +1151,7 @@ export class TrackEditor extends Scene {
     ]));
     card.appendChild(section('Marker selected  (finish / checkpoint)', [
       [ic('rotate-left') + ic('rotate-right'), '±15°',  'Rotate the marker in 15° steps'],
+      ['', 'Arrow keys', 'Nudge the marker 1px in that direction'],
       [ic('content-copy'),                     'Copy',   'Copy the selected checkpoint (the finish line can\'t be copied — only one is allowed)'],
       [ic('content-paste'),                    'Paste',  'Paste the last copied checkpoint'],
       [ic('delete'),                           'Delete', 'Remove the finish line or checkpoint'],
@@ -1532,15 +1554,9 @@ export class TrackEditor extends Scene {
         this.startMultiMoveDrag(wx, wy);
         return;
       }
-      // Touch has no shift key — tapping while something else is already
-      // selected adds this marker to the selection instead of replacing it,
-      // as long as it turns out to be a tap and not a real drag (checked in
-      // onUp). A real touch drag still just moves the marker, replacing the
-      // selection, same as a mouse click-drag.
-      const touchAddFinish = ptr.wasTouch && this.selection ? this.selectionAsMulti(this.selection) : null;
       this.selectMarker({ kind: 'finish' });
       this.saveUndo();
-      this.dragOp = { kind: 'move-finish', touchTapAddTo: touchAddFinish };
+      this.dragOp = { kind: 'move-finish' };
       return;
     }
 
@@ -1553,10 +1569,9 @@ export class TrackEditor extends Scene {
           this.startMultiMoveDrag(wx, wy);
           return;
         }
-        const touchAddCp = ptr.wasTouch && this.selection ? this.selectionAsMulti(this.selection) : null;
         this.selectMarker({ kind: 'checkpoint', idx: i });
         this.saveUndo();
-        this.dragOp = { kind: 'move-checkpoint', idx: i, touchTapAddTo: touchAddCp };
+        this.dragOp = { kind: 'move-checkpoint', idx: i };
         return;
       }
     }
@@ -1578,10 +1593,6 @@ export class TrackEditor extends Scene {
         return;
       }
 
-      // Touch has no shift key — a tap on an unselected piece while something
-      // else is already selected adds it instead of replacing the selection
-      // (resolved in onUp once we know it was a tap, not a drag).
-      const touchAddPiece = ptr.wasTouch && this.selection ? this.selectionAsMulti(this.selection) : null;
       this.selectPiece(pidx);
 
       // selectPiece() expands to the whole group when pidx belongs to one —
@@ -1595,21 +1606,21 @@ export class TrackEditor extends Scene {
       this.saveUndo();
       this.updateBarrierImg([pidx]);
       const p = this.pieces[pidx];
-      this.dragOp = { kind: 'move', idx: pidx, offX: wx - p.x, offY: wy - p.y, touchTapAddTo: touchAddPiece };
+      this.dragOp = { kind: 'move', idx: pidx, offX: wx - p.x, offY: wy - p.y };
       this.drawSelectionOverlay();
       return;
     }
 
-    // Empty — on touch devices this is the only way to pan (there's no
-    // middle mouse button), so keep it as a pan there. On mouse it starts a
-    // rubber-band marquee instead; the existing selection is left alone until
-    // release, so a plain click (no real drag) can still deselect.
-    if (ptr.wasTouch) {
-      this.dragOp = { kind: 'pan', sx: ptr.x, sy: ptr.y, scrollX: cam.scrollX, scrollY: cam.scrollY, tapDeselect: true };
+    // Empty space: Select Mode drags a rubber-band marquee (mouse or touch);
+    // otherwise it always pans, on both mouse and touch — middle mouse still
+    // pans regardless of mode too (handled above). A plain click/tap (no real
+    // drag) on empty space still deselects either way.
+    if (this.selectModeOn) {
+      this.marqueeCurWX = wx; this.marqueeCurWY = wy;
+      this.dragOp = { kind: 'marquee', startWX: wx, startWY: wy, startSX: ptr.x, startSY: ptr.y };
       return;
     }
-    this.marqueeCurWX = wx; this.marqueeCurWY = wy;
-    this.dragOp = { kind: 'marquee', startWX: wx, startWY: wy, startSX: ptr.x, startSY: ptr.y };
+    this.dragOp = { kind: 'pan', sx: ptr.x, sy: ptr.y, scrollX: cam.scrollX, scrollY: cam.scrollY, tapDeselect: true };
   }
 
   private onMove(ptr: Phaser.Input.Pointer): void {
@@ -1828,25 +1839,23 @@ export class TrackEditor extends Scene {
       return;
     }
 
-    // Touch tap-to-add: a tap (not a real drag) on a piece/finish/checkpoint
-    // while something else was already selected adds it to that selection
-    // instead of leaving it as the only thing selected — touch has no shift
-    // key, so this is its only path into a multi-selection. A real drag still
-    // just moves the newly-picked item and replaces the selection (handled by
-    // the generic "commit drag" block below).
+    // Double-tap a piece (touch): reverse its entry/exit.
+    const preTapOp = this.dragOp;
     if (
-      (this.dragOp?.kind === 'move' || this.dragOp?.kind === 'move-finish' || this.dragOp?.kind === 'move-checkpoint')
-      && this.dragOp.touchTapAddTo
+      preTapOp?.kind === 'move' && ptr.wasTouch
       && Math.hypot(ptr.x - ptr.downX, ptr.y - ptr.downY) < 6
     ) {
-      const op   = this.dragOp;
-      const base = op.touchTapAddTo;
-      this.dragOp = null;
-      if (op.kind === 'move')             this.setMultiSelection({ pieces: [...base.pieces, op.idx], finish: base.finish, checkpoints: base.checkpoints });
-      else if (op.kind === 'move-finish') this.setMultiSelection({ pieces: base.pieces, finish: true, checkpoints: base.checkpoints });
-      else                                 this.setMultiSelection({ pieces: base.pieces, finish: base.finish, checkpoints: [...base.checkpoints, op.idx] });
-      this.updateBarrierImg();
-      return;
+      const idx = preTapOp.idx;
+      const now = Date.now();
+      if (this.lastTapPieceIdx === idx && now - this.lastTapTime < 350) {
+        this.dragOp = null;
+        this.lastTapPieceIdx = null;
+        this.selectPiece(idx);
+        this.reverseSelectedPiece();
+        return;
+      }
+      this.lastTapPieceIdx = idx;
+      this.lastTapTime = now;
     }
 
     // Commit drag: rebuild barrier with all pieces, refresh highlight + props.
@@ -2028,9 +2037,14 @@ export class TrackEditor extends Scene {
     this.saveUndo();
     let newX = this.viewCenterX(), newY = this.viewCenterY(), newRot = 0;
 
-    if (this.pieces.length > 0) {
-      const last  = this.pieces[this.pieces.length - 1];
-      const lconn = worldConnectors(last);
+    // Extend from the selected piece's exit if one is selected (its exit is
+    // whichever end reverseSelectedPiece() has left open for chaining);
+    // otherwise fall back to the array's last piece, same as before.
+    const attachFrom = this.selection?.kind === 'piece' ? this.pieces[this.selection.idx]
+      : this.pieces.length > 0 ? this.pieces[this.pieces.length - 1]
+      : null;
+    if (attachFrom) {
+      const lconn = worldConnectors(attachFrom);
       const dc    = connectors(def);
       newRot = ((lconn.exit.heading - dc.entryH) % 360 + 360) % 360;
       const [nex, ney] = rotateCW(dc.entryX, dc.entryY, newRot);
@@ -2105,6 +2119,52 @@ export class TrackEditor extends Scene {
     this.updateCheckpointImgs();
     this.selectMarker({ kind: 'checkpoint', idx });
     this.showToast('Checkpoint placed — drag to position');
+    this.isDirty = true;
+  }
+
+  // Nudges whatever is selected by (dx, dy) world px — bound to the arrow
+  // keys for pixel-precise positioning (drag/snap is coarser). pushUndo is
+  // false for OS key-repeat events so holding an arrow key coalesces into a
+  // single undo step instead of one per repeated keydown.
+  private nudgeSelection(dx: number, dy: number, pushUndo: boolean): void {
+    const sel = this.selection;
+    if (!sel) return;
+    if (pushUndo) this.saveUndo();
+
+    if (sel.kind === 'piece') {
+      const p = this.pieces[sel.idx];
+      this.pieces[sel.idx] = { ...p, x: p.x + dx, y: p.y + dy };
+      this.updateBarrierImg();
+      this.layoutHighlightSlot(0, sel.idx);
+    } else if (sel.kind === 'car') {
+      this.curStartX += dx; this.curStartY += dy;
+      this.updateStartCarImg();
+    } else if (sel.kind === 'finish' && this.finishMarker) {
+      this.finishMarker.x += dx; this.finishMarker.y += dy;
+      this.updateFinishImg();
+    } else if (sel.kind === 'checkpoint') {
+      const cp = this.checkpoints[sel.idx];
+      if (!cp) return;
+      cp.x += dx; cp.y += dy;
+      this.updateCheckpointImgs();
+    } else if (sel.kind === 'multi') {
+      for (const i of sel.pieces) {
+        const p = this.pieces[i];
+        this.pieces[i] = { ...p, x: p.x + dx, y: p.y + dy };
+      }
+      if (sel.finish && this.finishMarker) {
+        this.finishMarker.x += dx; this.finishMarker.y += dy;
+        this.updateFinishImg();
+      }
+      for (const i of sel.checkpoints) {
+        const cp = this.checkpoints[i];
+        if (cp) { cp.x += dx; cp.y += dy; }
+      }
+      if (sel.checkpoints.length) this.updateCheckpointImgs();
+      if (sel.pieces.length) { this.updateBarrierImg(); this.updateSelectionHighlights(); }
+    }
+
+    this.drawSelectionOverlay();
     this.isDirty = true;
   }
 
@@ -2255,6 +2315,21 @@ export class TrackEditor extends Scene {
     }
 
     this.updateBarrierImg(); this.updateSelectionHighlights(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
+  }
+
+  // Swaps which end of the selected piece is "entry" vs "exit" for chaining
+  // purposes. The piece's physical shape/position/rotation never change —
+  // walls and barriers don't depend on entry/exit — so this is purely a
+  // relabel: it lets addPieceFromPalette() extend the track from what used
+  // to be this piece's entry side instead, i.e. build in the other direction.
+  private reverseSelectedPiece(): void {
+    if (this.selection?.kind !== 'piece') return;
+    const idx = this.selection.idx;
+    const p = this.pieces[idx] as PlacedPiece & { reversed?: boolean };
+    this.saveUndo();
+    this.pieces[idx] = { ...p, reversed: !p.reversed };
+    this.updateSelectionHighlights(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
+    this.showToast('Reversed');
   }
 
   private deleteSelectedPiece(): void {
@@ -2998,7 +3073,12 @@ export class TrackEditor extends Scene {
           pieces: this.pieces,
           markers: [this.finishMarker!, ...this.checkpoints],
         };
-        const result = await saveDraft(name, JSON.stringify(payload), this.mineTrackId ?? undefined);
+        // Saving under the same name updates this draft in place. Saving
+        // under a NEW name is a "Save As" — fork a separate draft rather
+        // than renaming/overwriting the one already open, so the original
+        // stays put in My Drafts.
+        const sameTrack = !!this.mineTrackId && name === this.existingName;
+        const result = await saveDraft(name, JSON.stringify(payload), sameTrack ? this.mineTrackId ?? undefined : undefined);
         // Remember the id/name so a later save in this same session updates
         // this draft instead of creating a duplicate — saving no longer
         // leaves the editor, so there's no round-trip through TrackSelect to
@@ -3006,8 +3086,9 @@ export class TrackEditor extends Scene {
         this.mineTrackId = result.id;
         this.existingName = name;
         this.isDirty = false;
+        if (!sameTrack) this.verified = false; // forked draft — not yet tested under its own id
         overlay.remove();
-        this.showToast('Track saved');
+        this.showToast(sameTrack ? 'Track saved' : 'Saved as new track');
       } catch (err) {
         status.textContent = err instanceof Error ? err.message : 'Save failed — try again.';
         saveBtn.disabled = false; cancelBtn.disabled = false;

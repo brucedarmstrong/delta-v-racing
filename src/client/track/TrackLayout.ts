@@ -9,6 +9,7 @@ export type StraightDef = {
   type: 'straight';
   size: StraightSize;
   walls: WallVariant;
+  reversed?: boolean; // true = entry/exit connectors swapped (see connectors())
 };
 
 export type CornerDef = {
@@ -16,6 +17,7 @@ export type CornerDef = {
   angle: CornerAngle;
   walls: WallVariant;
   flip?: boolean; // true = left (CCW) turn
+  reversed?: boolean; // true = entry/exit connectors swapped (see connectors())
 };
 
 export type PieceDef    = StraightDef | CornerDef;
@@ -51,25 +53,37 @@ function rotateCW(x: number, y: number, deg: number): [number, number] {
 //   arc sweeps CW from angle π (left) by θ, exit heading turns right by θ.
 //
 // Corner left turn (flip=true): mirror about Y axis at arc centre.
+//
+// reversed=true swaps entry<->exit (heading +180 each) with no change to the
+// piece's physical shape — walls/barriers don't depend on connectors(), so a
+// reversed piece looks identical, it just offers its other end for chaining.
 export function connectors(piece: PieceDef) {
+  let c: { entryX: number; entryY: number; entryH: number; exitX: number; exitY: number; exitH: number };
+
   if (piece.type === 'straight') {
     const half = STRAIGHT_LEN[piece.size] / 2;
-    return { entryX: 0, entryY: -half, entryH: 180, exitX: 0, exitY: half, exitH: 180 };
+    c = { entryX: 0, entryY: -half, entryH: 180, exitX: 0, exitY: half, exitH: 180 };
+  } else {
+    const flip = (piece as CornerDef).flip ?? false;
+    const θd   = (piece as CornerDef).angle;          // degrees
+    const θr   = θd * (Math.PI / 180);
+    const clR  = piece.type === 'corner' ? TIGHT.clR : BIG.clR;
+    const sign = flip ? 1 : -1;                        // mirrors entry/exit about Y axis
+
+    c = {
+      entryX: sign * clR,
+      entryY: 0,
+      entryH: 0,                                        // car heading north at entry
+      exitX:  sign * clR * Math.cos(θr),
+      exitY:  -clR * Math.sin(θr),
+      exitH:  flip ? (360 - θd) : θd,                  // left turn subtracts, right adds
+    };
   }
 
-  const flip = (piece as CornerDef).flip ?? false;
-  const θd   = (piece as CornerDef).angle;          // degrees
-  const θr   = θd * (Math.PI / 180);
-  const clR  = piece.type === 'corner' ? TIGHT.clR : BIG.clR;
-  const sign = flip ? 1 : -1;                        // mirrors entry/exit about Y axis
-
+  if (!(piece as StraightDef | CornerDef).reversed) return c;
   return {
-    entryX: sign * clR,
-    entryY: 0,
-    entryH: 0,                                        // car heading north at entry
-    exitX:  sign * clR * Math.cos(θr),
-    exitY:  -clR * Math.sin(θr),
-    exitH:  flip ? (360 - θd) : θd,                  // left turn subtracts, right adds
+    entryX: c.exitX,  entryY: c.exitY,  entryH: (c.exitH  + 180) % 360,
+    exitX:  c.entryX, exitY:  c.entryY, exitH:  (c.entryH + 180) % 360,
   };
 }
 
