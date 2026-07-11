@@ -2122,6 +2122,7 @@ export class TrackEditor extends Scene {
       for (const i of idxs) this.pieces[i] = { ...this.pieces[i], groupId: undefined };
       this.isDirty = true;
       this.showToast(`Ungrouped ${idxs.length} pieces`);
+      this.redrawGroupOutlines();
       this.rebuildCtrlRow();
       return;
     }
@@ -2133,6 +2134,7 @@ export class TrackEditor extends Scene {
     for (const i of idxs) this.pieces[i] = { ...this.pieces[i], groupId: gid };
     this.isDirty = true;
     this.showToast(`Grouped ${idxs.length} pieces`);
+    this.redrawGroupOutlines();
     this.rebuildCtrlRow();
   }
 
