@@ -13,7 +13,7 @@ import {
 } from '../track/TrackGeometry';
 import type { TrackMarker } from '../track/convertGmsTrack';
 import type { TrackEntry } from '../tracks/trackRegistry';
-import { saveDraft } from '../track/TrackUpload';
+import { saveDraft, fetchMineTrack } from '../track/TrackUpload';
 import type { TrackPayload } from '../track/TrackUpload';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -536,6 +536,8 @@ export class TrackEditor extends Scene {
   // Context
   private mineTrackId: string | null = null;
   private existingName = '';
+  // null = unknown/loading (or no saved draft yet to check).
+  private verified: boolean | null = null;
 
   constructor() { super('TrackEditor'); }
 
@@ -554,6 +556,7 @@ export class TrackEditor extends Scene {
     this.isDirty       = false;
     this.mineTrackId   = data?.mineTrackId ?? null;
     this.existingName  = data?.track?.name ?? '';
+    this.verified      = null;
     this.selection     = null;
     this.dragOp        = null;
     this.undoStack     = [];
@@ -608,6 +611,14 @@ export class TrackEditor extends Scene {
     this.updateStartCarImg();
     this.updateFinishImg();
     this.updateCheckpointImgs();
+
+    if (this.mineTrackId) {
+      fetchMineTrack(this.mineTrackId)
+        .then(({ meta }) => { this.verified = meta.verified; })
+        .catch(() => { this.verified = false; });
+    } else {
+      this.verified = false;
+    }
 
     this.input.addPointer(1);
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => this.onDown(p));
@@ -876,6 +887,26 @@ export class TrackEditor extends Scene {
       this.isDirty ? 'Yes' : 'None',
       this.isDirty ? '#ffaa44' : '#8888aa',
     ));
+
+    let readyLabel: string, readyColor: string;
+    if (!this.mineTrackId) {
+      readyLabel = 'Not saved yet';
+      readyColor = '#8888aa';
+    } else if (this.isDirty) {
+      readyLabel = 'Save & test again';
+      readyColor = '#ffaa44';
+    } else if (this.verified === null) {
+      readyLabel = 'Checking…';
+      readyColor = '#8888aa';
+    } else if (this.verified) {
+      readyLabel = '✓ Yes';
+      readyColor = '#66ff99';
+    } else {
+      readyLabel = '✗ Not yet — test it first';
+      readyColor = '#ff6666';
+    }
+    sessionSec.appendChild(statRow('Ready to upload', readyLabel, readyColor));
+
     card.appendChild(sessionSec);
 
     overlay.appendChild(card);
