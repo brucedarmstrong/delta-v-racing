@@ -8,7 +8,7 @@ import {
 } from '../track/TrackLayout';
 import {
   HALF_TRACK, TIGHT, BIG, STRAIGHT_LEN,
-  CORNER_ANGLES,
+  CORNER_ANGLES, STRAIGHT_SIZES,
   type CornerAngle, type CornerFamily, type WallVariant, type StraightSize,
 } from '../track/TrackGeometry';
 import type { TrackMarker } from '../track/convertGmsTrack';
@@ -681,6 +681,16 @@ export class TrackEditor extends Scene {
         this.deleteSelection();
         return;
       }
+      if ((e.key === '+' || e.key === '=') && this.selection?.kind === 'piece') {
+        e.preventDefault();
+        this.cyclePieceSize(1);
+        return;
+      }
+      if (e.key === '-' && this.selection?.kind === 'piece') {
+        e.preventDefault();
+        this.cyclePieceSize(-1);
+        return;
+      }
     };
     window.addEventListener('keydown', onKeyDown);
 
@@ -1104,6 +1114,7 @@ export class TrackEditor extends Scene {
       ['', 'Walls',                                         'Cycle wall layout on the selected piece'],
       [ic('flip-horizontal'),                'Flip',        'Mirror a corner piece to switch turn direction'],
       [ic('rotate-left') + ic('rotate-right'), '±15°',     'Rotate the selected piece in 15° steps'],
+      ['', '+ / −', 'Cycle corner angle or straight length (wraps at min/max)'],
       [ic('content-copy'),                   'Copy',        'Copy the selected piece'],
       [ic('content-paste'),                  'Paste',       'Paste the last copied piece'],
       [ic('delete'),                         'Delete',      'Remove the selected piece from the track'],
@@ -1686,7 +1697,9 @@ export class TrackEditor extends Scene {
     }
 
     if (op.kind === 'move-car') {
-      this.curStartX = wx; this.curStartY = wy;
+      const GRID = 24; // matches the drawn grid + the startX/Y-must-be-multiples-of-24 assumption elsewhere (ghost/AI solver)
+      this.curStartX = Math.round(wx / GRID) * GRID;
+      this.curStartY = Math.round(wy / GRID) * GRID;
       this.updateStartCarImg(); this.drawSelectionOverlay(); this.isDirty = true;
       return;
     }
@@ -2176,20 +2189,15 @@ export class TrackEditor extends Scene {
     this.updateBarrierImg(); this.updateSelectionHighlights(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
   }
 
-  private changePieceFlip(flip: boolean): void {
-    if (this.selection?.kind !== 'piece') return;
-    const idx = this.selection.idx;
-    const p = this.pieces[idx];
-    if (p.type === 'straight') return;
-    this.saveUndo();
-
-    // Build the flipped piece with the same position/rotation as a starting point.
-    let flipped: PlacedPiece = { ...(p as CornerDef & { x: number; y: number; rotation: number }), flip };
-    const newC = connectors(flipped);
-
-    // If any neighbor is snapped to our entry or exit, keep that connector fixed
-    // as the anchor point so the flip doesn't break the connection.
-    const { entry: oldEntry, exit: oldExit } = worldConnectors(p);
+  // Given the old piece at `idx` and a candidate replacement (same shape as
+  // oldPiece but with different flip/angle/size — position/rotation are just
+  // placeholders), re-anchors the candidate so whichever of its connectors a
+  // neighbor is snapped to keeps that connector's world position and heading
+  // fixed; the other connector moves to fit the new shape. Falls back to the
+  // candidate's placeholder position/rotation if no neighbor is snapped.
+  private anchorReshapedPiece(idx: number, oldPiece: PlacedPiece, candidate: PlacedPiece): PlacedPiece {
+    const newC = connectors(candidate);
+    const { entry: oldEntry, exit: oldExit } = worldConnectors(oldPiece);
     for (let i = 0; i < this.pieces.length; i++) {
       if (i === idx) continue;
       const oc = worldConnectors(this.pieces[i]);
@@ -2198,20 +2206,54 @@ export class TrackEditor extends Scene {
       if (Math.hypot(oldEntry.x - oc.exit.x, oldEntry.y - oc.exit.y) < SNAP_R) {
         const newRot = ((oldEntry.heading - newC.entryH) % 360 + 360) % 360;
         const [nex, ney] = rotateCW(newC.entryX, newC.entryY, newRot);
-        flipped = { ...flipped, rotation: newRot, x: oldEntry.x - nex, y: oldEntry.y - ney };
-        break;
+        return { ...candidate, rotation: newRot, x: oldEntry.x - nex, y: oldEntry.y - ney };
       }
 
       // Our exit is snapped to their entry — anchor on exit
       if (Math.hypot(oldExit.x - oc.entry.x, oldExit.y - oc.entry.y) < SNAP_R) {
         const newRot = ((oldExit.heading - newC.exitH) % 360 + 360) % 360;
         const [nxx, nxy] = rotateCW(newC.exitX, newC.exitY, newRot);
-        flipped = { ...flipped, rotation: newRot, x: oldExit.x - nxx, y: oldExit.y - nxy };
-        break;
+        return { ...candidate, rotation: newRot, x: oldExit.x - nxx, y: oldExit.y - nxy };
       }
     }
+    return candidate;
+  }
 
-    this.pieces[idx] = flipped;
+  private changePieceFlip(flip: boolean): void {
+    if (this.selection?.kind !== 'piece') return;
+    const idx = this.selection.idx;
+    const p = this.pieces[idx];
+    if (p.type === 'straight') return;
+    this.saveUndo();
+
+    const candidate: PlacedPiece = { ...(p as CornerDef & { x: number; y: number; rotation: number }), flip };
+    this.pieces[idx] = this.anchorReshapedPiece(idx, p, candidate);
+    this.updateBarrierImg(); this.updateSelectionHighlights(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
+  }
+
+  // Cycles the selected piece's shape variant: corner angle (15°–90°) or
+  // straight length (XS–L), wrapping past the min/max. Bound to +/- keys.
+  private cyclePieceSize(delta: 1 | -1): void {
+    if (this.selection?.kind !== 'piece') return;
+    const idx = this.selection.idx;
+    const p = this.pieces[idx];
+    this.saveUndo();
+
+    if (p.type === 'straight') {
+      const i    = STRAIGHT_SIZES.indexOf(p.size);
+      const next = STRAIGHT_SIZES[(i + delta + STRAIGHT_SIZES.length) % STRAIGHT_SIZES.length];
+      const candidate: PlacedPiece = { ...(p as StraightDef & { x: number; y: number; rotation: number }), size: next };
+      this.pieces[idx] = this.anchorReshapedPiece(idx, p, candidate);
+      const labels: Record<StraightSize, string> = { 25: 'XS', 50: 'S', 75: 'M', 100: 'L' };
+      this.showToast(`Size: ${labels[next]}`);
+    } else {
+      const i    = CORNER_ANGLES.indexOf(p.angle);
+      const next = CORNER_ANGLES[(i + delta + CORNER_ANGLES.length) % CORNER_ANGLES.length];
+      const candidate: PlacedPiece = { ...(p as CornerDef & { x: number; y: number; rotation: number }), angle: next };
+      this.pieces[idx] = this.anchorReshapedPiece(idx, p, candidate);
+      this.showToast(`Angle: ${next}°`);
+    }
+
     this.updateBarrierImg(); this.updateSelectionHighlights(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
   }
 
