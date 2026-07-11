@@ -620,7 +620,9 @@ export class Game extends Scene {
       const r  = container.getBoundingClientRect();
       dragOffX = e.clientX - r.left;
       dragOffY = e.clientY - r.top;
-      container.style.cursor = 'grabbing';
+      container.style.cursor     = 'grabbing';
+      container.style.transition = 'none'; // instant, lag-free follow while dragging
+      container.style.boxShadow  = '0 10px 26px rgba(0,0,0,0.65)';
     });
     canvas.addEventListener('pointermove', (e) => {
       if (!dragging) return;
@@ -637,7 +639,8 @@ export class Game extends Scene {
     canvas.addEventListener('pointerup', () => {
       if (!dragging) return;
       dragging = false;
-      container.style.cursor = '';
+      container.style.cursor    = '';
+      container.style.boxShadow = '';
       if (!hasMoved) return;
       const r    = container.getBoundingClientRect();
       const midX = window.innerWidth  / 2;
@@ -2508,11 +2511,18 @@ export class Game extends Scene {
       if (rb) { rb.style.display = 'none'; }
       const onBottom = this.mmSnap.startsWith('bottom');
       const onLeft   = this.mmSnap.endsWith('-left');
+      // Spring/bounce settle into the new corner. Cleared after it finishes so
+      // a live drag right afterward isn't laggy following the pointer.
+      container.style.transition = [
+        'top 0.35s cubic-bezier(0.34,1.56,0.64,1)', 'bottom 0.35s cubic-bezier(0.34,1.56,0.64,1)',
+        'left 0.35s cubic-bezier(0.34,1.56,0.64,1)', 'right 0.35s cubic-bezier(0.34,1.56,0.64,1)',
+      ].join(',');
       container.style.top    = onBottom ? 'auto' : '48px';
       container.style.bottom = onBottom ? '8px'  : 'auto';
       container.style.left   = onLeft   ? '8px'  : 'auto';
       container.style.right  = onLeft   ? 'auto' : '8px';
       this.mmLastVisible = this.mmSnap;
+      window.setTimeout(() => { container.style.transition = ''; }, 380);
     }
   }
 

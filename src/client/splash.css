@@ -132,7 +132,7 @@
   font-weight: 900;
   letter-spacing: 0.12em;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.1s ease-out;
   box-shadow: 0 0 12px #334488;
   animation: playPulse 2.4s ease-in-out infinite;
 }
@@ -149,6 +149,7 @@
 .play-btn:active {
   background: #0f1030;
   animation-play-state: paused;
+  transform: scale(0.95);
 }
 
 .track-info {
@@ -202,7 +203,7 @@
   font-size: clamp(11px, 3vw, 13px);
   cursor: pointer;
   letter-spacing: 0.04em;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.15s, border-color 0.15s, transform 0.1s ease-out;
 }
 
 .sec-btn:hover,
@@ -210,6 +211,10 @@
   color: #99aaff;
   border-color: #4455aa;
   outline: none;
+}
+
+.sec-btn:active {
+  transform: scale(0.95);
 }
 
 .build-stamp {

@@ -25,3 +25,12 @@ body {
   user-select: none;
   -webkit-user-select: none;
 }
+
+/* Global press feedback for every DOM button in the app (toolbar, palette,
+   overlays, etc.) — scales down 5% on press and springs back on release. */
+button {
+  transition: transform 0.1s ease-out;
+}
+button:active {
+  transform: scale(0.95);
+}

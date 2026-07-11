@@ -2178,10 +2178,49 @@ export class TrackEditor extends Scene {
     this.updateBarrierImg();
     this.selectPiece(idx);
     this.scrollToShowPieces([idx]);
+    this.spawnPiecePop(piece);
     this.isDirty = true;
   }
 
+  // Quick scale-from-zero "drop in" pop at a newly placed piece's location.
+  private spawnPiecePop(piece: PlacedPiece): void {
+    const b = pieceVisibleBounds(piece);
+    const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+    const ring = this.add.graphics();
+    ring.lineStyle(2.5, 0x55ff77, 0.9);
+    ring.strokeCircle(0, 0, 10);
+    ring.setPosition(cx, cy);
+    ring.setDepth(8);
+    ring.setScale(0.1);
+    this.tweens.add({
+      targets: ring,
+      scaleX: 1, scaleY: 1, alpha: { from: 1, to: 0 },
+      duration: 260,
+      ease: 'Back.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+  }
+
+  // Quick shrink-and-fade at a piece's former location right before it's removed.
+  private spawnPieceDeleteFade(piece: PlacedPiece): void {
+    const b = pieceVisibleBounds(piece);
+    const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+    const ring = this.add.graphics();
+    ring.lineStyle(2.5, 0xff8888, 0.9);
+    ring.strokeCircle(0, 0, 14);
+    ring.setPosition(cx, cy);
+    ring.setDepth(8);
+    this.tweens.add({
+      targets: ring,
+      scaleX: 0.1, scaleY: 0.1, alpha: 0,
+      duration: 200,
+      ease: 'Quad.easeIn',
+      onComplete: () => ring.destroy(),
+    });
+  }
+
   private deletePiece(idx: number): void {
+    this.spawnPieceDeleteFade(this.pieces[idx]);
     this.pieces.splice(idx, 1);
     if (this.selection?.kind === 'piece') {
       const si = this.selection.idx;
