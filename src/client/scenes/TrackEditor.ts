@@ -622,7 +622,7 @@ export class TrackEditor extends Scene {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (this.selection) { this.deselectAllWithUndo(); return; }
-        this.scene.start('ModeSelect');
+        this.goBack();
         return;
       }
 
@@ -693,7 +693,7 @@ export class TrackEditor extends Scene {
     backBtn.innerHTML = ic('arrow-left');
     backBtn.title = 'Back';
     backBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#8888ff;font-size:16px;padding:0 6px;height:100%;flex-shrink:0;display:inline-flex;align-items:center;';
-    backBtn.addEventListener('click', () => this.scene.start('ModeSelect'));
+    backBtn.addEventListener('click', () => this.goBack());
 
     const titleEl = document.createElement('div');
     titleEl.style.cssText = 'flex:1;';
@@ -2714,6 +2714,13 @@ export class TrackEditor extends Scene {
     if (!this.isDirty) { this.scene.start('TrackSelect', { activeTab: 'drafts' }); return; }
     this.showConfirm('Discard unsaved changes?', 'Discard',
       () => this.scene.start('TrackSelect', { activeTab: 'drafts' }),
+    );
+  }
+
+  private goBack(): void {
+    if (!this.isDirty) { this.scene.start('ModeSelect'); return; }
+    this.showConfirm('Discard unsaved changes?', 'Discard',
+      () => this.scene.start('ModeSelect'),
     );
   }
 
