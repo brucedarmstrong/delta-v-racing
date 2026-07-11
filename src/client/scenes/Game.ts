@@ -161,6 +161,9 @@ export class Game extends Scene {
   private topBarEl:   HTMLElement | null = null;
   private hudDiv:     HTMLElement | null = null;
   private pauseBtnEl: HTMLElement | null = null;
+  private turnValEl:  HTMLElement | null = null;
+  private crashValEl: HTMLElement | null = null;
+  private scoreValEl: HTMLElement | null = null;
 
   // Minimap state — persisted across sessions
   private mmSnap:        MmSnap = migrateMmSnap(localStorage.getItem('dv-mm-snap'));
@@ -1836,10 +1839,6 @@ export class Game extends Scene {
     }
   }
 
-  private hudString(): string {
-    const c = this.crashes > 0 ? `  ·  ${this.crashes} crash${this.crashes > 1 ? 'es' : ''}` : '';
-    return `Turn ${this.turn}${c}`;
-  }
 
   // ── Camera framing ────────────────────────────────────────────────────────────
 
@@ -2377,35 +2376,75 @@ export class Game extends Scene {
     const bar = document.createElement('div');
     bar.style.cssText = [
       'position:fixed', 'top:0', 'left:0', 'right:0', 'height:40px',
-      'display:flex', 'align-items:center', 'gap:8px', 'padding:0 8px',
+      'display:flex', 'align-items:center', 'justify-content:space-between', 'gap:8px', 'padding:0 8px',
       'background:rgba(8,8,20,0.82)', 'border-bottom:1px solid rgba(80,80,140,0.35)',
       'z-index:999', 'pointer-events:none', 'user-select:none',
     ].join(';');
 
-    const btn = document.createElement('button');
-    btn.style.cssText = [
-      'width:34px', 'height:30px', 'flex-shrink:0',
-      'background:#2244aa', 'border:1.5px solid #6688dd', 'border-radius:5px',
-      'cursor:pointer', 'padding:0', 'pointer-events:auto',
-      'display:flex', 'align-items:center', 'justify-content:center',
-    ].join(';');
-    btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
+    const pillBtn = (svg: string): HTMLButtonElement => {
+      const b = document.createElement('button');
+      b.style.cssText = [
+        'width:34px', 'height:30px', 'flex-shrink:0',
+        'background:#2244aa', 'border:1.5px solid #6688dd', 'border-radius:5px',
+        'cursor:pointer', 'padding:0', 'pointer-events:auto',
+        'display:flex', 'align-items:center', 'justify-content:center',
+      ].join(';');
+      b.innerHTML = svg;
+      return b;
+    };
+
+    const backBtn = pillBtn(`<svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M15 4 L7 12 L15 20" stroke="white" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`);
+    backBtn.addEventListener('click', () => { if (!this.paused && !this.won) this.showPause(); });
+
+    const pauseBtn = pillBtn(`<svg width="18" height="18" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
       <rect x="3"  y="2" width="6" height="18" rx="1" fill="white"/>
       <rect x="13" y="2" width="6" height="18" rx="1" fill="white"/>
-    </svg>`;
-    btn.addEventListener('click', () => { if (!this.paused && !this.won) this.showPause(); });
+    </svg>`);
+    pauseBtn.addEventListener('click', () => { if (!this.paused && !this.won) this.showPause(); });
 
-    const hud = document.createElement('span');
-    hud.style.cssText = 'font:bold 13px/1 monospace;color:#ccccff;letter-spacing:0.02em;';
-    hud.textContent = this.hudString();
+    // ── Stats — TURN / CRASH / SCORE, each a small label over a bold value ─────
+    const stats = document.createElement('div');
+    stats.style.cssText = 'display:flex;align-items:center;gap:14px;';
 
-    bar.appendChild(btn);
-    bar.appendChild(hud);
+    const mkStat = (label: string): HTMLElement => {
+      const col = document.createElement('div');
+      col.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:1px;';
+      const lbl = document.createElement('div');
+      lbl.textContent = label;
+      lbl.style.cssText = 'font:bold 9px Arial,sans-serif;letter-spacing:0.1em;color:#7788aa;';
+      const val = document.createElement('div');
+      val.style.cssText = 'font:bold 17px/1 Arial,sans-serif;color:#eef2ff;';
+      col.appendChild(lbl);
+      col.appendChild(val);
+      stats.appendChild(col);
+      return val;
+    };
+    const divider = () => {
+      const d = document.createElement('div');
+      d.style.cssText = 'width:1px;height:22px;background:rgba(120,130,180,0.35);';
+      stats.appendChild(d);
+    };
+
+    const turnVal = mkStat('TURN');
+    divider();
+    const crashVal = mkStat('CRASH');
+    divider();
+    const scoreVal = mkStat('SCORE');
+
+    bar.appendChild(backBtn);
+    bar.appendChild(stats);
+    bar.appendChild(pauseBtn);
     document.body.appendChild(bar);
 
-    this.topBarEl  = bar;
-    this.pauseBtnEl = btn;
-    this.hudDiv    = hud;
+    this.topBarEl   = bar;
+    this.pauseBtnEl = pauseBtn;
+    this.hudDiv     = stats;
+    this.turnValEl  = turnVal;
+    this.crashValEl = crashVal;
+    this.scoreValEl = scoreVal;
+    this.updateHud();
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -2438,9 +2477,12 @@ export class Game extends Scene {
     this.events.once('shutdown', () => {
       window.removeEventListener('keydown', onKey);
       this.topBarEl?.remove();
-      this.topBarEl  = null;
+      this.topBarEl   = null;
       this.pauseBtnEl = null;
-      this.hudDiv    = null;
+      this.hudDiv     = null;
+      this.turnValEl  = null;
+      this.crashValEl = null;
+      this.scoreValEl = null;
       this.pauseOverlayEl?.remove();
       this.pauseOverlayEl = null;
       this.finishOverlayEl?.remove();
@@ -2487,7 +2529,9 @@ export class Game extends Scene {
 
   private updateHud(): void {
     if (!this.hudDiv) return;
-    this.hudDiv.textContent = this.hudString();
+    if (this.turnValEl)  this.turnValEl.textContent  = String(this.turn);
+    if (this.crashValEl) this.crashValEl.textContent = String(this.crashes);
+    if (this.scoreValEl) this.scoreValEl.textContent = String(this.turn + this.crashes);
     if (this.turn > 0) {
       if (!Game._hudCssInjected) {
         Game._hudCssInjected = true;
