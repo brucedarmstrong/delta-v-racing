@@ -6,12 +6,15 @@ const BG       = 0x0a0a16;
 const SURFACE  = 0x12122a;
 const BORDER   = 0x3a3a6a;
 const HEADER_H = 52;
+const HELP_ZONE_W = 44; // width of the tappable "?" zone in the top-right of the header
 
 export class Leaderboard extends Scene {
   private headerGfx: Phaser.GameObjects.Graphics | null = null;
   private backText:  Phaser.GameObjects.Text     | null = null;
   private titleText: Phaser.GameObjects.Text     | null = null;
+  private helpText:  Phaser.GameObjects.Text     | null = null;
   private listEl:    HTMLElement | null = null;
+  private helpOverlayEl: HTMLElement | null = null;
 
   constructor() { super('Leaderboard'); }
 
@@ -28,19 +31,24 @@ export class Leaderboard extends Scene {
     this.titleText = this.add.text(0, 0, 'Overall Leaderboard', {
       fontFamily: 'Arial Black', fontSize: '18px', color: '#e8e8ff',
     }).setScrollFactor(0).setOrigin(0.5, 0.5).setDepth(11);
+    this.helpText = this.add.text(0, 0, '?', {
+      fontFamily: 'Arial', fontSize: '16px', fontStyle: 'bold', color: '#8888cc',
+    }).setScrollFactor(0).setOrigin(0.5, 0.5).setDepth(11);
 
     this.events.on('shutdown', () => {
       this.listEl?.remove();
       this.listEl = null;
+      this.helpOverlayEl?.remove();
+      this.helpOverlayEl = null;
     });
 
     this.layout();
     this.scale.on('resize', () => this.layout());
 
     this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
-      if (ptr.y < HEADER_H) {
-        this.scene.start('ModeSelect');
-      }
+      if (ptr.y >= HEADER_H) return;
+      if (ptr.x >= this.scale.width - HELP_ZONE_W) { this.showHelp(); return; }
+      this.scene.start('ModeSelect');
     });
 
     this.showLoading();
@@ -59,6 +67,54 @@ export class Leaderboard extends Scene {
     this.headerGfx?.lineBetween(0, HEADER_H, W, HEADER_H);
     this.backText?.setPosition(14, HEADER_H / 2);
     this.titleText?.setPosition(W / 2, HEADER_H / 2);
+    this.helpText?.setPosition(W - HELP_ZONE_W / 2, HEADER_H / 2);
+  }
+
+  private showHelp(): void {
+    this.helpOverlayEl?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.80);z-index:500;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); this.helpOverlayEl = null; } });
+
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#12122a;border:1px solid #3a3a6a;border-radius:10px;width:100%;max-width:340px;padding:16px 16px 20px;position:relative;';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = 'position:absolute;top:10px;right:10px;background:none;border:none;color:#8888aa;font-size:18px;cursor:pointer;padding:4px;line-height:1;';
+    closeBtn.addEventListener('click', () => { overlay.remove(); this.helpOverlayEl = null; });
+
+    const heading = document.createElement('div');
+    heading.textContent = 'How Scoring Works';
+    heading.style.cssText = 'color:#aaaaff;font:bold 15px Arial,sans-serif;margin-bottom:14px;';
+
+    const body = document.createElement('div');
+    body.style.cssText = 'font:13px Arial,sans-serif;color:#ccccdd;line-height:1.6;';
+    body.innerHTML = `
+      <p style="margin:0 0 10px;">Each track has its own leaderboard, ranked by best time. The top 10 finishers on <strong>every</strong> track earn points:</p>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px 8px;margin-bottom:10px;font:12px Arial,sans-serif;text-align:center;">
+        <div style="color:#ffd700;font-weight:bold;">1st: 25</div>
+        <div style="color:#c0c0c0;font-weight:bold;">2nd: 18</div>
+        <div style="color:#cd7f32;font-weight:bold;">3rd: 15</div>
+        <div style="color:#8899bb;">4th: 12</div>
+        <div style="color:#8899bb;">5th: 10</div>
+        <div style="color:#8899bb;">6th: 8</div>
+        <div style="color:#8899bb;">7th: 6</div>
+        <div style="color:#8899bb;">8th: 4</div>
+        <div style="color:#8899bb;">9th: 2</div>
+        <div style="color:#8899bb;">10th: 1</div>
+      </div>
+      <p style="margin:0 0 10px;"><strong style="color:#88ccff;">Points</strong> is the sum of everything you've earned across every track — placing well on more tracks beats being #1 on just one.</p>
+      <p style="margin:0;"><strong style="color:#888899;">Tracks</strong> is how many different tracks you've placed top 10 on.</p>
+    `;
+
+    card.appendChild(closeBtn);
+    card.appendChild(heading);
+    card.appendChild(body);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    this.helpOverlayEl = overlay;
   }
 
   private showLoading() {
