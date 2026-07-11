@@ -554,7 +554,7 @@ export class TrackSelect extends Scene {
     numLabel.style.cssText = 'font:bold 10px Arial,sans-serif;letter-spacing:0.12em;color:#556688;margin-bottom:3px;';
 
     const name = document.createElement('div');
-    name.textContent = track.name.replace(/^Tutorial \d+ — /, '');
+    name.textContent = track.name.replace(/^Tutorial \d+\s*[:—-]\s*/, '');
     name.style.cssText = 'font:bold 16px "Arial Black",Arial,sans-serif;color:#e8e8ff;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
 
     const desc = document.createElement('div');
