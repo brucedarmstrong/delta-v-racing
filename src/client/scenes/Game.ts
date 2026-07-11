@@ -15,6 +15,13 @@ import { PhaserStarField } from '../starfield';
 // ── Grid / camera constants ────────────────────────────────────────────────────
 const gridPx = 24;
 
+// The race grid itself is stationary, but the starfield drifts slowly on its
+// own for a "grid drifting through space" feel — opposite direction from the
+// scrolling background grid on the splash/ModeSelect screens (GRID_DX/GRID_DY
+// there are -3/-8 px/s).
+const STARFIELD_DRIFT_X = 3;
+const STARFIELD_DRIFT_Y = 8;
+
 // Tint + trail colour assigned to each racing ghost slot (up to 3).
 const GHOST_COLORS = [
   { tint: 0x44aaff, trail: 0x44dddd }, // cyan-blue
@@ -255,7 +262,10 @@ export class Game extends Scene {
     this.picking = false;
     this.shownCoachTurns = new Set();
 
-    this.starField = new PhaserStarField(this, { depth: -10, parallax: 0.08, texKey: 'starfield_game' });
+    this.starField = new PhaserStarField(this, {
+      depth: -10, parallax: 0.08, texKey: 'starfield_game',
+      driftX: STARFIELD_DRIFT_X, driftY: STARFIELD_DRIFT_Y,
+    });
 
     this.dotGfx   = this.add.graphics().setDepth(-1);
     this.drawGrid();

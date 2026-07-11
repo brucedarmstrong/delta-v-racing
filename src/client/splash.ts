@@ -189,6 +189,51 @@ function drawStaticThumb(p: ThumbParams): void {
                       p.originX, p.originY, p.scale, p.scale, p.offX, p.offY);
 }
 
+// Draws a miniature version of the game's car shape (see Game.ts
+// makeCarTexture/makeGhostTextures) at (x, y), nose pointing along
+// (dirX, dirY). Local space has the nose at -HH (up) before rotation, same
+// as the full-size texture, so the same rotate-to-heading trick used for the
+// real car/ghost sprites applies here.
+function drawMiniCar(
+  ctx:   CanvasRenderingContext2D,
+  x:     number,
+  y:     number,
+  dirX:  number,
+  dirY:  number,
+  color: string,
+  alpha: number,
+  size:  number,
+): void {
+  const mag = Math.hypot(dirX, dirY) || 1;
+  const angle = Math.atan2(dirX / mag, -dirY / mag); // canvas-rotate angle for nose-up local shape
+  const HW = size * 0.5, HH = size * 0.85;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.globalAlpha = alpha;
+
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(0, -HH);
+  ctx.lineTo(HW, HH);
+  ctx.lineTo(0, HH * 0.35);
+  ctx.lineTo(-HW, HH);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.beginPath();
+  ctx.moveTo(0, -HH + size * 0.06);
+  ctx.lineTo(HW * 0.45, HH * 0.2);
+  ctx.lineTo(0, HH * 0.1);
+  ctx.lineTo(-HW * 0.45, HH * 0.2);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
 // Draws the trail from pts[0] up to the interpolated current position.
 // globalAlpha is multiplied into the trail and dot colours for fade-out.
 function drawGhostTrail(
@@ -205,19 +250,17 @@ function drawGhostTrail(
   const ib  = Math.min(ia + 1, pts.length - 1);
   const hx  = pts[ia].x + (pts[ib].x - pts[ia].x) * frac; // current (head) x
   const hy  = pts[ia].y + (pts[ib].y - pts[ia].y) * frac; // current (head) y
+  const carSize = dotR * 2.6;
 
   if (ia < 0) {
-    // Nothing drawn yet — just the leading dot
-    ctx.beginPath();
-    ctx.arc(pts[0].x, pts[0].y, dotR, 0, Math.PI * 2);
-    ctx.fillStyle = color + Math.round(globalAlpha * 255).toString(16).padStart(2, '0');
-    ctx.fill();
+    // Nothing drawn yet — just the leading car, facing its first move.
+    const first = pts[1] ?? pts[0];
+    drawMiniCar(ctx, pts[0].x, pts[0].y, first.x - pts[0].x, first.y - pts[0].y, color, globalAlpha, carSize);
     return;
   }
 
   const lineAlphaHex = Math.round(LINE_ALPHA * globalAlpha * 255).toString(16).padStart(2, '0');
   const dotAlphaHex  = Math.round(DOT_ALPHA  * globalAlpha * 255).toString(16).padStart(2, '0');
-  const headAlphaHex = Math.round(globalAlpha * 255).toString(16).padStart(2, '0');
 
   // All trail line segments in one batched stroke call
   ctx.beginPath();
@@ -242,11 +285,9 @@ function drawGhostTrail(
   }
   ctx.fill();
 
-  // Leading dot — slightly larger and fully opaque
-  ctx.beginPath();
-  ctx.arc(hx, hy, dotR * 1.4, 0, Math.PI * 2);
-  ctx.fillStyle = color + headAlphaHex;
-  ctx.fill();
+  // Leading marker — a mini car facing the direction of travel, in place of
+  // the plain dot, matching the real car/ghost sprite shape.
+  drawMiniCar(ctx, hx, hy, pts[ib].x - pts[ia].x, pts[ib].y - pts[ia].y, color, globalAlpha, carSize);
 }
 
 function startGhostAnimation(p: ThumbParams, trackId: string): void {

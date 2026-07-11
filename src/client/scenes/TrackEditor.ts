@@ -20,20 +20,39 @@ import type { TrackPayload } from '../track/TrackUpload';
 
 type PalTab = 'straight' | 'tight' | 'big' | 'finish' | 'checkpoint';
 
+// A multi-selection: pieces (by index), the finish line (at most one), and
+// checkpoints (by index). Car start is never part of a multi-selection.
+type MultiSel = { pieces: number[]; finish: boolean; checkpoints: number[] };
+
 type Selection =
   | { kind: 'piece'; idx: number }
+  | ({ kind: 'multi' } & MultiSel)
   | { kind: 'car' }
   | { kind: 'finish' }
   | { kind: 'checkpoint'; idx: number }
   | null;
 
+type SelItem =
+  | { type: 'piece'; idx: number }
+  | { type: 'finish' }
+  | { type: 'checkpoint'; idx: number };
+
 type DragOp =
-  | { kind: 'pan';              sx: number; sy: number; scrollX: number; scrollY: number }
-  | { kind: 'move';             idx: number; offX: number; offY: number }
+  | { kind: 'pan'; sx: number; sy: number; scrollX: number; scrollY: number; tapDeselect?: boolean }
+  | { kind: 'move'; idx: number; offX: number; offY: number; touchTapAddTo?: MultiSel | null }
+  | {
+      kind: 'move-multi';
+      pieces: number[]; finish: boolean; checkpoints: number[];
+      startWX: number; startWY: number;
+      pieceOrigins: { x: number; y: number }[];
+      finishOrigin: { x: number; y: number } | null;
+      checkpointOrigins: { x: number; y: number }[];
+    }
+  | { kind: 'marquee';          startWX: number; startWY: number; startSX: number; startSY: number }
   | { kind: 'rotate';           idx: number; handleLocalAngle: number }
   | { kind: 'move-car' }
-  | { kind: 'move-finish' }
-  | { kind: 'move-checkpoint';  idx: number }
+  | { kind: 'move-finish'; touchTapAddTo?: MultiSel | null }
+  | { kind: 'move-checkpoint'; idx: number; touchTapAddTo?: MultiSel | null }
   | { kind: 'rotate-car' }
   | { kind: 'rotate-finish' }
   | { kind: 'rotate-checkpoint'; idx: number }
@@ -46,6 +65,7 @@ interface EditorSnapshot {
   startX:       number;
   startY:       number;
   startHeading: number;
+  selection:    Selection;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -57,6 +77,11 @@ const MAX_UNDO  = 40;
 const MAX_PIECES = 120;
 const HIT_R_MARKER = 46;
 const HANDLE_HIT_R = 22;   // hit radius for the rotate handle
+// Caps how wide a palette/tab button can grow on wide desktop viewports —
+// flex:1 alone stretches these to fill the row, which is fine at phone
+// widths (where they're naturally this small) but comically huge on a wide
+// or fullscreen desktop window.
+const PAL_BTN_MAX = 84;
 
 const DEFAULT_START_X = 0, DEFAULT_START_Y = 0, DEFAULT_START_H = 180;
 const BG = 0x0a0a16;
@@ -109,6 +134,57 @@ function drawCornerArcOnGfx(
   }
 }
 
+// Tight bounding box of a piece's actually-drawn geometry — used for marquee
+// "fully contained" hit-testing. Unlike trackBounds() (used elsewhere, e.g.
+// for texture sizing, which conservatively bounds a corner by its whole
+// circle), this only covers the swept arc that's actually visible, so a
+// marquee has to surround the piece you can see, not the invisible remainder
+// of the circle its arc belongs to.
+function pieceVisibleBounds(p: PlacedPiece): { x: number; y: number; width: number; height: number } {
+  if (p.type === 'straight') {
+    const half = STRAIGHT_LEN[(p as StraightDef).size] / 2;
+    const rad  = p.rotation * Math.PI / 180;
+    const c = Math.cos(rad), s = Math.sin(rad);
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [lx, ly] of [[-HALF_TRACK, -half], [HALF_TRACK, -half], [HALF_TRACK, half], [-HALF_TRACK, half]] as [number, number][]) {
+      const wx = p.x + lx * c - ly * s;
+      const wy = p.y + lx * s + ly * c;
+      minX = Math.min(minX, wx); maxX = Math.max(maxX, wx);
+      minY = Math.min(minY, wy); maxY = Math.max(maxY, wy);
+    }
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }
+
+  // Corner: tight AABB of the swept annular wedge — the two arc endpoints at
+  // both radii, plus the outer radius at any cardinal direction (0/90/180/270°)
+  // the sweep crosses (the point furthest from center in that direction).
+  const flip   = (p as CornerDef).flip ?? false;
+  const θr     = (p as CornerDef).angle * Math.PI / 180;
+  const pRad   = p.rotation * Math.PI / 180;
+  const wStart = (flip ? 0 : Math.PI) + pRad;
+  const dir    = flip ? -1 : 1;
+  const a0 = wStart, a1 = wStart + dir * θr;
+  const lo = Math.min(a0, a1), hi = Math.max(a0, a1);
+  const { outerR, innerR } = p.type === 'corner' ? TIGHT : BIG;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const consider = (angle: number, r: number) => {
+    const x = p.x + Math.cos(angle) * r, y = p.y + Math.sin(angle) * r;
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  };
+  consider(lo, outerR); consider(lo, innerR);
+  consider(hi, outerR); consider(hi, innerR);
+  for (const cardinal of [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2]) {
+    for (let n = Math.ceil((lo - cardinal) / (2 * Math.PI)); ; n++) {
+      const a = cardinal + n * 2 * Math.PI;
+      if (a > hi) break;
+      if (a >= lo) consider(a, outerR);
+    }
+  }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
 // Handle sits 32px beyond the exit connector, in the same direction.
 // This always ends up at the visible end of the piece (bottom of a straight,
 // tip of a corner arc) so it is never hidden behind another piece.
@@ -135,6 +211,33 @@ function getMarkerHandlePos(mx: number, my: number, rotDeg: number): { x: number
   const r    = rotDeg * Math.PI / 180;
   const dist = HIT_R_MARKER + HANDLE_EXTEND;
   return { x: mx + Math.sin(r) * dist, y: my - Math.cos(r) * dist };
+}
+
+// Draws a small filled arrow at (x, y) pointing in `headingDeg` (same
+// convention as connectors()/getMarkerHandlePos: 0 = north/-y, 90 = east/+x,
+// CW) — used in place of a plain dot to mark a connector, so the direction a
+// piece will extend from (where the next piece would be placed) is visible
+// at a glance, not just which end is which.
+function drawHeadingArrow(
+  g: GameObjects.Graphics,
+  x: number, y: number,
+  headingDeg: number,
+  color: number,
+  alpha: number,
+  size: number,
+): void {
+  const r  = headingDeg * Math.PI / 180;
+  const fx = Math.sin(r), fy = -Math.cos(r); // forward unit vector
+  const px = fy, py = -fx;                   // left-perpendicular unit vector
+  const tipX  = x + fx * size,        tipY  = y + fy * size;
+  const backX = x - fx * size * 0.5,  backY = y - fy * size * 0.5;
+  g.fillStyle(color, alpha);
+  g.beginPath();
+  g.moveTo(tipX, tipY);
+  g.lineTo(backX + px * size * 0.6, backY + py * size * 0.6);
+  g.lineTo(backX - px * size * 0.6, backY - py * size * 0.6);
+  g.closePath();
+  g.fillPath();
 }
 
 // Snap a raw pointer angle (screen atan2, east=0) to the nearest 15° in
@@ -173,6 +276,55 @@ function trySnapPiece(dragged: PlacedPiece, idx: number, all: PlacedPiece[]): Pl
     }
   }
   return null;
+}
+
+// Draws a dashed (marching-ants) outline along a polyline using plain vector
+// line segments — works with Phaser's Graphics object, which has no native
+// canvas-style setLineDash. `offset` animates the dashes.
+//
+// `phase` (position within the current dash/gap cycle) is advanced by adding
+// the exact step just consumed, rather than re-derived via `(dist + t) % period`
+// each iteration — re-deriving it that way lets floating-point rounding put
+// `phase` a hair below a dash/gap boundary, which yields a near-zero remaining
+// step that never meaningfully advances `t`, hanging the loop. Incremental
+// `phase` can't drift the same way, so a boundary is crossed in at most one
+// extra negligible sub-step instead of getting stuck on it forever.
+function drawDashedPolyline(
+  g: GameObjects.Graphics,
+  pts: { x: number; y: number }[],
+  closed: boolean,
+  dash: number,
+  gap: number,
+  offset: number,
+  color: number,
+  alpha: number,
+  lineWidth: number,
+): void {
+  const period = dash + gap;
+  let phase = ((-offset % period) + period) % period;
+  const n = pts.length;
+  const segCount = closed ? n : n - 1;
+  g.lineStyle(lineWidth, color, alpha);
+  for (let i = 0; i < segCount; i++) {
+    const a = pts[i], b = pts[(i + 1) % n];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    if (segLen === 0) continue;
+    let t = 0;
+    while (t < segLen) {
+      const remain = phase < dash ? dash - phase : period - phase;
+      const step  = Math.min(remain, segLen - t);
+      if (phase < dash) {
+        const t0 = t, t1 = t + step;
+        g.lineBetween(
+          a.x + (b.x - a.x) * (t0 / segLen), a.y + (b.y - a.y) * (t0 / segLen),
+          a.x + (b.x - a.x) * (t1 / segLen), a.y + (b.y - a.y) * (t1 / segLen),
+        );
+      }
+      t += step;
+      phase += step;
+      if (phase >= period) phase -= period;
+    }
+  }
 }
 
 // ── Palette icon drawing (DOM canvas) ────────────────────────────────────────
@@ -332,7 +484,7 @@ export class TrackEditor extends Scene {
   private selection:   Selection  = null;
   private snapEnabled              = true;
   private isDirty                  = false;
-  private clipboard:   PlacedPiece | null = null;
+  private clipboard: { pieces: PlacedPiece[]; checkpoints: TrackMarker[] } | null = null;
 
   // Undo / redo
   private undoStack: EditorSnapshot[] = [];
@@ -343,6 +495,12 @@ export class TrackEditor extends Scene {
   private touches    = new Map<number, { x: number; y: number }>();
   private pinchDist  = 0;
   private pinchZoom  = 1;
+
+  // Marquee (rubber-band multi-select) — live end point, updated on every
+  // pointermove so update() can keep animating the dashes while the pointer
+  // holds still mid-drag.
+  private marqueeCurWX = 0;
+  private marqueeCurWY = 0;
 
   // Toast
   private toastEl:        HTMLDivElement | null = null;
@@ -359,11 +517,14 @@ export class TrackEditor extends Scene {
   private markerGfx!:     GameObjects.Graphics;
   private selectionGfx!:  GameObjects.Graphics;
   private connGfx!:       GameObjects.Graphics;
+  private marqueeGfx!:    GameObjects.Graphics;
   private barrierImg:       GameObjects.Image | null = null;
-  private barrierExclude:   number | null            = null;
-  private selectedPieceImg: GameObjects.Image | null = null;
-  private selCanvasTex:     Phaser.Textures.CanvasTexture | null = null;
-  private selDashOffset     = 0;
+  private barrierExclude:   number[] | null          = null;
+  // Pooled marching-ants highlight — one canvas-texture + Image pair per
+  // selected piece, so single- and multi-select both get the same precise
+  // piece-shaped dashed outline (not just a bounding box).
+  private selHighlights: { tex: Phaser.Textures.CanvasTexture; img: GameObjects.Image }[] = [];
+  private selDashOffset  = 0;
   private finishImg:      GameObjects.Image | null = null;
   private checkpointImgs: GameObjects.Image[]      = [];
   private startCarImg:    GameObjects.Image | null = null;
@@ -400,9 +561,8 @@ export class TrackEditor extends Scene {
     this.clipboard     = null;
     this.startCarImg   = null;
     this.barrierExclude = null;
-    // Null both on scene restart — they'll be in a destroyed state already
-    this.selCanvasTex     = null;
-    this.selectedPieceImg = null;
+    // Empty on scene restart — the pool's images will be in a destroyed state already
+    this.selHighlights = [];
 
     this.curStartX = data?.track?.startX      ?? DEFAULT_START_X;
     this.curStartY = data?.track?.startY      ?? DEFAULT_START_Y;
@@ -434,6 +594,7 @@ export class TrackEditor extends Scene {
     this.markerGfx    = this.add.graphics().setDepth(5);
     this.selectionGfx = this.add.graphics().setDepth(8);
     this.connGfx      = this.add.graphics().setDepth(7);
+    this.marqueeGfx   = this.add.graphics().setDepth(9);
 
     this.makeEditorCarTexture();
     this.createHeader();
@@ -460,7 +621,7 @@ export class TrackEditor extends Scene {
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (this.selection) { this.deselectAll(); return; }
+        if (this.selection) { this.deselectAllWithUndo(); return; }
         this.scene.start('ModeSelect');
         return;
       }
@@ -491,6 +652,11 @@ export class TrackEditor extends Scene {
       if (mod && e.key.toLowerCase() === 'v') {
         e.preventDefault();
         this.paste();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'g') {
+        e.preventDefault();
+        this.toggleGroupSelected();
         return;
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -780,8 +946,19 @@ export class TrackEditor extends Scene {
       [ic('content-paste'),                  'Paste',       'Paste the last copied piece'],
       [ic('delete'),                         'Delete',      'Remove the selected piece from the track'],
     ]));
+    card.appendChild(section('Multiple items selected  (desktop)', [
+      ['', 'Drag-select',   'Drag from empty canvas space to rubber-band select everything fully inside the rectangle'],
+      ['', 'Shift+click',   'Add/remove a piece, checkpoint, or the finish line from the selection'],
+      [ic('rotate-left') + ic('rotate-right'), '±15°', 'Rotate the whole selection as a rigid group'],
+      [ic('content-copy') + ic('content-paste'), 'Copy/Paste', 'Copy/paste every selected piece and checkpoint together'],
+      [ic('group'),   'Ctrl+G', 'Group the selection — clicking any one piece afterward selects, drags, and copies the whole group'],
+      [ic('ungroup'), 'Ctrl+G', 'While a group is selected, ungroup it'],
+      [ic('delete'),  'Delete', 'Remove everything selected'],
+    ]));
     card.appendChild(section('Marker selected  (finish / checkpoint)', [
       [ic('rotate-left') + ic('rotate-right'), '±15°',  'Rotate the marker in 15° steps'],
+      [ic('content-copy'),                     'Copy',   'Copy the selected checkpoint (the finish line can\'t be copied — only one is allowed)'],
+      [ic('content-paste'),                    'Paste',  'Paste the last copied checkpoint'],
       [ic('delete'),                           'Delete', 'Remove the finish line or checkpoint'],
     ]));
 
@@ -791,61 +968,79 @@ export class TrackEditor extends Scene {
 
   // ── Barrier texture ─────────────────────────────────────────────────────────
 
-  private updateBarrierImg(excludeIdx: number | null = null): void {
-    this.barrierExclude = excludeIdx;
+  private updateBarrierImg(excludeIdxs: number[] | null = null): void {
+    this.barrierExclude = excludeIdxs;
     if (this.barrierImg) { this.barrierImg.destroy(); this.barrierImg = null; }
-    const drawPieces = excludeIdx !== null
-      ? this.pieces.filter((_, i) => i !== excludeIdx)
+    const drawPieces = excludeIdxs !== null
+      ? this.pieces.filter((_, i) => !excludeIdxs.includes(i))
       : this.pieces;
     if (drawPieces.length === 0) return;
     this.barrierImg = buildTrackTexture(this, drawPieces, NEON_GREEN, '_ed_barriers').setDepth(3);
   }
 
-  // Marching-ants selection outline.  One canvas texture + one Image are kept alive
-  // for the life of the scene.  Only the canvas content and Image position change.
-  // Destroying and re-creating the Image each time causes Phaser's WebGL backend
-  // to silently lose the texture binding after the first remove/recreate cycle.
-  private updateSelectedHighlight(): void {
-    if (this.selection?.kind !== 'piece') {
-      this.selectedPieceImg?.setVisible(false);
-      return;
+  // Marching-ants selection outline(s) — one canvas texture + Image pair per
+  // selected piece, pooled and reused across selection changes. Destroying
+  // and re-creating an Image each time causes Phaser's WebGL backend to
+  // silently lose the texture binding after the first remove/recreate cycle,
+  // so pool slots are only resized (not recreated) when reused for a
+  // similarly-sized piece.
+  private updateSelectionHighlights(): void {
+    const idxs =
+      this.selection?.kind === 'piece' ? [this.selection.idx]
+      : this.selection?.kind === 'multi' ? this.selection.pieces
+      : [];
+
+    while (this.selHighlights.length > idxs.length) {
+      const h = this.selHighlights.pop()!;
+      h.img.destroy();
+      if (this.textures.exists(h.tex.key)) this.textures.remove(h.tex.key);
     }
-    const p = this.pieces[this.selection.idx];
-    if (!p) { this.selectedPieceImg?.setVisible(false); return; }
+    while (this.selHighlights.length < idxs.length) {
+      const key = `_ed_sel_hl_${this.selHighlights.length}`;
+      if (this.textures.exists(key)) this.textures.remove(key);
+      const tex = this.textures.createCanvas(key, 4, 4)!;
+      const img = this.add.image(0, 0, key).setOrigin(0, 0).setDepth(3.5);
+      this.selHighlights.push({ tex, img });
+    }
+
+    for (let k = 0; k < idxs.length; k++) this.layoutHighlightSlot(k, idxs[k]);
+  }
+
+  // Resizes/repositions pool slot `slot` to fit piece `pieceIdx`'s current
+  // bounds, then redraws its dashed outline.
+  private layoutHighlightSlot(slot: number, pieceIdx: number): void {
+    const entry = this.selHighlights[slot];
+    const p     = this.pieces[pieceIdx];
+    if (!entry || !p) return;
 
     const b   = trackBounds([p]);
     const pad = 14;
     const w   = Math.max(4, Math.ceil(b.width  + pad * 2));
     const h   = Math.max(4, Math.ceil(b.height + pad * 2));
-    const key = '_ed_sel_hl';
 
-    // Only remove/recreate when the canvas size must change (different piece family).
-    // When reusing, keep the same Image object — just reposition and show it.
-    if (!this.selCanvasTex || this.selCanvasTex.width !== w || this.selCanvasTex.height !== h) {
+    if (entry.tex.width !== w || entry.tex.height !== h) {
+      const key = entry.tex.key;
       if (this.textures.exists(key)) this.textures.remove(key);
-      this.selCanvasTex = this.textures.createCanvas(key, w, h)!;
-      this.selectedPieceImg?.destroy();
-      this.selectedPieceImg = this.add.image(0, 0, key).setOrigin(0, 0).setDepth(3.5);
-    } else if (!this.selectedPieceImg) {
-      this.selectedPieceImg = this.add.image(0, 0, key).setOrigin(0, 0).setDepth(3.5);
+      entry.tex = this.textures.createCanvas(key, w, h)!;
+      entry.img.setTexture(key);
     }
-
-    this.selectedPieceImg.setPosition(b.x - pad, b.y - pad);
-    this.selectedPieceImg.setVisible(true);
-    this.redrawSelectionDashes();
+    entry.img.setPosition(b.x - pad, b.y - pad);
+    entry.img.setVisible(true);
+    this.redrawHighlightSlot(slot, pieceIdx);
   }
 
-  // Redraws the marching-ants outline at the current selDashOffset.
-  // Called once from updateSelectedHighlight and then every frame from update().
-  private redrawSelectionDashes(): void {
-    if (!this.selCanvasTex || this.selection?.kind !== 'piece') return;
-    const p = this.pieces[this.selection.idx];
-    if (!p) return;
+  // Redraws pool slot `slot`'s dashed outline at the current selDashOffset.
+  // Called from layoutHighlightSlot and then every frame from update().
+  private redrawHighlightSlot(slot: number, pieceIdx: number): void {
+    const entry = this.selHighlights[slot];
+    const p     = this.pieces[pieceIdx];
+    if (!entry || !p) return;
+
     const b   = trackBounds([p]);
     const pad = 14;
-    const ctx = this.selCanvasTex.getContext();
-    const cw  = this.selCanvasTex.width;
-    const ch  = this.selCanvasTex.height;
+    const ctx = entry.tex.getContext();
+    const cw  = entry.tex.width;
+    const ch  = entry.tex.height;
 
     // Hard-reset all state that could have drifted across frames or canvas reuse.
     // Using setTransform instead of save/restore avoids any stack imbalance issues.
@@ -875,7 +1070,7 @@ export class TrackEditor extends Scene {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.setLineDash([]);
 
-    this.selCanvasTex.refresh();
+    entry.tex.refresh();
   }
 
   // ── Marker images ───────────────────────────────────────────────────────────
@@ -945,6 +1140,10 @@ export class TrackEditor extends Scene {
       if (cp) this.drawMarkerRing(cp.x, cp.y, cp.rotation, 0x00ccff);
       return;
     }
+    if (this.selection?.kind === 'multi') {
+      this.drawMultiSelectionMarkers();
+      return;
+    }
     if (this.selection?.kind !== 'piece') return;
 
     const p = this.pieces[this.selection.idx];
@@ -967,31 +1166,60 @@ export class TrackEditor extends Scene {
     g.fillStyle(0xffffff, 1);
     g.fillCircle(h.x, h.y, 4);
 
-    // Connection-point dots (on connGfx so they can be cleared independently)
+    // Connector direction arrows (on connGfx so they can be cleared independently) —
+    // arrows point where the *next* piece placed from the palette would extend,
+    // which is clearer than a plain dot once entry/exit both matter.
     const cg = this.connGfx;
-    cg.fillStyle(0xffee00, 0.9);
-    cg.fillCircle(conns.entry.x, conns.entry.y, 6);
-    cg.fillStyle(0x44ff88, 0.9);
-    cg.fillCircle(conns.exit.x, conns.exit.y, 6);
+    drawHeadingArrow(cg, conns.entry.x, conns.entry.y, conns.entry.heading, 0xffee00, 0.9, 11);
+    drawHeadingArrow(cg, conns.exit.x,  conns.exit.y,  conns.exit.heading,  0x44ff88, 0.9, 11);
 
     // Other pieces' connectors during move drag
     if (this.snapEnabled && this.dragOp?.kind === 'move') {
       for (let i = 0; i < this.pieces.length; i++) {
         if (i === this.selection.idx) continue;
         const oc = worldConnectors(this.pieces[i]);
-        cg.fillStyle(0xff8844, 0.75); cg.fillCircle(oc.exit.x,  oc.exit.y,  5);
-        cg.fillStyle(0x4488ff, 0.75); cg.fillCircle(oc.entry.x, oc.entry.y, 5);
+        drawHeadingArrow(cg, oc.exit.x,  oc.exit.y,  oc.exit.heading,  0xff8844, 0.75, 9);
+        drawHeadingArrow(cg, oc.entry.x, oc.entry.y, oc.entry.heading, 0x4488ff, 0.75, 9);
       }
     }
   }
 
-  private drawMarkerRing(x: number, y: number, rotDeg: number, color: number): void {
+  // Draws a ring (no rotate handle) around each selected finish/checkpoint
+  // marker in a multi-selection. Selected pieces get their own precise
+  // marching-ants outline via the selHighlights pool instead (see
+  // updateSelectionHighlights), not drawn here.
+  private drawMultiSelectionMarkers(): void {
+    if (this.selection?.kind !== 'multi') return;
+    if (this.selection.finish && this.finishMarker) {
+      this.drawMarkerRing(this.finishMarker.x, this.finishMarker.y, this.finishMarker.rotation, 0xffdd00, false);
+    }
+    for (const idx of this.selection.checkpoints) {
+      const cp = this.checkpoints[idx];
+      if (cp) this.drawMarkerRing(cp.x, cp.y, cp.rotation, 0x00ccff, false);
+    }
+  }
+
+  // Rubber-band marquee rectangle drawn while dragging from empty canvas space.
+  private drawMarquee(wx0: number, wy0: number, wx1: number, wy1: number): void {
+    this.marqueeGfx.clear();
+    const x0 = Math.min(wx0, wx1), x1 = Math.max(wx0, wx1);
+    const y0 = Math.min(wy0, wy1), y1 = Math.max(wy0, wy1);
+    this.marqueeGfx.fillStyle(0x00ddff, 0.08);
+    this.marqueeGfx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    const pts = [
+      { x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 },
+    ];
+    drawDashedPolyline(this.marqueeGfx, pts, true, 8, 6, this.selDashOffset, 0x00ddff, 1, 2);
+  }
+
+  private drawMarkerRing(x: number, y: number, rotDeg: number, color: number, withHandle = true): void {
     const r = 38, g = this.selectionGfx;
     g.lineStyle(2, color, 0.9); g.strokeCircle(x, y, r);
     g.fillStyle(color, 1);
     for (const [dx, dy] of [[0,-r],[r,0],[0,r],[-r,0]] as [number,number][]) {
       g.fillCircle(x + dx, y + dy, 3.5);
     }
+    if (!withHandle) return;
     // Rotation handle — identical style to piece handles
     const h = getMarkerHandlePos(x, y, rotDeg);
     g.lineStyle(2, color, 0.6);
@@ -1100,7 +1328,7 @@ export class TrackEditor extends Scene {
       const sel = this.selection!;
       if (sel.kind === 'piece') {
         const p = this.pieces[sel.idx];
-        this.updateBarrierImg(sel.idx);
+        this.updateBarrierImg([sel.idx]);
         this.dragOp = { kind: 'rotate', idx: sel.idx, handleLocalAngle: getHandleLocalAngle(p) };
       } else if (sel.kind === 'car') {
         this.dragOp = { kind: 'rotate-car' };
@@ -1126,9 +1354,20 @@ export class TrackEditor extends Scene {
     // Finish
     if (this.finishMarker &&
         Math.hypot(wx - this.finishMarker.x, wy - this.finishMarker.y) < HIT_R_MARKER) {
+      if (ptr.event.shiftKey) { this.toggleMultiSelectItem({ type: 'finish' }); return; }
+      if (this.selection?.kind === 'multi' && this.selection.finish) {
+        this.startMultiMoveDrag(wx, wy);
+        return;
+      }
+      // Touch has no shift key — tapping while something else is already
+      // selected adds this marker to the selection instead of replacing it,
+      // as long as it turns out to be a tap and not a real drag (checked in
+      // onUp). A real touch drag still just moves the marker, replacing the
+      // selection, same as a mouse click-drag.
+      const touchAddFinish = ptr.wasTouch && this.selection ? this.selectionAsMulti(this.selection) : null;
       this.selectMarker({ kind: 'finish' });
       this.saveUndo();
-      this.dragOp = { kind: 'move-finish' };
+      this.dragOp = { kind: 'move-finish', touchTapAddTo: touchAddFinish };
       return;
     }
 
@@ -1136,9 +1375,15 @@ export class TrackEditor extends Scene {
     for (let i = 0; i < this.checkpoints.length; i++) {
       const cp = this.checkpoints[i];
       if (Math.hypot(wx - cp.x, wy - cp.y) < HIT_R_MARKER) {
+        if (ptr.event.shiftKey) { this.toggleMultiSelectItem({ type: 'checkpoint', idx: i }); return; }
+        if (this.selection?.kind === 'multi' && this.selection.checkpoints.includes(i)) {
+          this.startMultiMoveDrag(wx, wy);
+          return;
+        }
+        const touchAddCp = ptr.wasTouch && this.selection ? this.selectionAsMulti(this.selection) : null;
         this.selectMarker({ kind: 'checkpoint', idx: i });
         this.saveUndo();
-        this.dragOp = { kind: 'move-checkpoint', idx: i };
+        this.dragOp = { kind: 'move-checkpoint', idx: i, touchTapAddTo: touchAddCp };
         return;
       }
     }
@@ -1146,18 +1391,52 @@ export class TrackEditor extends Scene {
     // Piece
     const pidx = this.hitTestPiece(wx, wy);
     if (pidx !== null) {
+      // Shift+click toggles this piece in/out of a multi-selection instead of
+      // starting a drag.
+      if (ptr.event.shiftKey) {
+        this.toggleMultiSelectItem({ type: 'piece', idx: pidx });
+        return;
+      }
+
+      // Clicking an item that's already part of the current multi-selection
+      // drags the whole group together; the selection itself is unchanged.
+      if (this.selection?.kind === 'multi' && this.selection.pieces.includes(pidx)) {
+        this.startMultiMoveDrag(wx, wy);
+        return;
+      }
+
+      // Touch has no shift key — a tap on an unselected piece while something
+      // else is already selected adds it instead of replacing the selection
+      // (resolved in onUp once we know it was a tap, not a drag).
+      const touchAddPiece = ptr.wasTouch && this.selection ? this.selectionAsMulti(this.selection) : null;
       this.selectPiece(pidx);
+
+      // selectPiece() expands to the whole group when pidx belongs to one —
+      // drag that group together rather than falling through to a
+      // single-piece move.
+      if (this.selection?.kind === 'multi') {
+        this.startMultiMoveDrag(wx, wy);
+        return;
+      }
+
       this.saveUndo();
-      this.updateBarrierImg(pidx);
+      this.updateBarrierImg([pidx]);
       const p = this.pieces[pidx];
-      this.dragOp = { kind: 'move', idx: pidx, offX: wx - p.x, offY: wy - p.y };
+      this.dragOp = { kind: 'move', idx: pidx, offX: wx - p.x, offY: wy - p.y, touchTapAddTo: touchAddPiece };
       this.drawSelectionOverlay();
       return;
     }
 
-    // Empty — deselect + pan
-    this.deselectAll();
-    this.dragOp = { kind: 'pan', sx: ptr.x, sy: ptr.y, scrollX: cam.scrollX, scrollY: cam.scrollY };
+    // Empty — on touch devices this is the only way to pan (there's no
+    // middle mouse button), so keep it as a pan there. On mouse it starts a
+    // rubber-band marquee instead; the existing selection is left alone until
+    // release, so a plain click (no real drag) can still deselect.
+    if (ptr.wasTouch) {
+      this.dragOp = { kind: 'pan', sx: ptr.x, sy: ptr.y, scrollX: cam.scrollX, scrollY: cam.scrollY, tapDeselect: true };
+      return;
+    }
+    this.marqueeCurWX = wx; this.marqueeCurWY = wy;
+    this.dragOp = { kind: 'marquee', startWX: wx, startWY: wy, startSX: ptr.x, startSY: ptr.y };
   }
 
   private onMove(ptr: Phaser.Input.Pointer): void {
@@ -1181,6 +1460,39 @@ export class TrackEditor extends Scene {
       return;
     }
 
+    if (op.kind === 'marquee') {
+      this.marqueeCurWX = wx; this.marqueeCurWY = wy;
+      this.drawMarquee(op.startWX, op.startWY, wx, wy);
+      return;
+    }
+
+    if (op.kind === 'move-multi') {
+      const dx = wx - op.startWX, dy = wy - op.startWY;
+      for (let k = 0; k < op.pieces.length; k++) {
+        const i = op.pieces[k];
+        this.pieces[i] = { ...this.pieces[i], x: op.pieceOrigins[k].x + dx, y: op.pieceOrigins[k].y + dy };
+      }
+      if (op.finish && this.finishMarker && op.finishOrigin) {
+        this.finishMarker.x = op.finishOrigin.x + dx;
+        this.finishMarker.y = op.finishOrigin.y + dy;
+        this.updateFinishImg();
+      }
+      for (let k = 0; k < op.checkpoints.length; k++) {
+        const i  = op.checkpoints[k];
+        const cp = this.checkpoints[i];
+        const origin = op.checkpointOrigins[k];
+        if (cp && origin) {
+          cp.x = origin.x + dx; cp.y = origin.y + dy;
+          this.checkpointImgs[i]?.setPosition(cp.x, cp.y);
+        }
+      }
+      this.isDirty = true;
+      // Keep every selected piece's marching-ants outline anchored as it moves
+      for (let k = 0; k < op.pieces.length; k++) this.layoutHighlightSlot(k, op.pieces[k]);
+      this.drawSelectionOverlay();
+      return;
+    }
+
     if (op.kind === 'move') {
       let updated = { ...this.pieces[op.idx], x: wx - op.offX, y: wy - op.offY };
       if (this.snapEnabled) {
@@ -1189,11 +1501,8 @@ export class TrackEditor extends Scene {
       }
       this.pieces[op.idx] = updated;
       this.isDirty = true;
-      // Keep the marching-ants image anchored to the piece as it moves
-      if (this.selectedPieceImg) {
-        const b = trackBounds([updated]);
-        this.selectedPieceImg.setPosition(b.x - 14, b.y - 14);
-      }
+      // Keep the marching-ants outline anchored to the piece as it moves
+      this.layoutHighlightSlot(0, op.idx);
       this.drawSelectionOverlay();
       return;
     }
@@ -1208,8 +1517,8 @@ export class TrackEditor extends Scene {
       this.isDirty = true;
       const angEl = document.getElementById('ed-ctrl-angle');
       if (angEl) angEl.textContent = `${newRot}°`;
-      // Keep selectedPieceImg visible and current so the piece stays visible at the new angle.
-      this.updateSelectedHighlight();
+      // Keep the marching-ants outline visible and current so the piece stays visible at the new angle.
+      this.updateSelectionHighlights();
       this.drawSelectionOverlay();
       return;
     }
@@ -1285,14 +1594,94 @@ export class TrackEditor extends Scene {
       return;
     }
 
+    // Touch-pan-on-empty-space: a real drag just pans (handled live in
+    // onMove); a tap that barely moved deselects, matching the old
+    // single-touch behavior and the mouse marquee's click fallback below.
+    if (this.dragOp?.kind === 'pan' && this.dragOp.tapDeselect) {
+      const op = this.dragOp;
+      this.dragOp = null;
+      if (Math.hypot(ptr.x - op.sx, ptr.y - op.sy) < 6) this.deselectAllWithUndo();
+      return;
+    }
+
+    if (this.dragOp?.kind === 'marquee') {
+      const op = this.dragOp;
+      this.marqueeGfx.clear();
+      this.dragOp = null;
+
+      // A negligible drag distance is treated as a plain click on empty space.
+      const movedPx = Math.hypot(ptr.x - op.startSX, ptr.y - op.startSY);
+      const shiftHeld = ptr.event.shiftKey;
+      if (movedPx < 6) {
+        if (!shiftHeld) this.deselectAllWithUndo();
+        return;
+      }
+
+      const wx = ptr.worldX, wy = ptr.worldY;
+      const x0 = Math.min(op.startWX, wx), x1 = Math.max(op.startWX, wx);
+      const y0 = Math.min(op.startWY, wy), y1 = Math.max(op.startWY, wy);
+      // "Contains" semantics: an item is only selected if it's entirely inside
+      // the marquee, not merely touched by it. A pure overlap test used each
+      // piece's (conservative, circle-based for corners) bounding box, so a
+      // corner piece whose bounds happened to graze the rectangle could get
+      // selected even though its visible arc was nowhere near it.
+      const rectContainsCircle = (mx: number, my: number, r: number) =>
+        mx - r >= x0 && mx + r <= x1 && my - r >= y0 && my + r <= y1;
+
+      const hitPieces: number[] = [];
+      for (let i = 0; i < this.pieces.length; i++) {
+        const b = pieceVisibleBounds(this.pieces[i]);
+        if (b.x >= x0 && b.x + b.width <= x1 && b.y >= y0 && b.y + b.height <= y1) hitPieces.push(i);
+      }
+      const hitFinish = !!this.finishMarker && rectContainsCircle(this.finishMarker.x, this.finishMarker.y, HIT_R_MARKER);
+      const hitCheckpoints: number[] = [];
+      for (let i = 0; i < this.checkpoints.length; i++) {
+        const cp = this.checkpoints[i];
+        if (rectContainsCircle(cp.x, cp.y, HIT_R_MARKER)) hitCheckpoints.push(i);
+      }
+
+      let finalPieces: number[], finalFinish: boolean, finalCheckpoints: number[];
+      if (shiftHeld) {
+        const existing   = this.selectionAsMulti(this.selection);
+        finalPieces      = [...new Set([...existing.pieces, ...hitPieces])];
+        finalFinish      = existing.finish || hitFinish;
+        finalCheckpoints = [...new Set([...existing.checkpoints, ...hitCheckpoints])];
+      } else {
+        finalPieces = hitPieces; finalFinish = hitFinish; finalCheckpoints = hitCheckpoints;
+      }
+      this.setMultiSelection({ pieces: finalPieces, finish: finalFinish, checkpoints: finalCheckpoints });
+      return;
+    }
+
+    // Touch tap-to-add: a tap (not a real drag) on a piece/finish/checkpoint
+    // while something else was already selected adds it to that selection
+    // instead of leaving it as the only thing selected — touch has no shift
+    // key, so this is its only path into a multi-selection. A real drag still
+    // just moves the newly-picked item and replaces the selection (handled by
+    // the generic "commit drag" block below).
+    if (
+      (this.dragOp?.kind === 'move' || this.dragOp?.kind === 'move-finish' || this.dragOp?.kind === 'move-checkpoint')
+      && this.dragOp.touchTapAddTo
+      && Math.hypot(ptr.x - ptr.downX, ptr.y - ptr.downY) < 6
+    ) {
+      const op   = this.dragOp;
+      const base = op.touchTapAddTo;
+      this.dragOp = null;
+      if (op.kind === 'move')             this.setMultiSelection({ pieces: [...base.pieces, op.idx], finish: base.finish, checkpoints: base.checkpoints });
+      else if (op.kind === 'move-finish') this.setMultiSelection({ pieces: base.pieces, finish: true, checkpoints: base.checkpoints });
+      else                                 this.setMultiSelection({ pieces: base.pieces, finish: base.finish, checkpoints: [...base.checkpoints, op.idx] });
+      this.updateBarrierImg();
+      return;
+    }
+
     // Commit drag: rebuild barrier with all pieces, refresh highlight + props.
     // dragOp is nulled BEFORE drawSelectionOverlay so it doesn't draw drag-preview
     // lines (cyan straight/arc outlines) that should only appear while dragging.
-    const endedDrag = this.dragOp?.kind === 'move' || this.dragOp?.kind === 'rotate';
+    const endedDrag = this.dragOp?.kind === 'move' || this.dragOp?.kind === 'rotate' || this.dragOp?.kind === 'move-multi';
     this.dragOp = null;
     if (endedDrag) {
       this.updateBarrierImg();
-      this.updateSelectedHighlight();
+      this.updateSelectionHighlights();
       this.drawSelectionOverlay();
       this.rebuildCtrlRow();
     }
@@ -1301,14 +1690,39 @@ export class TrackEditor extends Scene {
   // ── Selection management ──────────────────────────────────────────────────────
 
   private selectPiece(idx: number): void {
+    // Selecting any piece of a group selects the whole group.
+    const withGroup = this.expandGroupMembership([idx]);
+    if (withGroup.length > 1) {
+      this.setMultiSelection({ pieces: withGroup, finish: false, checkpoints: [] });
+      return;
+    }
     this.selection = { kind: 'piece', idx };
-    this.updateSelectedHighlight();
+    this.updateSelectionHighlights();
     this.rebuildCtrlRow();
     this.drawSelectionOverlay();
   }
 
-  private selectMarker(sel: Exclude<Selection, null | { kind: 'piece' }>): void {
+  // Given a set of piece indices, returns it expanded to include every other
+  // piece sharing a groupId with any of them — grouped pieces are always
+  // selected/moved/deleted/copied together as a unit.
+  private expandGroupMembership(pieceIdxs: number[]): number[] {
+    const groupIds = new Set(pieceIdxs.map(i => this.pieces[i]?.groupId).filter((g): g is string => !!g));
+    if (groupIds.size === 0) return pieceIdxs;
+    const result = new Set(pieceIdxs);
+    for (let i = 0; i < this.pieces.length; i++) {
+      const gid = this.pieces[i].groupId;
+      if (gid && groupIds.has(gid)) result.add(i);
+    }
+    return [...result];
+  }
+
+  private newGroupId(): string {
+    return `grp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  private selectMarker(sel: Exclude<Selection, null | { kind: 'piece' } | { kind: 'multi' }>): void {
     this.selection = sel;
+    this.updateSelectionHighlights(); // clears any leftover piece pool entries
     this.rebuildCtrlRow();
     this.drawSelectionOverlay();
   }
@@ -1317,7 +1731,115 @@ export class TrackEditor extends Scene {
     this.selection = null;
     this.selectionGfx.clear();
     this.connGfx.clear();
-    this.selectedPieceImg?.setVisible(false); // hide but keep alive for reuse
+    this.updateSelectionHighlights(); // trims the highlight pool to empty
+    this.rebuildCtrlRow();
+  }
+
+  // Normalizes a multi-item selection into the right Selection shape: nothing
+  // selected deselects, exactly one item collapses to the precise
+  // single-selection highlight, two or more become a multi-selection.
+  private setMultiSelection(m: MultiSel): void {
+    // Selecting any piece of a group (by marquee, shift-click, paste, etc.)
+    // brings in the rest of that group too.
+    const pieces      = [...new Set(this.expandGroupMembership(m.pieces))].sort((a, b) => a - b);
+    const checkpoints = [...new Set(m.checkpoints)].sort((a, b) => a - b);
+    const finish      = m.finish && !!this.finishMarker;
+    const total = pieces.length + (finish ? 1 : 0) + checkpoints.length;
+
+    if (total === 0) { this.deselectAll(); return; }
+    if (total === 1) {
+      if (pieces.length === 1)      { this.selectPiece(pieces[0]); return; }
+      if (finish)                   { this.selectMarker({ kind: 'finish' }); return; }
+      this.selectMarker({ kind: 'checkpoint', idx: checkpoints[0] });
+      return;
+    }
+    this.selection = { kind: 'multi', pieces, finish, checkpoints };
+    this.updateSelectionHighlights();
+    this.rebuildCtrlRow();
+    this.drawSelectionOverlay();
+  }
+
+  // Converts any current selection into MultiSel shape (car has no multi-select
+  // equivalent, so it maps to "nothing"). Shared by shift-click toggling and
+  // touch's tap-to-add.
+  private selectionAsMulti(sel: Selection): MultiSel {
+    if (sel?.kind === 'multi')      return { pieces: [...sel.pieces], finish: sel.finish, checkpoints: [...sel.checkpoints] };
+    if (sel?.kind === 'piece')      return { pieces: [sel.idx], finish: false, checkpoints: [] };
+    if (sel?.kind === 'finish')     return { pieces: [], finish: true, checkpoints: [] };
+    if (sel?.kind === 'checkpoint') return { pieces: [], finish: false, checkpoints: [sel.idx] };
+    return { pieces: [], finish: false, checkpoints: [] };
+  }
+
+  // Shift+click on a piece, the finish line, or a checkpoint — add/remove it
+  // from the current selection.
+  private toggleMultiSelectItem(item: SelItem): void {
+    const m = this.selectionAsMulti(this.selection);
+    if (item.type === 'piece') {
+      // Toggle the whole group together, not just the clicked piece.
+      const group = this.expandGroupMembership([item.idx]);
+      const allIn = group.every(i => m.pieces.includes(i));
+      m.pieces = allIn ? m.pieces.filter(i => !group.includes(i)) : [...new Set([...m.pieces, ...group])];
+    } else if (item.type === 'finish') {
+      m.finish = !m.finish;
+    } else {
+      m.checkpoints = m.checkpoints.includes(item.idx) ? m.checkpoints.filter(i => i !== item.idx) : [...m.checkpoints, item.idx];
+    }
+    this.setMultiSelection(m);
+  }
+
+  // Starts dragging the entire current multi-selection (pieces + finish +
+  // checkpoints) together, preserving each item's offset from the pointer.
+  private startMultiMoveDrag(wx: number, wy: number): void {
+    if (this.selection?.kind !== 'multi') return;
+    this.saveUndo();
+    const { pieces, finish, checkpoints } = this.selection;
+    const pieceOrigins = pieces.map(i => ({ x: this.pieces[i].x, y: this.pieces[i].y }));
+    const finishOrigin = finish && this.finishMarker ? { x: this.finishMarker.x, y: this.finishMarker.y } : null;
+    const checkpointOrigins = checkpoints.map(i => ({ x: this.checkpoints[i].x, y: this.checkpoints[i].y }));
+    this.updateBarrierImg(pieces);
+    this.dragOp = {
+      kind: 'move-multi', pieces, finish, checkpoints,
+      startWX: wx, startWY: wy, pieceOrigins, finishOrigin, checkpointOrigins,
+    };
+    this.drawSelectionOverlay();
+  }
+
+  // True if `pieceIdxs` is exactly the full membership of one existing group
+  // (not a subset, not a superset, not a mix of groups/ungrouped pieces).
+  private isExactGroup(pieceIdxs: number[]): boolean {
+    if (pieceIdxs.length < 2) return false;
+    const groupIds = new Set(pieceIdxs.map(i => this.pieces[i]?.groupId).filter((g): g is string => !!g));
+    if (groupIds.size !== 1) return false;
+    const [gid] = groupIds;
+    let count = 0;
+    for (const p of this.pieces) if (p.groupId === gid) count++;
+    return count === pieceIdxs.length;
+  }
+
+  // Ctrl+G — group the current multi-selection of pieces into a unit that
+  // always selects/moves/copies together from now on; Ctrl+G again while
+  // that exact group is selected ungroups it. Desktop-only in practice,
+  // since it's a keyboard shortcut with no touch equivalent.
+  private toggleGroupSelected(): void {
+    if (this.selection?.kind !== 'multi' || this.selection.pieces.length < 2) return;
+    const idxs = this.selection.pieces;
+
+    if (this.isExactGroup(idxs)) {
+      this.saveUndo();
+      for (const i of idxs) this.pieces[i] = { ...this.pieces[i], groupId: undefined };
+      this.isDirty = true;
+      this.showToast(`Ungrouped ${idxs.length} pieces`);
+      this.rebuildCtrlRow();
+      return;
+    }
+
+    // Otherwise: group the current selection (overwriting any prior group
+    // membership of its pieces).
+    this.saveUndo();
+    const gid = this.newGroupId();
+    for (const i of idxs) this.pieces[i] = { ...this.pieces[i], groupId: gid };
+    this.isDirty = true;
+    this.showToast(`Grouped ${idxs.length} pieces`);
     this.rebuildCtrlRow();
   }
 
@@ -1346,7 +1868,7 @@ export class TrackEditor extends Scene {
     const idx = this.pieces.length - 1;
     this.updateBarrierImg();
     this.selectPiece(idx);
-    this.scrollToShowPiece(idx);
+    this.scrollToShowPieces([idx]);
     this.isDirty = true;
   }
 
@@ -1361,6 +1883,20 @@ export class TrackEditor extends Scene {
         this.rebuildCtrlRow();
       }
     }
+    this.updateBarrierImg();
+    this.drawSelectionOverlay();
+    this.isDirty = true;
+  }
+
+  // Removes an entire multi-selection at once — pieces, the finish line, and
+  // checkpoints together. Pieces/checkpoints splice from the highest index
+  // down so earlier indices in each list stay valid.
+  private deleteMultiSelection(sel: MultiSel): void {
+    for (const i of [...sel.pieces].sort((a, b) => b - a)) this.pieces.splice(i, 1);
+    if (sel.finish) { this.finishMarker = null; this.updateFinishImg(); }
+    for (const i of [...sel.checkpoints].sort((a, b) => b - a)) this.checkpoints.splice(i, 1);
+    if (sel.checkpoints.length) this.updateCheckpointImgs();
+    this.deselectAll();
     this.updateBarrierImg();
     this.drawSelectionOverlay();
     this.isDirty = true;
@@ -1402,10 +1938,12 @@ export class TrackEditor extends Scene {
       const p = this.pieces[this.selection.idx];
       this.pieces[this.selection.idx] = { ...p, rotation: ((p.rotation + delta) % 360 + 360) % 360 };
       this.updateBarrierImg();
-      this.updateSelectedHighlight();
+      this.updateSelectionHighlights();
       this.drawSelectionOverlay();
       this.rebuildCtrlRow();
       this.isDirty = true;
+    } else if (this.selection?.kind === 'multi') {
+      this.rotateMultiSelection(this.selection, delta);
     } else if (this.selection?.kind === 'car') {
       this.curStartH = ((this.curStartH + delta) % 360 + 360) % 360;
       this.updateStartCarImg(); this.rebuildCtrlRow(); this.isDirty = true;
@@ -1419,11 +1957,61 @@ export class TrackEditor extends Scene {
     this.showToast(delta > 0 ? 'Rotated +15°' : 'Rotated −15°');
   }
 
+  // Bounding-box center of every item in a multi-selection — pieces, the
+  // finish line, and checkpoints together — used as the pivot for group
+  // rotation.
+  private multiSelectionCenter(sel: MultiSel): { cx: number; cy: number } {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    const extend = (x: number, y: number) => {
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    };
+    for (const i of sel.pieces) {
+      const b = trackBounds([this.pieces[i]]);
+      extend(b.x, b.y); extend(b.x + b.width, b.y + b.height);
+    }
+    if (sel.finish && this.finishMarker) extend(this.finishMarker.x, this.finishMarker.y);
+    for (const i of sel.checkpoints) { const cp = this.checkpoints[i]; extend(cp.x, cp.y); }
+    if (!isFinite(minX)) return { cx: 0, cy: 0 };
+    return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+  }
+
+  // Rotates a whole multi-selection as a rigid group — pieces, the finish
+  // line, and checkpoints together — around its combined bounding-box
+  // center, so connected sub-assemblies stay connected.
+  private rotateMultiSelection(sel: MultiSel, delta: number): void {
+    const { cx, cy } = this.multiSelectionCenter(sel);
+    for (const i of sel.pieces) {
+      const p = this.pieces[i];
+      const [rx, ry] = rotateCW(p.x - cx, p.y - cy, delta);
+      this.pieces[i] = { ...p, x: cx + rx, y: cy + ry, rotation: ((p.rotation + delta) % 360 + 360) % 360 };
+    }
+    if (sel.finish && this.finishMarker) {
+      const fm = this.finishMarker;
+      const [rx, ry] = rotateCW(fm.x - cx, fm.y - cy, delta);
+      fm.x = cx + rx; fm.y = cy + ry;
+      fm.rotation = ((fm.rotation + delta) % 360 + 360) % 360;
+      this.updateFinishImg();
+    }
+    for (const i of sel.checkpoints) {
+      const cp = this.checkpoints[i];
+      const [rx, ry] = rotateCW(cp.x - cx, cp.y - cy, delta);
+      cp.x = cx + rx; cp.y = cy + ry;
+      cp.rotation = ((cp.rotation + delta) % 360 + 360) % 360;
+    }
+    if (sel.checkpoints.length) this.updateCheckpointImgs();
+    this.updateBarrierImg();
+    this.updateSelectionHighlights();
+    this.drawSelectionOverlay();
+    this.rebuildCtrlRow();
+    this.isDirty = true;
+  }
+
   private changePieceWalls(walls: WallVariant): void {
     if (this.selection?.kind !== 'piece') return;
     this.saveUndo();
     this.pieces[this.selection.idx] = { ...this.pieces[this.selection.idx], walls };
-    this.updateBarrierImg(); this.updateSelectedHighlight(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
+    this.updateBarrierImg(); this.updateSelectionHighlights(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
   }
 
   private changePieceFlip(flip: boolean): void {
@@ -1462,7 +2050,7 @@ export class TrackEditor extends Scene {
     }
 
     this.pieces[idx] = flipped;
-    this.updateBarrierImg(); this.updateSelectedHighlight(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
+    this.updateBarrierImg(); this.updateSelectionHighlights(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
   }
 
   private deleteSelectedPiece(): void {
@@ -1471,14 +2059,19 @@ export class TrackEditor extends Scene {
     this.showToast('Deleted');
   }
 
-  // Deletes whatever is currently selected — piece, finish, or checkpoint
-  // (car start can't be deleted). Shared by the ctrl-row Delete button and
-  // the Delete/Backspace keyboard shortcut.
+  // Deletes whatever is currently selected — piece(s), finish, and/or
+  // checkpoint(s) (car start can't be deleted). Shared by the ctrl-row
+  // Delete button and the Delete/Backspace keyboard shortcut.
   private deleteSelection(): void {
     const sel = this.selection;
     if (!sel) return;
     if (sel.kind === 'piece') {
       this.deleteSelectedPiece();
+    } else if (sel.kind === 'multi') {
+      this.saveUndo();
+      const n = sel.pieces.length + (sel.finish ? 1 : 0) + sel.checkpoints.length;
+      this.deleteMultiSelection(sel);
+      this.showToast(`Deleted ${n} items`);
     } else if (sel.kind === 'finish') {
       this.saveUndo(); this.finishMarker = null; this.updateFinishImg(); this.deselectAll(); this.isDirty = true;
       this.showToast('Deleted');
@@ -1488,31 +2081,78 @@ export class TrackEditor extends Scene {
     }
   }
 
+  // Copying covers pieces and checkpoints. The finish line is excluded — the
+  // track can only have one, so duplicating it isn't meaningful.
   private copySelected(): void {
-    if (this.selection?.kind !== 'piece') return;
-    this.clipboard = { ...this.pieces[this.selection.idx] };
-    this.showToast('Copied — use Paste in the controls bar');
-    this.rebuildCtrlRow();
+    if (this.selection?.kind === 'piece') {
+      this.clipboard = { pieces: [{ ...this.pieces[this.selection.idx] }], checkpoints: [] };
+      this.showToast('Copied — use Paste in the controls bar');
+      this.rebuildCtrlRow();
+    } else if (this.selection?.kind === 'checkpoint') {
+      const cp = this.checkpoints[this.selection.idx];
+      if (!cp) return;
+      this.clipboard = { pieces: [], checkpoints: [{ ...cp }] };
+      this.showToast('Copied — use Paste in the controls bar');
+      this.rebuildCtrlRow();
+    } else if (this.selection?.kind === 'multi' && (this.selection.pieces.length > 0 || this.selection.checkpoints.length > 0)) {
+      const pieces      = this.selection.pieces.map(i => ({ ...this.pieces[i] }));
+      const checkpoints = this.selection.checkpoints.map(i => ({ ...this.checkpoints[i] }));
+      this.clipboard = { pieces, checkpoints };
+      const n = pieces.length + checkpoints.length;
+      this.showToast(`Copied ${n} item${n === 1 ? '' : 's'} — use Paste in the controls bar`);
+      this.rebuildCtrlRow();
+    }
   }
 
   private paste(): void {
-    if (!this.clipboard) { this.showToast('Nothing to paste'); return; }
-    if (this.pieces.length >= MAX_PIECES) {
+    if (!this.clipboard || (this.clipboard.pieces.length === 0 && this.clipboard.checkpoints.length === 0)) {
+      this.showToast('Nothing to paste');
+      return;
+    }
+    if (this.pieces.length + this.clipboard.pieces.length > MAX_PIECES) {
       this.showToast(`Track limit reached (${MAX_PIECES} pieces)`);
       return;
     }
     this.saveUndo();
-    const copy: PlacedPiece = { ...this.clipboard, x: this.clipboard.x + 60, y: this.clipboard.y + 60 };
-    this.clipboard = { ...copy }; // advance clipboard so each subsequent paste offsets further
-    this.pieces.push(copy);
+    const OFFSET = 60;
+    const startPieceIdx = this.pieces.length;
+    const startCpIdx    = this.checkpoints.length;
+    // Pasted pieces that were grouped in the source stay grouped with each
+    // other, but as a fresh, independent group — not sharing membership with
+    // the pieces they were copied from.
+    const groupIdMap = new Map<string, string>();
+    const pieceCopies = this.clipboard.pieces.map(p => {
+      let groupId = p.groupId;
+      if (groupId) {
+        let mapped = groupIdMap.get(groupId);
+        if (!mapped) { mapped = this.newGroupId(); groupIdMap.set(groupId, mapped); }
+        groupId = mapped;
+      }
+      return { ...p, x: p.x + OFFSET, y: p.y + OFFSET, groupId };
+    });
+    const cpCopies    = this.clipboard.checkpoints.map(c => ({ ...c, x: c.x + OFFSET, y: c.y + OFFSET }));
+    // Advance the clipboard so repeated paste keeps offsetting further.
+    this.clipboard = { pieces: pieceCopies.map(p => ({ ...p })), checkpoints: cpCopies.map(c => ({ ...c })) };
+    this.pieces.push(...pieceCopies);
+    this.checkpoints.push(...cpCopies);
     this.updateBarrierImg();
-    this.selectPiece(this.pieces.length - 1);
-    this.scrollToShowPiece(this.pieces.length - 1);
+    if (cpCopies.length) this.updateCheckpointImgs();
+    const newPieceIdxs = pieceCopies.map((_, i) => startPieceIdx + i);
+    const newCpIdxs    = cpCopies.map((_, i) => startCpIdx + i);
+    this.setMultiSelection({ pieces: newPieceIdxs, finish: false, checkpoints: newCpIdxs });
+    this.scrollToShowPieces(newPieceIdxs, cpCopies.map(c => ({ x: c.x, y: c.y })));
     this.isDirty = true;
-    this.showToast('Pasted');
+    const n = pieceCopies.length + cpCopies.length;
+    this.showToast(n > 1 ? `Pasted ${n} items` : 'Pasted');
   }
 
   // ── Undo / redo ───────────────────────────────────────────────────────────────
+
+  private cloneSelection(sel: Selection): Selection {
+    if (sel?.kind === 'multi') return { kind: 'multi', pieces: [...sel.pieces], finish: sel.finish, checkpoints: [...sel.checkpoints] };
+    if (!sel) return null;
+    return { ...sel };
+  }
 
   private snapshot(): EditorSnapshot {
     return {
@@ -1520,6 +2160,7 @@ export class TrackEditor extends Scene {
       finishMarker: this.finishMarker ? { ...this.finishMarker } : null,
       checkpoints:  this.checkpoints.map(c => ({ ...c })),
       startX:       this.curStartX, startY: this.curStartY, startHeading: this.curStartH,
+      selection:    this.cloneSelection(this.selection),
     };
   }
 
@@ -1529,16 +2170,42 @@ export class TrackEditor extends Scene {
     this.redoStack = [];
   }
 
+  // Deselects, but first — if a multi-selection (a group, potentially
+  // effortful to rebuild via marquee/shift-click/tap) is about to be lost —
+  // pushes an undo snapshot so Ctrl+Z restores it. Used at user-initiated
+  // deselect gestures (empty click/tap, Escape); plain deselectAll() (e.g.
+  // used internally while restoring a snapshot) never pushes its own undo.
+  private deselectAllWithUndo(): void {
+    if (this.selection?.kind === 'multi') this.saveUndo();
+    this.deselectAll();
+  }
+
+  // Applies a selection restored from an undo/redo snapshot, driving the same
+  // visual updates (highlight pool, ctrl row, overlay) the normal selection
+  // helpers do.
+  private applySelection(sel: Selection): void {
+    if (!sel) { this.deselectAll(); return; }
+    if (sel.kind === 'piece') { this.selectPiece(sel.idx); return; }
+    if (sel.kind === 'multi') {
+      this.selection = this.cloneSelection(sel);
+      this.updateSelectionHighlights();
+      this.rebuildCtrlRow();
+      this.drawSelectionOverlay();
+      return;
+    }
+    this.selectMarker(sel);
+  }
+
   private restoreSnapshot(s: EditorSnapshot): void {
     this.pieces       = s.pieces.map(p => ({ ...p }));
     this.finishMarker = s.finishMarker ? { ...s.finishMarker } : null;
     this.checkpoints  = s.checkpoints.map(c => ({ ...c }));
     this.curStartX = s.startX; this.curStartY = s.startY; this.curStartH = s.startHeading;
-    this.deselectAll();
     this.updateBarrierImg();
     this.updateStartCarImg();
     this.updateFinishImg();
     this.updateCheckpointImgs();
+    this.applySelection(s.selection);
     this.isDirty = true;
   }
 
@@ -1591,7 +2258,7 @@ export class TrackEditor extends Scene {
     // Tab row — always at the very bottom
     const tabRow = document.createElement('div');
     tabRow.id = 'ed-tabs';
-    tabRow.style.cssText = 'display:flex;gap:4px;flex-shrink:0;';
+    tabRow.style.cssText = 'display:flex;gap:4px;flex-shrink:0;justify-content:center;';
     el.appendChild(tabRow);
 
     document.body.appendChild(el);
@@ -1627,7 +2294,7 @@ export class TrackEditor extends Scene {
       const active = this.palTab === def.tab;
       const btn = document.createElement('button');
       btn.style.cssText = [
-        'flex:1', 'min-width:0', 'display:flex', 'flex-direction:column',
+        'flex:1', 'min-width:0', `max-width:${PAL_BTN_MAX}px`, 'display:flex', 'flex-direction:column',
         'align-items:center', 'justify-content:center',
         'gap:2px', 'padding:4px 2px 3px', 'cursor:pointer',
         // Rounded top corners only — flat bottom connects to palette edge.
@@ -1677,7 +2344,7 @@ export class TrackEditor extends Scene {
     ): HTMLButtonElement => {
       const btn = document.createElement('button');
       btn.style.cssText = [
-        'flex:1', 'min-width:0', 'display:flex', 'flex-direction:column',
+        'flex:1', 'min-width:0', `max-width:${PAL_BTN_MAX}px`, 'display:flex', 'flex-direction:column',
         'align-items:center', 'justify-content:center',
         'gap:2px', 'padding:3px 2px', 'border-radius:6px', 'cursor:pointer',
         active ? 'background:#1a2a1a;border:1.5px solid #44aa55;'
@@ -1720,7 +2387,7 @@ export class TrackEditor extends Scene {
     const mkSpriteBtn = (src: string, label: string, color: string, displayPx = ICO): HTMLButtonElement => {
       const btn = document.createElement('button');
       btn.style.cssText = [
-        'flex:1', 'min-width:0', 'display:flex', 'flex-direction:column',
+        'flex:1', 'min-width:0', `max-width:${PAL_BTN_MAX * 2}px`, 'display:flex', 'flex-direction:column',
         'align-items:center', 'justify-content:center',
         'gap:4px', 'padding:6px 4px', 'border-radius:6px', 'cursor:pointer',
         `background:#111120;border:1px solid ${color}55;`,
@@ -1748,7 +2415,9 @@ export class TrackEditor extends Scene {
       }
       // Two ghost spacers so each straight button is the same width as a corner button (1/6 of row).
       for (let i = 0; i < 2; i++) {
-        const sp = document.createElement('div'); sp.style.cssText = 'flex:1;min-width:0;'; row.appendChild(sp);
+        const sp = document.createElement('div');
+        sp.style.cssText = `flex:1;min-width:0;max-width:${PAL_BTN_MAX}px;`;
+        row.appendChild(sp);
       }
       el.appendChild(row);
     }
@@ -1827,9 +2496,11 @@ export class TrackEditor extends Scene {
     const showFlip   = (!sel && isCornerTab) || isCornerSel;
     const showWall   = (!sel && isPieceTab)  || !!selPiece;
     const showRotate = !!sel;
-    const showCopy   = !!selPiece;
-    const showDelete = !!selPiece || sel?.kind === 'finish' || sel?.kind === 'checkpoint';
-    const showLabel  = !!sel && sel.kind !== 'piece';
+    const showCopy   = !!selPiece || sel?.kind === 'checkpoint'
+      || (sel?.kind === 'multi' && (sel.pieces.length > 0 || sel.checkpoints.length > 0));
+    const showDelete = !!selPiece || sel?.kind === 'multi' || sel?.kind === 'finish' || sel?.kind === 'checkpoint';
+    const showLabel  = !!sel && sel.kind !== 'piece' && sel.kind !== 'multi';
+    const showMultiCount = sel?.kind === 'multi';
 
     if (!showFlip && !showWall && !showRotate) {
       el.style.display = 'none';
@@ -1890,6 +2561,17 @@ export class TrackEditor extends Scene {
       el.appendChild(lEl);
     }
 
+    // Multi-select item count — leftmost when wall toggle absent
+    if (showMultiCount) {
+      const m = sel as { kind: 'multi' } & MultiSel;
+      const count = m.pieces.length + (m.finish ? 1 : 0) + m.checkpoints.length;
+      const grouped = this.isExactGroup(m.pieces);
+      const lEl = document.createElement('span');
+      lEl.innerHTML = ic(grouped ? 'group' : 'vector-selection', grouped ? `${count} grouped` : `${count} selected`);
+      lEl.style.cssText = 'display:inline-flex;align-items:center;gap:3px;color:#aaaacc;font:bold 12px Arial,sans-serif;flex-shrink:0;padding-right:2px;';
+      el.appendChild(lEl);
+    }
+
     // Flip — sets palFlip (no selection) or piece flip (corner selected)
     if (showFlip) {
       const curFlip = isCornerSel ? ((selPiece as CornerDef).flip ?? false) : this.palFlip;
@@ -1911,21 +2593,31 @@ export class TrackEditor extends Scene {
         sel!.kind === 'car'          ? this.curStartH
         : sel!.kind === 'finish'     ? (this.finishMarker?.rotation ?? 0)
         : sel!.kind === 'checkpoint' ? (this.checkpoints[(sel as { kind: 'checkpoint'; idx: number }).idx]?.rotation ?? 0)
+        : sel!.kind === 'multi'      ? null
         : selPiece!.rotation;
       el.appendChild(mkB(ic('rotate-left'),  'Rotate −15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(-15)));
       const angEl = document.createElement('span');
       angEl.id = 'ed-ctrl-angle';
-      angEl.textContent = `${rot}°`;
+      angEl.textContent = rot === null ? 'group' : `${rot}°`;
       angEl.style.cssText = 'color:#8888aa;font:12px Arial,sans-serif;min-width:34px;text-align:center;flex-shrink:0;';
       el.appendChild(angEl);
       el.appendChild(mkB(ic('rotate-right'), 'Rotate +15°', '#aaaacc', '#111128', '#2a2a44', () => this.rotateSelected(15)));
     }
 
-    // Copy / Paste — pieces only
+    // Group / Ungroup — multi-selections of 2+ pieces only
+    if (sel?.kind === 'multi' && sel.pieces.length >= 2) {
+      const grouped = this.isExactGroup(sel.pieces);
+      el.appendChild(mkB(
+        ic(grouped ? 'ungroup' : 'group'), grouped ? 'Ungroup (Ctrl+G)' : 'Group (Ctrl+G)',
+        '#ccccff', '#22224a', '#6666cc', () => this.toggleGroupSelected(),
+      ));
+    }
+
+    // Copy / Paste — pieces and checkpoints (not the finish line — only one is allowed)
     if (showCopy) {
-      el.appendChild(mkB(ic('content-copy'),  'Copy piece', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
+      el.appendChild(mkB(ic('content-copy'),  'Copy', '#aaaaff', '#0a0a22', '#333366', () => this.copySelected()));
       if (this.clipboard)
-        el.appendChild(mkB(ic('content-paste'), 'Paste copy', '#aaaaff', '#0a0a22', '#333366', () => this.paste()));
+        el.appendChild(mkB(ic('content-paste'), 'Paste', '#aaaaff', '#0a0a22', '#333366', () => this.paste()));
     }
 
     // Delete — pieces + finish + checkpoint (not car start)
@@ -1938,7 +2630,9 @@ export class TrackEditor extends Scene {
 
   private mkRow(): HTMLDivElement {
     const r = document.createElement('div');
-    r.style.cssText = 'display:flex;gap:5px;';
+    // Centered so capped-size palette buttons (see mkCanvasBtn/mkSpriteBtn)
+    // don't just clump against the left edge on wide/fullscreen viewports.
+    r.style.cssText = 'display:flex;gap:5px;justify-content:center;';
     return r;
   }
 
@@ -1968,21 +2662,33 @@ export class TrackEditor extends Scene {
     return cam.scrollY + (cam.height - this.paletteH() + HEADER_H) / (2 * cam.zoom);
   }
 
-  private scrollToShowPiece(idx: number): void {
-    const p = this.pieces[idx];
-    if (!p) return;
+  // Pans just enough to bring every listed piece's walls (plus any extra
+  // marker points, e.g. pasted checkpoints) into view, and does nothing at
+  // all if they're already fully visible — so e.g. pasting a group that's
+  // already on-screen doesn't yank the camera.
+  private scrollToShowPieces(idxs: number[], markerPoints: { x: number; y: number }[] = []): void {
+    let minWX = Infinity, minWY = Infinity, maxWX = -Infinity, maxWY = -Infinity;
+    for (const idx of idxs) {
+      const p = this.pieces[idx];
+      if (!p) continue;
+      // Bounding box of piece center + both connectors, padded by HALF_TRACK
+      // so the track walls (not just the spine) clear the palette and header.
+      const { entry, exit } = worldConnectors(p);
+      for (const pt of [{ x: p.x, y: p.y }, entry, exit]) {
+        minWX = Math.min(minWX, pt.x - HALF_TRACK); maxWX = Math.max(maxWX, pt.x + HALF_TRACK);
+        minWY = Math.min(minWY, pt.y - HALF_TRACK); maxWY = Math.max(maxWY, pt.y + HALF_TRACK);
+      }
+    }
+    for (const pt of markerPoints) {
+      minWX = Math.min(minWX, pt.x - HIT_R_MARKER); maxWX = Math.max(maxWX, pt.x + HIT_R_MARKER);
+      minWY = Math.min(minWY, pt.y - HIT_R_MARKER); maxWY = Math.max(maxWY, pt.y + HIT_R_MARKER);
+    }
+    if (!isFinite(minWX)) return;
+
     const cam = this.cameras.main;
     const W = this.scale.width, H = this.scale.height;
     const pH = this.paletteH();
     const margin = Math.min(W, H - HEADER_H - pH) * 0.12;
-
-    // Bounding box of piece center + both connectors, padded by HALF_TRACK so
-    // the track walls (not just the spine) clear the palette and header.
-    const { entry, exit } = worldConnectors(p);
-    const minWX = Math.min(p.x, entry.x, exit.x) - HALF_TRACK;
-    const maxWX = Math.max(p.x, entry.x, exit.x) + HALF_TRACK;
-    const minWY = Math.min(p.y, entry.y, exit.y) - HALF_TRACK;
-    const maxWY = Math.max(p.y, entry.y, exit.y) + HALF_TRACK;
 
     let { scrollX, scrollY } = cam;
     const z = cam.zoom;
@@ -2072,10 +2778,16 @@ export class TrackEditor extends Scene {
           pieces: this.pieces,
           markers: [this.finishMarker!, ...this.checkpoints],
         };
-        await saveDraft(name, JSON.stringify(payload), this.mineTrackId ?? undefined);
+        const result = await saveDraft(name, JSON.stringify(payload), this.mineTrackId ?? undefined);
+        // Remember the id/name so a later save in this same session updates
+        // this draft instead of creating a duplicate — saving no longer
+        // leaves the editor, so there's no round-trip through TrackSelect to
+        // pick that up otherwise.
+        this.mineTrackId = result.id;
+        this.existingName = name;
         this.isDirty = false;
         overlay.remove();
-        this.scene.start('TrackSelect', { activeTab: 'drafts' });
+        this.showToast('Track saved');
       } catch (err) {
         status.textContent = err instanceof Error ? err.message : 'Save failed — try again.';
         saveBtn.disabled = false; cancelBtn.disabled = false;
@@ -2154,10 +2866,19 @@ export class TrackEditor extends Scene {
   }
 
   override update(_time: number, delta: number): void {
-    // Advance marching-ants dash offset; redraw only when a piece is selected and not being moved
-    if (this.selCanvasTex && this.selection?.kind === 'piece') {
-      this.selDashOffset = (this.selDashOffset + delta * 0.03) % 18;
-      this.redrawSelectionDashes();
+    // Advance the shared marching-ants dash offset whenever something needs it:
+    // one or more selected pieces (highlight pool), or an in-progress marquee drag.
+    const idxs =
+      this.selection?.kind === 'piece' ? [this.selection.idx]
+      : this.selection?.kind === 'multi' ? this.selection.pieces
+      : [];
+    const marquee = this.dragOp?.kind === 'marquee';
+    if (idxs.length === 0 && !marquee) return;
+
+    this.selDashOffset = (this.selDashOffset + delta * 0.03) % 18;
+    for (let k = 0; k < idxs.length; k++) this.redrawHighlightSlot(k, idxs[k]);
+    if (this.dragOp?.kind === 'marquee') {
+      this.drawMarquee(this.dragOp.startWX, this.dragOp.startWY, this.marqueeCurWX, this.marqueeCurWY);
     }
   }
 }

@@ -18,6 +18,14 @@ export interface StarFieldOpts {
    * Default: 0.
    */
   parallax?: number;
+  /**
+   * Constant background drift, in px/second, independent of camera scroll —
+   * gives a "slowly drifting through space" feel even when the camera (and
+   * world) aren't moving. Stars wrap at screen edges same as parallax.
+   * Default: 0.
+   */
+  driftX?: number;
+  driftY?: number;
   /** Unique Phaser texture key — must differ between concurrent scenes. Default: 'phaserStarField'. */
   texKey?:   string;
 }
@@ -25,8 +33,12 @@ export interface StarFieldOpts {
 export class PhaserStarField {
   private readonly scene:    Phaser.Scene;
   private readonly parallax: number;
+  private readonly driftX:   number;
+  private readonly driftY:   number;
   private readonly texKey:   string;
   private readonly depth:    number;
+  private driftOffX = 0;
+  private driftOffY = 0;
   private tex!:    Phaser.Textures.CanvasTexture;
   private img!:    Phaser.GameObjects.Image;
   private rafId  = 0;
@@ -39,6 +51,8 @@ export class PhaserStarField {
   constructor(scene: Phaser.Scene, opts: StarFieldOpts = {}) {
     this.scene    = scene;
     this.parallax = opts.parallax ?? 0;
+    this.driftX   = opts.driftX   ?? 0;
+    this.driftY   = opts.driftY   ?? 0;
     this.texKey   = opts.texKey   ?? 'phaserStarField';
     this.depth    = opts.depth    ?? -5;
 
@@ -122,9 +136,12 @@ export class PhaserStarField {
     const h   = tex.height;
     ctx.clearRect(0, 0, w, h);
 
+    this.driftOffX += this.driftX * dt;
+    this.driftOffY += this.driftY * dt;
+
     const cam  = this.scene.cameras?.main;
-    const offX = cam ? cam.scrollX * this.parallax : 0;
-    const offY = cam ? cam.scrollY * this.parallax : 0;
+    const offX = (cam ? cam.scrollX * this.parallax : 0) + this.driftOffX;
+    const offY = (cam ? cam.scrollY * this.parallax : 0) + this.driftOffY;
 
     // Twinkling dots with parallax wrapping.
     for (const s of this.dots) {

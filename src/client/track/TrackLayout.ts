@@ -19,7 +19,9 @@ export type CornerDef = {
 };
 
 export type PieceDef    = StraightDef | CornerDef;
-export type PlacedPiece = PieceDef & { x: number; y: number; rotation: number };
+// groupId is editor-only metadata (see TrackEditor.ts grouping) — it travels
+// with the piece through save/load but has no effect on gameplay/collision.
+export type PlacedPiece = PieceDef & { x: number; y: number; rotation: number; groupId?: string };
 
 export type TrackDef = {
   startX: number;
