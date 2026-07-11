@@ -15,6 +15,7 @@ import type { TrackMarker } from '../track/convertGmsTrack';
 import type { TrackEntry } from '../tracks/trackRegistry';
 import { saveDraft, fetchMineTrack } from '../track/TrackUpload';
 import { getEditorSettings, setEditorSettings, type EditorSettings } from '../track/EditorSettings';
+import { PhaserStarField } from '../starfield';
 import type { TrackPayload } from '../track/TrackUpload';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -86,6 +87,9 @@ const PAL_BTN_MAX = 84;
 
 const DEFAULT_START_X = 0, DEFAULT_START_Y = 0, DEFAULT_START_H = 180;
 const BG = 0x0a0a16;
+// Same drift as the race screen's starfield (Game.ts).
+const STARFIELD_DRIFT_X = 3;
+const STARFIELD_DRIFT_Y = 8;
 
 // ── Module helpers ─────────────────────────────────────────────────────────────
 
@@ -543,6 +547,7 @@ export class TrackEditor extends Scene {
   private connGfx!:       GameObjects.Graphics;
   private marqueeGfx!:    GameObjects.Graphics;
   private groupOutlineGfx!: GameObjects.Graphics;
+  private starField: PhaserStarField | null = null;
   private barrierImg:       GameObjects.Image | null = null;
   private barrierExclude:   number[] | null          = null;
   // Pooled marching-ants highlight — one canvas-texture + Image pair per
@@ -615,6 +620,11 @@ export class TrackEditor extends Scene {
     cam.setBackgroundColor(BG);
     cam.setZoom(0.65);
     cam.centerOn(DEFAULT_START_X, DEFAULT_START_Y);
+
+    this.starField = new PhaserStarField(this, {
+      depth: -10, parallax: 0.08, texKey: 'starfield_editor',
+      driftX: STARFIELD_DRIFT_X, driftY: STARFIELD_DRIFT_Y,
+    });
 
     // World grid
     const gridGfx = this.add.graphics();
