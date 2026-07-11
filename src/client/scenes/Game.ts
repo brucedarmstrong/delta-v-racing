@@ -2584,8 +2584,11 @@ export class Game extends Scene {
 
   // Top-bar back button — a quicker "leave the race" prompt distinct from the
   // full pause menu (Continue/Restart/racer list) opened by the pause button.
+  // Skips the confirm entirely if no moves (or crashes) have happened yet —
+  // there's nothing to lose.
   private showExitConfirm(): void {
     if (this.paused || this.won) return;
+    if (this.turn === 0) { this.exitToMenu(); return; }
     this.paused           = true;
     this.savedTweenScale  = this.tweens.timeScale;
     this.savedTimeScale   = this.time.timeScale;
