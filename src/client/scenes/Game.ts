@@ -796,7 +796,25 @@ export class Game extends Scene {
     const newVX      = this.velX + dvx;
     const newVY      = this.velY + dvy;
     const headingDeg = Math.atan2(newVX, -newVY) * (180 / Math.PI);
-    this.carImg.setAngle(headingDeg);
+
+    // Anticipation lean: dip a few degrees opposite the turn before snapping
+    // to the new heading, instead of an instant rotation.
+    const prevAngle  = this.carImg.angle;
+    const normDelta  = ((headingDeg - prevAngle + 180) % 360 + 360) % 360 - 180;
+    if (Math.abs(normDelta) > 1) {
+      const leanAngle = prevAngle - Math.sign(normDelta) * 9;
+      this.tweens.add({
+        targets: this.carImg, angle: leanAngle, duration: 45, ease: 'Sine.easeOut',
+        onComplete: () => {
+          this.tweens.add({
+            targets:    this.carImg, angle: prevAngle + normDelta, duration: 135, ease: 'Quad.easeOut',
+            onComplete: () => this.carImg.setAngle(headingDeg),
+          });
+        },
+      });
+    } else {
+      this.carImg.setAngle(headingDeg);
+    }
 
     // Speed lines — drawn into velGfx (cleared at tween start, reset in onComplete).
     const spd       = Math.hypot(newVX, newVY);
@@ -1312,7 +1330,7 @@ export class Game extends Scene {
       'position:fixed', 'inset:0', 'z-index:1002',
       'display:flex', 'align-items:center', 'justify-content:center',
       'background:rgba(0,0,0,0.6)', 'overflow-y:auto', 'overflow-x:hidden', 'padding:16px',
-      'box-sizing:border-box',
+      'box-sizing:border-box', 'opacity:0', 'transition:opacity 0.3s ease-out',
     ].join(';');
 
     const card = document.createElement('div');
@@ -1321,6 +1339,7 @@ export class Game extends Scene {
       'padding:18px 16px 14px', 'width:min(340px,100%)',
       'display:flex', 'flex-direction:column', 'gap:10px',
       'box-shadow:0 8px 32px rgba(0,0,0,0.7)',
+      'transform:translateY(24px) scale(0.94)', 'transition:transform 0.4s cubic-bezier(0.2,0.9,0.3,1.3)',
     ].join(';');
 
     // Score header
@@ -1433,6 +1452,10 @@ export class Game extends Scene {
     overlay.appendChild(card);
     document.body.appendChild(overlay);
     this.finishOverlayEl = overlay;
+    requestAnimationFrame(() => {
+      overlay.style.opacity = '1';
+      card.style.transform = 'translateY(0) scale(1)';
+    });
 
     this.renderRaceResults(contentEl, score);
 
@@ -1612,6 +1635,7 @@ export class Game extends Scene {
         if (data.isPB) {
           const label = data.previousBest === undefined ? 'Uploaded!' : 'New Personal Best!';
           setStatus(`${label} · Rank #${data.rank ?? '?'}`, '#88ccff');
+          this.spawnConfetti();
         } else {
           setStatus(`Your best: ${data.previousBest!.toFixed(2)} · Rank #${data.rank ?? '?'}`, '#8899cc');
         }
@@ -1654,12 +1678,15 @@ export class Game extends Scene {
     container.appendChild(title);
 
     const MEDALS = ['🥇', '🥈', '🥉', '  '];
+    const rows: HTMLElement[] = [];
     racers.forEach((r, i) => {
       const row = document.createElement('div');
       row.style.cssText = [
         'display:flex', 'align-items:baseline', 'gap:8px',
         'padding:4px 6px', 'border-radius:4px', 'font:14px monospace',
         r.isPlayer ? 'background:rgba(68,136,255,0.15)' : '',
+        'opacity:0', 'transform:translateX(-10px)',
+        `transition:opacity 0.25s ease-out ${i * 60}ms, transform 0.25s ease-out ${i * 60}ms`,
       ].join(';');
 
       const medal = document.createElement('span');
@@ -1678,6 +1705,10 @@ export class Game extends Scene {
       row.appendChild(name);
       row.appendChild(scoreEl);
       container.appendChild(row);
+      rows.push(row);
+    });
+    requestAnimationFrame(() => {
+      for (const row of rows) { row.style.opacity = '1'; row.style.transform = 'translateX(0)'; }
     });
 
     const lbBtn = document.createElement('button');
@@ -2416,6 +2447,37 @@ export class Game extends Scene {
       for (const s of this.ghostStates) { s.carImg.destroy(); s.glowImg.destroy(); s.trailGfx.destroy(); }
       this.ghostStates = [];
     });
+  }
+
+  private static _confettiCssInjected = false;
+
+  // Brief confetti burst over the whole viewport — used to celebrate a new personal best.
+  private spawnConfetti(): void {
+    if (!Game._confettiCssInjected) {
+      Game._confettiCssInjected = true;
+      const s = document.createElement('style');
+      s.textContent = `@keyframes confettiFall{0%{transform:translateY(-20px) rotate(0deg);opacity:1}100%{transform:translateY(90vh) rotate(560deg);opacity:0}}`;
+      document.head.appendChild(s);
+    }
+    const colors = ['#ffee00', '#ff6688', '#66ddff', '#88ff88', '#ffaa44', '#cc88ff'];
+    const layer = document.createElement('div');
+    layer.style.cssText = 'position:fixed;inset:0;z-index:1010;pointer-events:none;overflow:hidden;';
+    for (let i = 0; i < 28; i++) {
+      const piece = document.createElement('div');
+      const size = 6 + Math.random() * 5;
+      const startX = 5 + Math.random() * 90;
+      const duration = 1200 + Math.random() * 800;
+      const delay = Math.random() * 300;
+      piece.style.cssText = [
+        'position:absolute', `left:${startX}vw`, 'top:-20px',
+        `width:${size}px`, `height:${size * 0.4}px`,
+        `background:${colors[i % colors.length]}`,
+        `animation:confettiFall ${duration}ms ease-in ${delay}ms forwards`,
+      ].join(';');
+      layer.appendChild(piece);
+    }
+    document.body.appendChild(layer);
+    setTimeout(() => layer.remove(), 2300);
   }
 
   private static _hudCssInjected = false;
