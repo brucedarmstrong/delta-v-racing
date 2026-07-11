@@ -544,12 +544,12 @@ api.post('/track', async (c) => {
 });
 
 api.post('/seed-tracks', async (c) => {
-  let body: { secret: string; tracks: Array<{ id: string; name: string; author: string; data: string; uploadedAt: number }> };
+  if (!(await isModerator())) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Moderator access required' }, 403);
+  }
+  let body: { tracks: Array<{ id: string; name: string; author: string; data: string; uploadedAt: number }> };
   try { body = await c.req.json(); } catch {
     return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON' }, 400);
-  }
-  if (body.secret !== 'dv-seed-2026') {
-    return c.json<ErrorResponse>({ status: 'error', message: 'Forbidden' }, 403);
   }
   for (const t of body.tracks) {
     const record = JSON.stringify({ id: t.id, name: t.name, author: t.author, uploadedAt: t.uploadedAt, data: t.data });
@@ -557,6 +557,42 @@ api.post('/seed-tracks', async (c) => {
     await redis.zAdd('tracks:community', { score: t.uploadedAt, member: t.id });
   }
   return c.json({ type: 'seed_tracks', count: body.tracks.length });
+});
+
+// Bulk-import player leaderboard ghosts (e.g. migrating from a dev environment
+// to production). Unlike POST /ghost, this writes an explicit username rather
+// than the current session's, so it's restricted to subreddit moderators.
+api.post('/seed-ghosts', async (c) => {
+  if (!(await isModerator())) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Moderator access required' }, 403);
+  }
+  let body: { ghosts: Array<{ trackId: string; username: string; score: number; ghost: string }> };
+  try { body = await c.req.json(); } catch {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON' }, 400);
+  }
+  for (const g of body.ghosts) {
+    await redis.set(`ghost:${g.trackId}:${g.username}`, g.ghost);
+    await redis.zAdd(`lb:${g.trackId}`, { score: g.score, member: g.username });
+    await redis.hSet('lb:tracks', { [g.trackId]: '1' });
+  }
+  return c.json({ type: 'seed_ghosts', count: body.ghosts.length });
+});
+
+// Bulk-import AI ghosts (per track + skill level). Also mod-only, since it's
+// only ever meant to be called from the migration tooling, not the client app.
+api.post('/seed-ai-ghosts', async (c) => {
+  if (!(await isModerator())) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Moderator access required' }, 403);
+  }
+  let body: { ghosts: Array<{ trackId: string; skill: AiSkillLevel; ghost: string }> };
+  try { body = await c.req.json(); } catch {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON' }, 400);
+  }
+  for (const g of body.ghosts) {
+    if (!VALID_SKILLS.has(g.skill)) continue;
+    await redis.set(`ai-ghost:${g.trackId}:${g.skill}`, g.ghost);
+  }
+  return c.json({ type: 'seed_ai_ghosts', count: body.ghosts.length });
 });
 
 api.get('/tracks/community', async (c) => {
@@ -610,15 +646,19 @@ api.get('/tracks/community', async (c) => {
 
 // ── Mod endpoints ─────────────────────────────────────────────────────────────
 
-api.get('/user/is-mod', async (c) => {
+async function isModerator(): Promise<boolean> {
   const uname = context.username;
-  if (!uname) return c.json<IsModResponse>({ type: 'is_mod', isMod: false });
+  if (!uname) return false;
   try {
     const mods = await reddit.getModerators({ subredditName: context.subredditName!, username: uname }).all();
-    return c.json<IsModResponse>({ type: 'is_mod', isMod: mods.length > 0 });
+    return mods.length > 0;
   } catch {
-    return c.json<IsModResponse>({ type: 'is_mod', isMod: false });
+    return false;
   }
+}
+
+api.get('/user/is-mod', async (c) => {
+  return c.json<IsModResponse>({ type: 'is_mod', isMod: await isModerator() });
 });
 
 api.delete('/community-track/:id', async (c) => {

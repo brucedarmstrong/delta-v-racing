@@ -86,7 +86,7 @@ export async function seedCommunityTracks(
   const res = await fetch('/api/seed-tracks', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ secret: 'dv-seed-2026', tracks }),
+    body:    JSON.stringify({ tracks }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }

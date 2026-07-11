@@ -317,9 +317,10 @@ export class TrackSelect extends Scene {
         }));
       }
 
-      // Seed button: always visible when library has fewer tracks than the
-      // standard set (handles the case where some tracks exist from testing).
-      if (isLoggedIn && this.communityLoaded && this.communityTotal < SEED_COUNT && !this.communityQuery && !this.mineFilter) {
+      // Seed button: mod-only (server enforces this too) — visible when library
+      // has fewer tracks than the standard set (handles the case where some
+      // tracks exist from testing).
+      if (isLoggedIn && this.isMod && this.communityLoaded && this.communityTotal < SEED_COUNT && !this.communityQuery && !this.mineFilter) {
         const seedBtn = document.createElement('button');
         seedBtn.textContent = '⊕ Seed Library';
         seedBtn.style.cssText = [
