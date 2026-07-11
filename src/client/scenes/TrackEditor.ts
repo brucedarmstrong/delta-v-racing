@@ -3128,22 +3128,28 @@ export class TrackEditor extends Scene {
     const cam = this.cameras.main;
     const W = this.scale.width, H = this.scale.height;
     const pH = this.paletteH();
-    const margin = Math.min(W, H - HEADER_H - pH) * 0.12;
 
     let { scrollX, scrollY } = cam;
     const z = cam.zoom;
 
-    const sx0 = (minWX - scrollX) * z;
-    const sx1 = (maxWX - scrollX) * z;
-    if (sx0 < margin)       scrollX -= (margin - sx0) / z;
-    if (sx1 > W - margin)   scrollX += (sx1 - (W - margin)) / z;
+    // Don't pan at all if the piece is already fully visible in the raw play
+    // area (no comfort padding) — only reach for the camera when it's
+    // actually clipped by the header/palette or off-screen.
+    const rawSx0 = (minWX - scrollX) * z, rawSx1 = (maxWX - scrollX) * z;
+    const rawSy0 = (minWY - scrollY) * z, rawSy1 = (maxWY - scrollY) * z;
+    const fullyVisible = rawSx0 >= 0 && rawSx1 <= W && rawSy0 >= HEADER_H && rawSy1 <= H - pH;
+    if (fullyVisible) return;
+
+    // Once a pan is actually needed, land with some breathing room instead
+    // of flush against the edge.
+    const margin = Math.min(W, H - HEADER_H - pH) * 0.12;
+    if (rawSx0 < margin)     scrollX -= (margin - rawSx0) / z;
+    if (rawSx1 > W - margin) scrollX += (rawSx1 - (W - margin)) / z;
 
     const topBound = HEADER_H + margin;
     const botBound = H - pH - margin;
-    const sy0 = (minWY - scrollY) * z;
-    const sy1 = (maxWY - scrollY) * z;
-    if (sy0 < topBound)     scrollY -= (topBound - sy0) / z;
-    if (sy1 > botBound)     scrollY += (sy1 - botBound) / z;
+    if (rawSy0 < topBound)   scrollY -= (topBound - rawSy0) / z;
+    if (rawSy1 > botBound)   scrollY += (rawSy1 - botBound) / z;
 
     cam.setScroll(scrollX, scrollY);
   }

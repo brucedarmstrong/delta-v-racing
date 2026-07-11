@@ -47,6 +47,12 @@ export class PhaserStarField {
   private shoots: ShootStar[] = [];
   private shootCD = 4000 + Math.random() * 4000;
   private readonly ANGLE = Math.random() * Math.PI * 2;
+  private destroyed = false;
+  private readonly onResize = (sz: { width: number; height: number }): void => {
+    if (this.destroyed) return;
+    this.buildTex(sz.width, sz.height);
+    this.seedStars(sz.width, sz.height);
+  };
 
   constructor(scene: Phaser.Scene, opts: StarFieldOpts = {}) {
     this.scene    = scene;
@@ -60,10 +66,9 @@ export class PhaserStarField {
     this.buildTex(w, h);
     this.seedStars(w, h);
 
-    scene.scale.on('resize', (sz: { width: number; height: number }) => {
-      this.buildTex(sz.width, sz.height);
-      this.seedStars(sz.width, sz.height);
-    });
+    // scene.scale is the game-wide ScaleManager, not scene-scoped — a listener
+    // added here outlives this scene unless explicitly removed in destroy().
+    scene.scale.on('resize', this.onResize);
     scene.events.once('shutdown', () => this.destroy());
 
     const tick = (now: number) => {
@@ -75,6 +80,8 @@ export class PhaserStarField {
   }
 
   private buildTex(w: number, h: number): void {
+    if (this.destroyed) return;
+    if (this.img && !this.img.active) return; // defensive: image destroyed out from under us
     const pw = Math.max(1, Math.ceil(w));
     const ph = Math.max(1, Math.ceil(h));
     if (this.scene.textures.exists(this.texKey)) this.scene.textures.remove(this.texKey);
@@ -129,9 +136,11 @@ export class PhaserStarField {
     const dt = this.lastT ? Math.min((now - this.lastT) / 1000, 0.1) : 0;
     this.lastT = now;
 
+    if (this.destroyed) return;
     const tex = this.tex;
     if (!tex) return;
     const ctx = tex.getContext();
+    if (!ctx) return;
     const w   = tex.width;
     const h   = tex.height;
     ctx.clearRect(0, 0, w, h);
@@ -197,8 +206,13 @@ export class PhaserStarField {
   }
 
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     cancelAnimationFrame(this.rafId);
     this.rafId = 0;
+    // scene.scale is the game-wide ScaleManager — this listener must be removed
+    // explicitly or it outlives the scene and fires against destroyed objects.
+    try { this.scene.scale.off('resize', this.onResize); } catch { /* scale manager may already be gone */ }
     if (this.img?.active) this.img.destroy();
     try {
       if (this.scene.textures.exists(this.texKey)) this.scene.textures.remove(this.texKey);
