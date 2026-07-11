@@ -2396,7 +2396,7 @@ export class Game extends Scene {
     const backBtn = pillBtn(`<svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
       <path d="M15 4 L7 12 L15 20" stroke="white" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>`);
-    backBtn.addEventListener('click', () => { if (!this.paused && !this.won) this.showPause(); });
+    backBtn.addEventListener('click', () => { if (!this.paused && !this.won) this.showExitConfirm(); });
 
     const pauseBtn = pillBtn(`<svg width="18" height="18" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
       <rect x="3"  y="2" width="6" height="18" rx="1" fill="white"/>
@@ -2580,6 +2580,61 @@ export class Game extends Scene {
     if (this.topBarEl)      this.topBarEl.style.display      = 'none';
     this.pauseOverlayEl = this.buildPauseDOM();
     document.body.appendChild(this.pauseOverlayEl);
+  }
+
+  // Top-bar back button — a quicker "leave the race" prompt distinct from the
+  // full pause menu (Continue/Restart/racer list) opened by the pause button.
+  private showExitConfirm(): void {
+    if (this.paused || this.won) return;
+    this.paused           = true;
+    this.savedTweenScale  = this.tweens.timeScale;
+    this.savedTimeScale   = this.time.timeScale;
+    this.tweens.timeScale = 0;
+    this.time.timeScale   = 0;
+    if (this.mmContainer)   this.mmContainer.style.display   = 'none';
+    if (this.topBarEl)      this.topBarEl.style.display      = 'none';
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:1002',
+      'background:rgba(0,0,0,0.65)',
+      'display:flex', 'align-items:center', 'justify-content:center',
+    ].join(';');
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = [
+      'background:#111130', 'border:1.5px solid #5555aa', 'border-radius:10px',
+      'width:min(300px,calc(100% - 24px))', 'padding:18px 16px 14px',
+      'display:flex', 'flex-direction:column', 'gap:10px', 'box-sizing:border-box',
+    ].join(';');
+
+    const title = document.createElement('div');
+    title.textContent = 'Leave Race?';
+    title.style.cssText = 'font:bold 18px "Arial Black",Arial,sans-serif;color:#e8e8ff;text-align:center;';
+
+    const body = document.createElement('div');
+    body.textContent = 'Your progress on this run will be lost.';
+    body.style.cssText = 'font:13px Arial,sans-serif;color:#9999cc;text-align:center;';
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:8px;margin-top:4px;';
+
+    const makeBtn = (label: string, color: string, bg: string, border: string, onClick: () => void) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = `flex:1;padding:12px 0;background:${bg};border:1px solid ${border};border-radius:8px;color:${color};font:bold 14px Arial,sans-serif;cursor:pointer;`;
+      b.addEventListener('click', onClick);
+      return b;
+    };
+    actions.appendChild(makeBtn('Cancel', '#ccccee', '#1a1a3a', '#4444aa', () => this.resumeGame()));
+    actions.appendChild(makeBtn('Leave',  '#ff8888', '#2a1010', '#663333', () => this.clearPauseAndGo(() => this.exitToMenu())));
+
+    dialog.appendChild(title);
+    dialog.appendChild(body);
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    this.pauseOverlayEl = overlay;
   }
 
   private resumeGame(): void {
