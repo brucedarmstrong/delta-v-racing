@@ -275,6 +275,25 @@ function trySnapPiece(dragged: PlacedPiece, idx: number, all: PlacedPiece[]): Pl
       const [nxx, nxy] = rotateCW(dc.exitX, dc.exitY, newRot);
       return { ...dragged, rotation: newRot, x: oc.entry.x - nxx, y: oc.entry.y - nxy };
     }
+
+    // Nose-to-nose: dragged.entry butts against other.entry — the two pieces
+    // face opposite directions at the shared point, so headings are 180°
+    // apart rather than equal.
+    if (Math.hypot(entryW.x - oc.entry.x, entryW.y - oc.entry.y) < SNAP_R) {
+      const newRot = ((oc.entry.heading + 180 - dc.entryH) % 360 + 360) % 360;
+      if (newRot !== dragged.rotation) continue;
+      const [nex, ney] = rotateCW(dc.entryX, dc.entryY, newRot);
+      return { ...dragged, rotation: newRot, x: oc.entry.x - nex, y: oc.entry.y - ney };
+    }
+
+    // Tail-to-tail: dragged.exit butts against other.exit — same idea, 180°
+    // apart at the shared point.
+    if (Math.hypot(exitW.x - oc.exit.x, exitW.y - oc.exit.y) < SNAP_R) {
+      const newRot = ((oc.exit.heading + 180 - dc.exitH) % 360 + 360) % 360;
+      if (newRot !== dragged.rotation) continue;
+      const [nxx, nxy] = rotateCW(dc.exitX, dc.exitY, newRot);
+      return { ...dragged, rotation: newRot, x: oc.exit.x - nxx, y: oc.exit.y - nxy };
+    }
   }
   return null;
 }
@@ -870,6 +889,7 @@ export class TrackEditor extends Scene {
       return b;
     };
 
+    menu.appendChild(item('file-outline', 'New',        () => this.newTrack()));
     menu.appendChild(item('folder-open',  'My Drafts',  () => this.openDrafts()));
     menu.appendChild(item('information',  'Track Info', () => this.showInfo()));
     menu.appendChild(item('help-circle',  'Help',       () => this.showHelp()));
@@ -1156,7 +1176,7 @@ export class TrackEditor extends Scene {
       [ic('play'),               'Test',   'Test drive the current track'],
       [ic('content-save'),       'Save',   'Save and publish the track'],
       [ic('vector-selection'),   'Select', 'Toggle Select Mode — drag from empty space to rubber-band select a group (normally that drag just pans the map)'],
-      ['⋮',                      'More',   'Drafts, Track Info, Help, Options'],
+      ['⋮',                      'More',   'New, Drafts, Track Info, Help, Options'],
     ]));
     card.appendChild(section('Palette — nothing selected', [
       ['', 'Walls',  'Default wall layout for new pieces: Both walls / Outer only / Inner only'],
@@ -3088,6 +3108,17 @@ export class TrackEditor extends Scene {
     if (!this.isDirty) { this.scene.start('ModeSelect'); return; }
     this.showConfirm('Discard unsaved changes?', 'Discard',
       () => this.scene.start('ModeSelect'),
+    );
+  }
+
+  // Clears the track currently being edited and starts fresh — a full scene
+  // restart (same entry point as opening the editor with nothing loaded) so
+  // every piece of state (pieces, markers, undo stack, draft id, DOM) resets
+  // cleanly rather than trying to hand-unwind it all in place.
+  private newTrack(): void {
+    if (!this.isDirty) { this.scene.start('TrackEditor'); return; }
+    this.showConfirm('Discard unsaved changes?', 'Discard',
+      () => this.scene.start('TrackEditor'),
     );
   }
 
