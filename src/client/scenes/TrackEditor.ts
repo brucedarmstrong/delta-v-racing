@@ -20,7 +20,7 @@ import type { TrackPayload } from '../track/TrackUpload';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type PalTab = 'straight' | 'tight' | 'big' | 'finish' | 'checkpoint';
+type PalTab = 'straight' | 'corner' | 'finish' | 'checkpoint';
 
 // A multi-selection: pieces (by index), the finish line (at most one), and
 // checkpoints (by index). Car start is never part of a multi-selection.
@@ -540,6 +540,9 @@ export class TrackEditor extends Scene {
   private palWalls: WallVariant = 'both';
   private palFlip   = false;
   private palAngle: CornerAngle  = 90;
+  // Which corner tightness new corner pieces get placed as — the Corner tab
+  // covers all tightnesses now instead of a separate tab per size.
+  private palCornerFamily: CornerFamily = 'corner';
 
   // Phaser objects
   private markerGfx!:     GameObjects.Graphics;
@@ -1189,8 +1192,9 @@ export class TrackEditor extends Scene {
       ['⋮',                      'More',   'New, Drafts, Track Info, Help, Options'],
     ]));
     card.appendChild(section('Palette — nothing selected', [
-      ['', 'Walls',  'Default wall layout for new pieces: Both walls / Outer only / Inner only'],
-      ['', 'Flip',   'Default turn direction for new corners: right turn / left turn'],
+      ['', 'Walls',      'Default wall layout for new pieces: Both walls / Outer only / Inner only'],
+      ['', 'Flip',       'Default turn direction for new corners: right turn / left turn'],
+      ['', 'Tightness',  'Default tightness for new corners, on the Corner tab: Tight / Big'],
     ]));
     card.appendChild(section('Piece selected', [
       ['', 'Walls',                                         'Cycle wall layout on the selected piece'],
@@ -2677,8 +2681,7 @@ export class TrackEditor extends Scene {
     const ICO = 36;
     const defs: TabDef[] = [
       { tab: 'straight',   label: 'Straight', draw: (c, g) => drawStraightIcon(c, 75, 'both', g) },
-      { tab: 'tight',      label: 'Tight',    draw: (c, g) => drawCornerIcon(c, 'corner',     90, false, 'both', g) },
-      { tab: 'big',        label: 'Big',      draw: (c, g) => drawCornerIcon(c, 'big_corner', 90, false, 'both', g) },
+      { tab: 'corner',     label: 'Corner',   draw: (c, g) => drawCornerIcon(c, this.palCornerFamily, 90, false, 'both', g) },
       { tab: 'finish',     label: 'Finish',   imgBase: 'assets/markers/tile_finish_' },
       { tab: 'checkpoint', label: 'Chkpt',    imgBase: 'assets/markers/tile_checkpoint_' },
     ];
@@ -2815,28 +2818,15 @@ export class TrackEditor extends Scene {
       el.appendChild(row);
     }
 
-    // ─ Tight corner ─
-    if (this.palTab === 'tight') {
+    // ─ Corner (all tightnesses) ─
+    if (this.palTab === 'corner') {
       const row = this.mkRow(); row.style.gap = '3px';
+      const family = this.palCornerFamily;
       for (const ang of CORNER_ANGLES) {
-        const b = mkCanvasBtn((c, g) => drawCornerIcon(c, 'corner', ang, this.palFlip, this.palWalls, g), `${ang}°`, false);
+        const b = mkCanvasBtn((c, g) => drawCornerIcon(c, family, ang, this.palFlip, this.palWalls, g), `${ang}°`, false);
         b.addEventListener('click', () => {
           this.palAngle = ang;
-          this.addPieceFromPalette({ type:'corner', angle:ang, walls:this.palWalls, flip:this.palFlip });
-        });
-        row.appendChild(b);
-      }
-      el.appendChild(row);
-    }
-
-    // ─ Big corner ─
-    if (this.palTab === 'big') {
-      const row = this.mkRow(); row.style.gap = '3px';
-      for (const ang of CORNER_ANGLES) {
-        const b = mkCanvasBtn((c, g) => drawCornerIcon(c, 'big_corner', ang, this.palFlip, this.palWalls, g), `${ang}°`, false);
-        b.addEventListener('click', () => {
-          this.palAngle = ang;
-          this.addPieceFromPalette({ type:'big_corner', angle:ang, walls:this.palWalls, flip:this.palFlip });
+          this.addPieceFromPalette({ type: family, angle: ang, walls: this.palWalls, flip: this.palFlip });
         });
         row.appendChild(b);
       }
@@ -2883,8 +2873,8 @@ export class TrackEditor extends Scene {
 
     const selPiece    = sel?.kind === 'piece' ? this.pieces[(sel as { kind: 'piece'; idx: number }).idx] : null;
     const isCornerSel = !!selPiece && selPiece.type !== 'straight';
-    const isCornerTab = tab === 'tight' || tab === 'big';
-    const isPieceTab  = tab === 'straight' || tab === 'tight' || tab === 'big';
+    const isCornerTab = tab === 'corner';
+    const isPieceTab  = tab === 'straight' || tab === 'corner';
 
     const showFlip   = (!sel && isCornerTab) || isCornerSel;
     const showWall   = (!sel && isPieceTab)  || !!selPiece;
@@ -2943,6 +2933,39 @@ export class TrackEditor extends Scene {
         this.showToast(`Walls: ${wallNames[next]}`);
       });
       el.appendChild(togBtn);
+    }
+
+    // Tightness toggle — which corner family new corner pieces get placed as.
+    // Tab-level default only (like Flip's default when nothing's selected);
+    // doesn't re-tighten/loosen an already-placed piece.
+    if (!sel && isCornerTab) {
+      const curFamily = this.palCornerFamily;
+      const ICON = 20;
+      const famBtn = document.createElement('button');
+      famBtn.style.cssText = [
+        'display:flex', 'align-items:center', 'gap:5px',
+        'padding:5px 8px', 'border-radius:5px', 'cursor:pointer', 'flex-shrink:0',
+        'background:#111128;border:1px solid #3a3a60;white-space:nowrap;',
+      ].join(';');
+      const famCanvas = document.createElement('canvas');
+      famCanvas.width = ICON; famCanvas.height = ICON;
+      famCanvas.style.cssText = `width:${ICON}px;height:${ICON}px;display:block;flex-shrink:0;`;
+      drawCornerIcon(famCanvas, curFamily, 90, false, 'both', false);
+      const famNames: Record<CornerFamily, string> = { corner: 'Tight', big_corner: 'Big' };
+      const famLabel = document.createElement('span');
+      famLabel.style.cssText = 'font:bold 12px Arial,sans-serif;line-height:1;color:#8899bb;';
+      famLabel.textContent = famNames[curFamily];
+      famBtn.appendChild(famCanvas);
+      famBtn.appendChild(famLabel);
+      famBtn.addEventListener('click', () => {
+        const cycle: CornerFamily[] = ['corner', 'big_corner'];
+        const next = cycle[(cycle.indexOf(curFamily) + 1) % cycle.length];
+        this.palCornerFamily = next;
+        this.rebuildTabs();
+        this.rebuildContent();
+        this.showToast(`Tightness: ${famNames[next]}`);
+      });
+      el.appendChild(famBtn);
     }
 
     // Marker label (car / finish / checkpoint) — leftmost when wall toggle absent
