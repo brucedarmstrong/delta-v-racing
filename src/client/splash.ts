@@ -1,6 +1,7 @@
 import { requestExpandedMode } from '@devvit/web/client';
 import { username, appVersion, postData } from './devvitContext';
 import { drawBarriersOnCanvas, drawMarkersOnCanvas } from './track/TrackBarrierCanvas';
+import { drawMiniCar } from './track/CarShape';
 import { trackBounds } from './track/TrackLayout';
 import { convertGmsTrack, convertGmsMarkers, type GmsTrack } from './track/convertGmsTrack';
 import ovalSmallJson from './tracks/gms/Oval_Small.json';
@@ -187,51 +188,6 @@ function drawStaticThumb(p: ThumbParams): void {
                        p.scale, p.scale, p.offX, p.offY, '#33bb55', 1.5);
   drawMarkersOnCanvas(p.ctx, p.startX, p.startY, p.startH, p.markers,
                       p.originX, p.originY, p.scale, p.scale, p.offX, p.offY);
-}
-
-// Draws a miniature version of the game's car shape (see Game.ts
-// makeCarTexture/makeGhostTextures) at (x, y), nose pointing along
-// (dirX, dirY). Local space has the nose at -HH (up) before rotation, same
-// as the full-size texture, so the same rotate-to-heading trick used for the
-// real car/ghost sprites applies here.
-function drawMiniCar(
-  ctx:   CanvasRenderingContext2D,
-  x:     number,
-  y:     number,
-  dirX:  number,
-  dirY:  number,
-  color: string,
-  alpha: number,
-  size:  number,
-): void {
-  const mag = Math.hypot(dirX, dirY) || 1;
-  const angle = Math.atan2(dirX / mag, -dirY / mag); // canvas-rotate angle for nose-up local shape
-  const HW = size * 0.5, HH = size * 0.85;
-
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-  ctx.globalAlpha = alpha;
-
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.moveTo(0, -HH);
-  ctx.lineTo(HW, HH);
-  ctx.lineTo(0, HH * 0.35);
-  ctx.lineTo(-HW, HH);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle = 'rgba(255,255,255,0.75)';
-  ctx.beginPath();
-  ctx.moveTo(0, -HH + size * 0.06);
-  ctx.lineTo(HW * 0.45, HH * 0.2);
-  ctx.lineTo(0, HH * 0.1);
-  ctx.lineTo(-HW * 0.45, HH * 0.2);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.restore();
 }
 
 // Draws the trail from pts[0] up to the interpolated current position.

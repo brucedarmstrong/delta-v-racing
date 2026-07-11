@@ -11,6 +11,7 @@ import { username, isLoggedIn } from '../devvitContext';
 import { fetchOrGenerateAiGhost, generateAndUploadAiGhosts } from '../track/AiGhost';
 import { verifyMineTrack, markLocalDraftVerified } from '../track/TrackUpload';
 import { PhaserStarField } from '../starfield';
+import { drawMiniCar } from '../track/CarShape';
 
 // ── Grid / camera constants ────────────────────────────────────────────────────
 const gridPx = 24;
@@ -712,31 +713,21 @@ export class Game extends Scene {
           }
         }
 
-        // Ghost dots (drawn first so player dot renders on top)
+        // Ghost cars (drawn first so the player car renders on top)
         for (const state of this.ghostStates) {
           if (!state.carImg.visible) continue;
-          const gx  = (state.carImg.x - this.mmWL) / this.mmWW * this.mmW;
-          const gy  = (state.carImg.y - this.mmWT) / this.mmWH * this.mmH;
-          const css = '#' + state.trailTint.toString(16).padStart(6, '0');
-          ctx.beginPath();
-          ctx.arc(gx, gy, 4, 0, Math.PI * 2);
-          ctx.fillStyle   = css;
-          ctx.fill();
-          ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-          ctx.lineWidth   = 1;
-          ctx.stroke();
+          const gx   = (state.carImg.x - this.mmWL) / this.mmWW * this.mmW;
+          const gy   = (state.carImg.y - this.mmWT) / this.mmWH * this.mmH;
+          const css  = '#' + state.trailTint.toString(16).padStart(6, '0');
+          const rad  = state.carImg.angle * (Math.PI / 180);
+          drawMiniCar(ctx, gx, gy, Math.sin(rad), -Math.cos(rad), css, 1, 10);
         }
 
-        // Player dot (magenta, slightly larger so it reads on top)
+        // Player car (magenta, slightly larger so it reads on top)
         const dotX = (this.carImg.x - this.mmWL) / this.mmWW * this.mmW;
         const dotY = (this.carImg.y - this.mmWT) / this.mmWH * this.mmH;
-        ctx.beginPath();
-        ctx.arc(dotX, dotY, 6, 0, Math.PI * 2);
-        ctx.fillStyle   = '#ff33ff';
-        ctx.fill();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth   = 1.5;
-        ctx.stroke();
+        const playerRad = this.carImg.angle * (Math.PI / 180);
+        drawMiniCar(ctx, dotX, dotY, Math.sin(playerRad), -Math.cos(playerRad), '#ff33ff', 1, 15);
       }
       rafId = requestAnimationFrame(tick);
     };
