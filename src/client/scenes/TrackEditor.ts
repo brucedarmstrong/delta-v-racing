@@ -14,6 +14,7 @@ import {
 import type { TrackMarker } from '../track/convertGmsTrack';
 import type { TrackEntry } from '../tracks/trackRegistry';
 import { saveDraft, fetchMineTrack } from '../track/TrackUpload';
+import { getEditorSettings, setEditorSettings, type EditorSettings } from '../track/EditorSettings';
 import type { TrackPayload } from '../track/TrackUpload';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -483,6 +484,7 @@ export class TrackEditor extends Scene {
   // Editor state
   private selection:   Selection  = null;
   private snapEnabled              = true;
+  private selectModeOn             = false;
   private isDirty                  = false;
   private clipboard: { pieces: PlacedPiece[]; checkpoints: TrackMarker[] } | null = null;
 
@@ -533,11 +535,15 @@ export class TrackEditor extends Scene {
   private hdrEl:     HTMLElement | null       = null;
   private palEl:     HTMLElement | null       = null;
   private snapBtnEl: HTMLButtonElement | null = null;
+  private selectBtnEl: HTMLButtonElement | null = null;
   // Context
   private mineTrackId: string | null = null;
   private existingName = '';
   // null = unknown/loading (or no saved draft yet to check).
   private verified: boolean | null = null;
+  private settings: EditorSettings = getEditorSettings();
+  private moreMenuEl: HTMLElement | null = null;
+  private moreMenuBackdropEl: HTMLElement | null = null;
 
   constructor() { super('TrackEditor'); }
 
@@ -743,6 +749,24 @@ export class TrackEditor extends Scene {
     this.snapBtnEl = snapBtn;
     this.updateSnapBtn();
 
+    // Select Mode — while on, tapping a piece/finish/checkpoint (mouse or
+    // touch) toggles it in/out of the multi-selection instead of dragging it,
+    // same as holding Shift. Primarily for touch, where there's no Shift key.
+    const selectBtn = document.createElement('button');
+    selectBtn.title = 'Toggle select mode';
+    selectBtn.style.cssText = [
+      'border-radius:5px', 'cursor:pointer', 'font:bold 12px Arial,sans-serif',
+      'display:inline-flex', 'align-items:center', 'gap:3px',
+      'padding:4px 8px', `height:${HEADER_H - 16}px`, 'flex-shrink:0',
+    ].join(';');
+    selectBtn.addEventListener('click', () => {
+      this.selectModeOn = !this.selectModeOn;
+      this.updateSelectBtn();
+      this.showToast(this.selectModeOn ? 'Select Mode On' : 'Select Mode Off');
+    });
+    this.selectBtnEl = selectBtn;
+    this.updateSelectBtn();
+
     const circleBtn = (label: string, title: string, onClick: () => void) => {
       const b = document.createElement('button');
       b.innerHTML = `<span style="font:bold 13px Arial,sans-serif;line-height:1;">${label}</span>`;
@@ -764,13 +788,13 @@ export class TrackEditor extends Scene {
     hdr.appendChild(mkBtn(ic('undo'),          'Undo',       '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
     hdr.appendChild(mkBtn(ic('redo'),          'Redo',       '#ffaa44', '#1a0e00', '#553300', () => this.redo()));
     hdr.appendChild(sep());
-    hdr.appendChild(mkBtn(ic('folder-open'),   'My drafts',  '#aaaaff', '#0a0a22', '#333366', () => this.openDrafts()));
-    hdr.appendChild(sep());
     hdr.appendChild(mkBtn(ic('play'),          'Test track', '#44ffcc', '#001a12', '#226644', () => this.testTrack()));
     hdr.appendChild(mkBtn(ic('content-save'),  'Save track', '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
     hdr.appendChild(sep());
-    hdr.appendChild(circleBtn('i', 'Track info', () => this.showInfo()));
-    hdr.appendChild(circleBtn('?', 'Help',       () => this.showHelp()));
+    hdr.appendChild(selectBtn);
+    hdr.appendChild(sep());
+    const moreBtn = circleBtn('⋮', 'More', () => this.toggleMoreMenu(moreBtn));
+    hdr.appendChild(moreBtn);
 
     document.body.appendChild(hdr);
     this.hdrEl = hdr;
@@ -782,6 +806,112 @@ export class TrackEditor extends Scene {
     this.snapBtnEl.style.background = this.snapEnabled ? '#001a22' : '#111128';
     this.snapBtnEl.style.color      = this.snapEnabled ? '#44ddff' : '#445566';
     this.snapBtnEl.style.border     = `1px solid ${this.snapEnabled ? '#226644' : '#2a2a44'}`;
+  }
+
+  private updateSelectBtn(): void {
+    if (!this.selectBtnEl) return;
+    this.selectBtnEl.innerHTML = ic('vector-selection', 'Select');
+    this.selectBtnEl.style.background = this.selectModeOn ? '#22004a' : '#111128';
+    this.selectBtnEl.style.color      = this.selectModeOn ? '#dd88ff' : '#445566';
+    this.selectBtnEl.style.border     = `1px solid ${this.selectModeOn ? '#663388' : '#2a2a44'}`;
+  }
+
+  private toggleMoreMenu(anchorBtn: HTMLElement): void {
+    if (this.moreMenuEl) { this.closeMoreMenu(); return; }
+
+    const backdrop = document.createElement('div');
+    backdrop.style.cssText = 'position:fixed;inset:0;z-index:199;';
+    backdrop.addEventListener('click', () => this.closeMoreMenu());
+
+    const rect = anchorBtn.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.style.cssText = [
+      'position:fixed', `top:${rect.bottom + 4}px`, `right:${window.innerWidth - rect.right}px`,
+      'background:#12122a', 'border:1px solid #3a3a6a', 'border-radius:8px',
+      'padding:4px', 'z-index:200', 'display:flex', 'flex-direction:column', 'gap:2px',
+      'min-width:170px', 'box-shadow:0 6px 20px rgba(0,0,0,0.5);',
+    ].join(';');
+
+    const item = (iconName: string, label: string, fn: () => void) => {
+      const b = document.createElement('button');
+      b.innerHTML = ic(iconName, label);
+      b.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;padding:9px 10px;border-radius:5px;border:none;background:none;color:#ccccff;font:13px Arial,sans-serif;cursor:pointer;text-align:left;white-space:nowrap;box-sizing:border-box;';
+      b.addEventListener('click', () => { this.closeMoreMenu(); fn(); });
+      return b;
+    };
+
+    menu.appendChild(item('folder-open',  'My Drafts',  () => this.openDrafts()));
+    menu.appendChild(item('information',  'Track Info', () => this.showInfo()));
+    menu.appendChild(item('help-circle',  'Help',       () => this.showHelp()));
+    menu.appendChild(item('cog',          'Options',    () => this.showOptions()));
+
+    document.body.appendChild(backdrop);
+    document.body.appendChild(menu);
+    this.moreMenuBackdropEl = backdrop;
+    this.moreMenuEl = menu;
+  }
+
+  private closeMoreMenu(): void {
+    this.moreMenuEl?.remove();
+    this.moreMenuBackdropEl?.remove();
+    this.moreMenuEl = null;
+    this.moreMenuBackdropEl = null;
+  }
+
+  private showOptions(): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.80);z-index:500;display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:16px;box-sizing:border-box;';
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#12122a;border:1px solid #3a3a6a;border-radius:10px;width:100%;max-width:340px;padding:16px 16px 20px;position:relative;margin:auto;';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.innerHTML = ic('close');
+    closeBtn.title = 'Close';
+    closeBtn.style.cssText = 'position:absolute;top:10px;right:10px;background:none;border:none;color:#8888aa;font-size:18px;cursor:pointer;padding:4px;line-height:1;';
+    closeBtn.addEventListener('click', () => overlay.remove());
+
+    const heading = document.createElement('div');
+    heading.textContent = 'Options';
+    heading.style.cssText = 'color:#aaaaff;font:bold 15px Arial,sans-serif;margin-bottom:14px;';
+
+    card.appendChild(closeBtn);
+    card.appendChild(heading);
+
+    // ── Props bar layout ─────────────────────────────────────────────────────
+    const sec = document.createElement('div');
+    const secHead = document.createElement('div');
+    secHead.textContent = 'Selection Toolbar';
+    secHead.style.cssText = 'font:bold 10px Arial,sans-serif;color:#5566aa;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a2a4a;padding-bottom:4px;margin-bottom:8px;';
+    sec.appendChild(secHead);
+
+    const desc = document.createElement('div');
+    desc.textContent = 'How piece/selection buttons behave when there are more than fit on screen.';
+    desc.style.cssText = 'font:11px Arial,sans-serif;color:#7777aa;margin-bottom:8px;line-height:1.4;';
+    sec.appendChild(desc);
+
+    const optRow = document.createElement('div');
+    optRow.style.cssText = 'display:flex;gap:8px;';
+    const renderOptRow = () => {
+      optRow.innerHTML = '';
+      optRow.appendChild(this.mkOptBtn('Scroll (1 row)', this.settings.propsBarLayout === 'scroll', () => {
+        this.settings = setEditorSettings({ propsBarLayout: 'scroll' });
+        this.rebuildCtrlRow();
+        renderOptRow();
+      }));
+      optRow.appendChild(this.mkOptBtn('Wrap (2 rows)', this.settings.propsBarLayout === 'wrap', () => {
+        this.settings = setEditorSettings({ propsBarLayout: 'wrap' });
+        this.rebuildCtrlRow();
+        renderOptRow();
+      }));
+    };
+    renderOptRow();
+    sec.appendChild(optRow);
+    card.appendChild(sec);
+
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
   }
 
   private showInfo(): void {
@@ -957,13 +1087,14 @@ export class TrackEditor extends Scene {
     card.appendChild(closeBtn);
     card.appendChild(title);
     card.appendChild(section('Toolbar', [
-      [ic('arrow-left'),    'Back',   'Exit the editor'],
-      [ic('link-variant'),  'Snap',   'Toggle connector snapping — pieces snap together at endpoints when on'],
-      [ic('undo'),          'Undo',   'Undo the last change'],
-      [ic('redo'),          'Redo',   'Redo the last undone change'],
-      [ic('folder-open'),   'Drafts', 'Open your saved draft tracks'],
-      [ic('play'),          'Test',   'Test drive the current track'],
-      [ic('content-save'),  'Save',   'Save and publish the track'],
+      [ic('arrow-left'),         'Back',   'Exit the editor'],
+      [ic('link-variant'),       'Snap',   'Toggle connector snapping — pieces snap together at endpoints when on'],
+      [ic('undo'),               'Undo',   'Undo the last change'],
+      [ic('redo'),               'Redo',   'Redo the last undone change'],
+      [ic('play'),               'Test',   'Test drive the current track'],
+      [ic('content-save'),       'Save',   'Save and publish the track'],
+      [ic('vector-selection'),   'Select', 'Toggle Select Mode — drag from empty space to rubber-band select a group (normally that drag just pans the map)'],
+      ['⋮',                      'More',   'Drafts, Track Info, Help, Options'],
     ]));
     card.appendChild(section('Palette — nothing selected', [
       ['', 'Walls',  'Default wall layout for new pieces: Both walls / Outer only / Inner only'],
@@ -2277,7 +2408,7 @@ export class TrackEditor extends Scene {
     // Unified ctrl row: palette defaults when nothing selected, piece/marker controls when selected.
     const ctrlEl = document.createElement('div');
     ctrlEl.id = 'ed-ctrl';
-    ctrlEl.style.cssText = 'display:none;gap:5px;align-items:center;overflow-x:auto;';
+    ctrlEl.style.cssText = 'display:none;'; // rebuildCtrlRow() owns the rest once shown
     wrapperEl.appendChild(ctrlEl);
 
     // Piece buttons content area.
@@ -2537,7 +2668,10 @@ export class TrackEditor extends Scene {
       el.style.display = 'none';
       return;
     }
-    el.style.display = 'flex';
+    const wrapMode = this.settings.propsBarLayout === 'wrap';
+    el.style.cssText = wrapMode
+      ? 'display:flex;gap:5px;align-items:center;flex-wrap:wrap;overflow:visible;'
+      : 'display:flex;gap:5px;align-items:center;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;';
 
     const mkB = (html: string, title: string, color: string, bg: string, border: string, fn: () => void) => {
       const b = document.createElement('button');
@@ -2615,8 +2749,14 @@ export class TrackEditor extends Scene {
         }));
     }
 
-    // Spacer — pushes rotate/copy/delete to the right
-    { const sp = document.createElement('div'); sp.style.cssText = 'flex:1;min-width:4px;'; el.appendChild(sp); }
+    // Spacer — pushes rotate/copy/delete to the right in scroll mode; in wrap
+    // mode a flex:1 spacer would claim the rest of line 1 and dump everything
+    // after it onto line 2, so it's just a small fixed gap instead.
+    {
+      const sp = document.createElement('div');
+      sp.style.cssText = wrapMode ? 'flex:0 0 6px;' : 'flex:1;min-width:4px;';
+      el.appendChild(sp);
+    }
 
     // Rotate - angle + — visible whenever anything is selected
     if (showRotate) {
