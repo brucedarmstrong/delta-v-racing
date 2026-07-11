@@ -523,6 +523,7 @@ export class TrackEditor extends Scene {
   private selectionGfx!:  GameObjects.Graphics;
   private connGfx!:       GameObjects.Graphics;
   private marqueeGfx!:    GameObjects.Graphics;
+  private groupOutlineGfx!: GameObjects.Graphics;
   private barrierImg:       GameObjects.Image | null = null;
   private barrierExclude:   number[] | null          = null;
   // Pooled marching-ants highlight — one canvas-texture + Image pair per
@@ -603,10 +604,11 @@ export class TrackEditor extends Scene {
     for (let x = -EXT; x <= EXT; x += CELL) gridGfx.lineBetween(x, -EXT, x, EXT);
     for (let y = -EXT; y <= EXT; y += CELL) gridGfx.lineBetween(-EXT, y, EXT, y);
 
-    this.markerGfx    = this.add.graphics().setDepth(5);
-    this.selectionGfx = this.add.graphics().setDepth(8);
-    this.connGfx      = this.add.graphics().setDepth(7);
-    this.marqueeGfx   = this.add.graphics().setDepth(9);
+    this.markerGfx        = this.add.graphics().setDepth(5);
+    this.groupOutlineGfx  = this.add.graphics().setDepth(6);
+    this.selectionGfx     = this.add.graphics().setDepth(8);
+    this.connGfx          = this.add.graphics().setDepth(7);
+    this.marqueeGfx       = this.add.graphics().setDepth(9);
 
     this.makeEditorCarTexture();
     this.createHeader();
@@ -938,6 +940,38 @@ export class TrackEditor extends Scene {
     sec.appendChild(optRow);
     card.appendChild(sec);
 
+    // ── Group outlines ────────────────────────────────────────────────────────
+    const grpSec = document.createElement('div');
+    grpSec.style.cssText = 'margin-top:14px;';
+    const grpSecHead = document.createElement('div');
+    grpSecHead.textContent = 'Group Outlines';
+    grpSecHead.style.cssText = 'font:bold 10px Arial,sans-serif;color:#5566aa;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a2a4a;padding-bottom:4px;margin-bottom:8px;';
+    grpSec.appendChild(grpSecHead);
+
+    const grpDesc = document.createElement('div');
+    grpDesc.textContent = 'Show a dashed rectangle around every group at all times, not just while selected.';
+    grpDesc.style.cssText = 'font:11px Arial,sans-serif;color:#7777aa;margin-bottom:8px;line-height:1.4;';
+    grpSec.appendChild(grpDesc);
+
+    const grpRow = document.createElement('div');
+    grpRow.style.cssText = 'display:flex;gap:8px;';
+    const renderGrpRow = () => {
+      grpRow.innerHTML = '';
+      grpRow.appendChild(this.mkOptBtn('Always show', this.settings.showGroupOutlines, () => {
+        this.settings = setEditorSettings({ showGroupOutlines: true });
+        this.redrawGroupOutlines();
+        renderGrpRow();
+      }));
+      grpRow.appendChild(this.mkOptBtn('Only when selected', !this.settings.showGroupOutlines, () => {
+        this.settings = setEditorSettings({ showGroupOutlines: false });
+        this.redrawGroupOutlines();
+        renderGrpRow();
+      }));
+    };
+    renderGrpRow();
+    grpSec.appendChild(grpRow);
+    card.appendChild(grpSec);
+
     overlay.appendChild(card);
     document.body.appendChild(overlay);
   }
@@ -1163,7 +1197,50 @@ export class TrackEditor extends Scene {
 
   // ── Barrier texture ─────────────────────────────────────────────────────────
 
+  // Dashed bounding rectangle around each group. Controlled by the
+  // showGroupOutlines option: when on, every group gets one at all times
+  // (idle indicator); when off, only the currently-selected group does — the
+  // per-piece marching-ants highlight on selection is unaffected either way.
+  private redrawGroupOutlines(): void {
+    const g = this.groupOutlineGfx;
+    g.clear();
+
+    const groups = new Map<string, number[]>();
+    for (let i = 0; i < this.pieces.length; i++) {
+      const gid = this.pieces[i].groupId;
+      if (!gid) continue;
+      const arr = groups.get(gid);
+      if (arr) arr.push(i); else groups.set(gid, [i]);
+    }
+    if (groups.size === 0) return;
+
+    const selectedGroup = this.selection?.kind === 'multi' && this.isExactGroup(this.selection.pieces)
+      ? new Set(this.selection.pieces) : null;
+
+    const PAD = 10;
+    for (const idxs of groups.values()) {
+      const isSelected = !!selectedGroup && idxs.length === selectedGroup.size && idxs.every(i => selectedGroup.has(i));
+      if (!this.settings.showGroupOutlines && !isSelected) continue;
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const i of idxs) {
+        const b = pieceVisibleBounds(this.pieces[i]);
+        minX = Math.min(minX, b.x); minY = Math.min(minY, b.y);
+        maxX = Math.max(maxX, b.x + b.width); maxY = Math.max(maxY, b.y + b.height);
+      }
+      minX -= PAD; minY -= PAD; maxX += PAD; maxY += PAD;
+      const pts = [
+        { x: minX, y: minY }, { x: maxX, y: minY },
+        { x: maxX, y: maxY }, { x: minX, y: maxY },
+      ];
+      const color = isSelected ? 0xccccff : 0x6666aa;
+      const alpha = isSelected ? 0.9 : 0.45;
+      drawDashedPolyline(g, pts, true, 6, 5, 0, color, alpha, isSelected ? 2 : 1.5);
+    }
+  }
+
   private updateBarrierImg(excludeIdxs: number[] | null = null): void {
+    this.redrawGroupOutlines();
     this.barrierExclude = excludeIdxs;
     if (this.barrierImg) { this.barrierImg.destroy(); this.barrierImg = null; }
     const drawPieces = excludeIdxs !== null
@@ -1321,6 +1398,7 @@ export class TrackEditor extends Scene {
   // ── Selection overlay ────────────────────────────────────────────────────────
 
   private drawSelectionOverlay(): void {
+    this.redrawGroupOutlines();
     this.selectionGfx.clear();
     this.connGfx.clear();
 
@@ -1916,6 +1994,7 @@ export class TrackEditor extends Scene {
     this.selectionGfx.clear();
     this.connGfx.clear();
     this.updateSelectionHighlights(); // trims the highlight pool to empty
+    this.redrawGroupOutlines();
     this.rebuildCtrlRow();
   }
 

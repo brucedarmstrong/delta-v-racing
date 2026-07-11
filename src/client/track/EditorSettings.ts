@@ -6,12 +6,17 @@ export type PropsBarLayout = 'scroll' | 'wrap';
 
 export type EditorSettings = {
   propsBarLayout: PropsBarLayout;
+  // When true, every group shows a dashed bounding rectangle at all times,
+  // not just while selected (the per-piece marching-ants highlight on
+  // selection is unaffected by this setting either way).
+  showGroupOutlines: boolean;
 };
 
 const KEY = 'dv-editor-settings';
 
 const DEFAULTS: EditorSettings = {
   propsBarLayout: 'scroll',
+  showGroupOutlines: true,
 };
 
 export function getEditorSettings(): EditorSettings {
