@@ -15,7 +15,7 @@ export type EditorSettings = {
 const KEY = 'dv-editor-settings';
 
 const DEFAULTS: EditorSettings = {
-  propsBarLayout: 'scroll',
+  propsBarLayout: 'wrap',
   showGroupOutlines: true,
 };
 
