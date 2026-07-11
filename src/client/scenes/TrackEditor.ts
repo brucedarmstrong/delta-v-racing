@@ -1196,11 +1196,12 @@ export class TrackEditor extends Scene {
     card.appendChild(section('Palette — nothing selected', [
       ['', 'Walls',      'Default wall layout for new pieces: Both walls / Outer only / Inner only'],
       ['', 'Flip',       'Default turn direction for new corners: right turn / left turn'],
-      ['', 'Tightness',  'Default tightness for new corners, on the Corner tab: Tight / Big'],
+      ['', 'Tightness',  'Default tightness for new corners, on the Corner tab: Tight / Big / Huge'],
     ]));
     card.appendChild(section('Piece selected', [
       ['', 'Walls',                                         'Cycle wall layout on the selected piece'],
       [ic('flip-horizontal'),                'Flip',        'Mirror a corner piece to switch turn direction'],
+      ['', 'Tightness',                                     'Cycle a selected corner\'s tightness: Tight / Big / Huge'],
       [ic('rotate-left') + ic('rotate-right'), '±15°',     'Rotate the selected piece in 15° steps'],
       ['', '+ / −', 'Cycle corner angle or straight length (wraps at min/max)'],
       ['', 'Arrow keys', 'Nudge the piece 1px in that direction'],
@@ -2410,6 +2411,18 @@ export class TrackEditor extends Scene {
     this.updateBarrierImg(); this.updateSelectionHighlights(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
   }
 
+  private changePieceFamily(family: CornerFamily): void {
+    if (this.selection?.kind !== 'piece') return;
+    const idx = this.selection.idx;
+    const p = this.pieces[idx];
+    if (p.type === 'straight') return;
+    this.saveUndo();
+
+    const candidate: PlacedPiece = { ...(p as CornerDef & { x: number; y: number; rotation: number }), type: family };
+    this.pieces[idx] = this.anchorReshapedPiece(idx, p, candidate);
+    this.updateBarrierImg(); this.updateSelectionHighlights(); this.drawSelectionOverlay(); this.rebuildCtrlRow(); this.isDirty = true;
+  }
+
   // Cycles the selected piece's shape variant: corner angle (15°–90°) or
   // straight length (XS–L), wrapping past the min/max. Bound to +/- keys.
   private cyclePieceSize(delta: 1 | -1): void {
@@ -2878,6 +2891,7 @@ export class TrackEditor extends Scene {
     const isPieceTab  = tab === 'straight' || tab === 'corner';
 
     const showFlip   = (!sel && isCornerTab) || isCornerSel;
+    const showFamily = (!sel && isCornerTab) || isCornerSel;
     const showWall   = (!sel && isPieceTab)  || !!selPiece;
     const showRotate = !!sel;
     const showCopy   = !!selPiece || sel?.kind === 'checkpoint'
@@ -2926,6 +2940,7 @@ export class TrackEditor extends Scene {
       togLabel.textContent = wallNames[curWalls];
       togBtn.appendChild(togCanvas);
       togBtn.appendChild(togLabel);
+      togBtn.title = `Walls: ${wallNames[curWalls]} — click to cycle`;
       togBtn.addEventListener('click', () => {
         const cycle: WallVariant[] = ['both', 'outer', 'inner'];
         const next = cycle[(cycle.indexOf(curWalls) + 1) % cycle.length];
@@ -2936,11 +2951,12 @@ export class TrackEditor extends Scene {
       el.appendChild(togBtn);
     }
 
-    // Tightness toggle — which corner family new corner pieces get placed as.
-    // Tab-level default only (like Flip's default when nothing's selected);
-    // doesn't re-tighten/loosen an already-placed piece.
-    if (!sel && isCornerTab) {
-      const curFamily = this.palCornerFamily;
+    // Tightness toggle — cycles the corner family (Tight/Big/Huge). Acts on
+    // the selected corner piece if one is selected, otherwise sets the
+    // tab-level default used for newly-placed corners (mirrors Flip).
+    if (showFamily) {
+      const curFamily = isCornerSel ? (selPiece as CornerDef).type : this.palCornerFamily;
+      const famNames: Record<CornerFamily, string> = { corner: 'Tight', big_corner: 'Big', huge_corner: 'Huge' };
       const ICON = 20;
       const famBtn = document.createElement('button');
       famBtn.style.cssText = [
@@ -2948,21 +2964,20 @@ export class TrackEditor extends Scene {
         'padding:5px 8px', 'border-radius:5px', 'cursor:pointer', 'flex-shrink:0',
         'background:#111128;border:1px solid #3a3a60;white-space:nowrap;',
       ].join(';');
+      famBtn.title = `Tightness: ${famNames[curFamily]} — click to cycle Tight → Big → Huge`;
       const famCanvas = document.createElement('canvas');
       famCanvas.width = ICON; famCanvas.height = ICON;
       famCanvas.style.cssText = `width:${ICON}px;height:${ICON}px;display:block;flex-shrink:0;`;
       drawCornerIcon(famCanvas, curFamily, 90, false, 'both', false);
-      const famNames: Record<CornerFamily, string> = { corner: 'Tight', big_corner: 'Big', huge_corner: 'Huge' };
       const famLabel = document.createElement('span');
       famLabel.style.cssText = 'font:bold 12px Arial,sans-serif;line-height:1;color:#8899bb;';
-      famLabel.textContent = famNames[curFamily];
+      famLabel.textContent = `Tightness: ${famNames[curFamily]}`;
       famBtn.appendChild(famCanvas);
       famBtn.appendChild(famLabel);
       famBtn.addEventListener('click', () => {
         const next = CORNER_FAMILIES[(CORNER_FAMILIES.indexOf(curFamily) + 1) % CORNER_FAMILIES.length];
-        this.palCornerFamily = next;
-        this.rebuildTabs();
-        this.rebuildContent();
+        if (isCornerSel) this.changePieceFamily(next);
+        else { this.palCornerFamily = next; this.rebuildTabs(); this.rebuildContent(); }
         this.showToast(`Tightness: ${famNames[next]}`);
       });
       el.appendChild(famBtn);
