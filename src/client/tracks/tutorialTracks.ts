@@ -24,7 +24,7 @@ export const TUTORIAL_TRACKS: TrackEntry[] = [
     coachMessages: [
       {
         turn:  0,
-        title: 'Welcome to delta-v racing!',
+        title: 'Welcome to Delta-V Racing!',
         body:
           'Each turn you pick one of the 9 dots shown around your car.\n\n' +
           '● CENTER dot — keeps your current speed\n' +
