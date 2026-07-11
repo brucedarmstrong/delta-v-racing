@@ -1,4 +1,4 @@
-import { TIGHT, BIG, HALF_TRACK, STRAIGHT_LEN } from './TrackGeometry';
+import { CORNER_RADII, HALF_TRACK, STRAIGHT_LEN } from './TrackGeometry';
 import type { PlacedPiece, StraightDef, CornerDef } from './TrackLayout';
 
 // How much velocity is kept after hitting a wall.
@@ -36,7 +36,7 @@ function checkStraight(lx: number, ly: number, piece: StraightDef): Hit | null {
 }
 
 function checkCorner(lx: number, ly: number, piece: CornerDef): Hit | null {
-  const { outerR, innerR } = piece.type === 'corner' ? TIGHT : BIG;
+  const { outerR, innerR } = CORNER_RADII[piece.type];
   const theta = piece.angle * (Math.PI / 180);
 
   // Mirror x for left-turn (flip) corners so the maths are symmetric.
@@ -74,7 +74,7 @@ export function pointInsideBarrier(wx: number, wy: number, pieces: PlacedPiece[]
     const dx = wx - piece.x, dy = wy - piece.y;
     const maxR = piece.type === 'straight'
       ? Math.max(STRAIGHT_LEN[(piece as StraightDef).size] / 2, HALF_TRACK) + HALF_TRACK
-      : (piece.type === 'corner' ? TIGHT : BIG).outerR + 20;
+      : CORNER_RADII[piece.type].outerR + 20;
     if (dx * dx + dy * dy > maxR * maxR) continue;
 
     const [lx, ly] = toLocal(wx, wy, piece);
@@ -84,7 +84,7 @@ export function pointInsideBarrier(wx: number, wy: number, pieces: PlacedPiece[]
       if (Math.abs(ly) > half) continue;
       if (lx < -HALF_TRACK || lx > HALF_TRACK) return true;
     } else {
-      const { outerR, innerR } = piece.type === 'corner' ? TIGHT : BIG;
+      const { outerR, innerR } = CORNER_RADII[piece.type];
       const theta = (piece as CornerDef).angle * (Math.PI / 180);
       const cx = (piece as CornerDef).flip ? -lx : lx;
       const cy = ly;
@@ -163,7 +163,7 @@ export function intersectsBarrier(
     const pdx = midX - piece.x, pdy = midY - piece.y;
     const maxR = piece.type === 'straight'
       ? Math.max(STRAIGHT_LEN[(piece as StraightDef).size] / 2, HALF_TRACK) + HALF_TRACK
-      : (piece.type === 'corner' ? TIGHT : BIG).outerR;
+      : CORNER_RADII[piece.type].outerR;
     if (pdx * pdx + pdy * pdy > (maxR + halfLen) * (maxR + halfLen)) continue;
 
     const [lx1, ly1] = toLocal(fromWX, fromWY, piece);
@@ -175,7 +175,7 @@ export function intersectsBarrier(
       if (walls !== 'inner' && crossesStraightWall(lx1, ly1, lx2, ly2, -HALF_TRACK, half)) return true;
       if (walls !== 'outer' && crossesStraightWall(lx1, ly1, lx2, ly2,  HALF_TRACK, half)) return true;
     } else {
-      const { outerR, innerR } = piece.type === 'corner' ? TIGHT : BIG;
+      const { outerR, innerR } = CORNER_RADII[piece.type];
       const theta = (piece as CornerDef).angle * (Math.PI / 180);
       const flip  = (piece as CornerDef).flip ?? false;
       const walls = (piece as CornerDef).walls;
@@ -195,7 +195,7 @@ export function isOnSurface(wx: number, wy: number, pieces: PlacedPiece[]): bool
     const dx = wx - piece.x, dy = wy - piece.y;
     const maxR = piece.type === 'straight'
       ? Math.max(STRAIGHT_LEN[(piece as StraightDef).size] / 2, HALF_TRACK) + HALF_TRACK
-      : (piece.type === 'corner' ? TIGHT : BIG).outerR + 20;
+      : CORNER_RADII[piece.type].outerR + 20;
     if (dx * dx + dy * dy > maxR * maxR) continue;
 
     const [lx, ly] = toLocal(wx, wy, piece);
@@ -205,7 +205,7 @@ export function isOnSurface(wx: number, wy: number, pieces: PlacedPiece[]): bool
       // Small epsilon on length so junction grid points aren't left unclaimed.
       if (Math.abs(lx) <= HALF_TRACK && Math.abs(ly) <= half + 2) return true;
     } else {
-      const { outerR, innerR } = piece.type === 'corner' ? TIGHT : BIG;
+      const { outerR, innerR } = CORNER_RADII[piece.type];
       const theta = (piece as CornerDef).angle * (Math.PI / 180);
       const cx = (piece as CornerDef).flip ? -lx : lx;
       const cy = ly;
@@ -235,7 +235,7 @@ export function applyWallCollisions(
     const dx = x - piece.x, dy = y - piece.y;
     const maxR = piece.type === 'straight'
       ? Math.max(STRAIGHT_LEN[(piece as StraightDef).size] / 2, HALF_TRACK) + HALF_TRACK
-      : (piece.type === 'corner' ? TIGHT : BIG).outerR + 20;
+      : CORNER_RADII[piece.type].outerR + 20;
     if (dx * dx + dy * dy > maxR * maxR) continue;
 
     const [lx, ly] = toLocal(x, y, piece);

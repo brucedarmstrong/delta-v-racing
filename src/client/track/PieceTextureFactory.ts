@@ -1,8 +1,8 @@
 import * as Phaser from 'phaser';
 import {
-  TIGHT, BIG, HALF_TRACK, STRAIGHT_LEN,
+  CORNER_RADII, HALF_TRACK, STRAIGHT_LEN,
   CornerFamily, CornerAngle, StraightSize, WallVariant,
-  CORNER_ANGLES, STRAIGHT_SIZES, WALL_VARIANTS,
+  CORNER_ANGLES, STRAIGHT_SIZES, WALL_VARIANTS, CORNER_FAMILIES,
 } from './TrackGeometry';
 import type { TrackSkin } from './TrackSkin';
 
@@ -88,7 +88,7 @@ function makeCornerTexture(
   walls: WallVariant,
   skin: TrackSkin,
 ): PieceInfo {
-  const { outerR, innerR } = family === 'corner' ? TIGHT : BIG;
+  const { outerR, innerR } = CORNER_RADII[family];
   const θ = angleDeg * (Math.PI / 180);
 
   // Texture dimensions: content + PAD on all sides.
@@ -186,11 +186,8 @@ function makeStraightTexture(
  * Call this in Preloader.create() before starting any scene that renders track pieces.
  *
  * Produces 66 textures:
- *   - 4 straight sizes × 3 wall variants = 12
- *   - 2 corner families × 6 angles × 3 wall variants = 36
- *   Total = 48... wait let me recount:
- *   (2 corner families × 6 angles + 4 straights) × 3 wall variants
- *   = (12 + 4) × 3 = 48 textures
+ *   (3 corner families × 6 angles + 4 straights) × 3 wall variants
+ *   = (18 + 4) × 3 = 66 textures
  *
  * @returns Record mapping each texture key to its PieceInfo (key + Phaser origin).
  */
@@ -206,7 +203,7 @@ export function generateTrackTextures(
       out[info.key] = info;
     }
     for (const angle of CORNER_ANGLES) {
-      for (const family of ['corner', 'big_corner'] as CornerFamily[]) {
+      for (const family of CORNER_FAMILIES) {
         const info = makeCornerTexture(scene, family, angle, walls, skin);
         out[info.key] = info;
       }

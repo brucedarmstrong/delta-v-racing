@@ -1,4 +1,4 @@
-import { TIGHT, BIG, HALF_TRACK, STRAIGHT_LEN } from './TrackGeometry';
+import { CORNER_RADII, HALF_TRACK, STRAIGHT_LEN } from './TrackGeometry';
 import type { PlacedPiece, StraightDef, CornerDef } from './TrackLayout';
 import type { TrackMarker } from './convertGmsTrack';
 
@@ -18,7 +18,7 @@ export function addPiecePaths(ctx: CanvasRenderingContext2D, p: PlacedPiece): vo
       ctx.lineTo(HALF_TRACK,  half);
     }
   } else {
-    const { outerR, innerR } = p.type === 'corner' ? TIGHT : BIG;
+    const { outerR, innerR } = CORNER_RADII[p.type];
     const theta = (p as CornerDef).angle * (Math.PI / 180);
     if ((p as CornerDef).flip) ctx.scale(-1, 1);
     if (p.walls === 'both' || p.walls === 'outer') {

@@ -1,6 +1,6 @@
 import {
-  TIGHT, BIG, STRAIGHT_LEN, HALF_TRACK,
-  CornerAngle, StraightSize, WallVariant,
+  CORNER_RADII, STRAIGHT_LEN, HALF_TRACK,
+  CornerAngle, CornerFamily, StraightSize, WallVariant,
 } from './TrackGeometry';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -13,7 +13,7 @@ export type StraightDef = {
 };
 
 export type CornerDef = {
-  type: 'corner' | 'big_corner';
+  type: CornerFamily;
   angle: CornerAngle;
   walls: WallVariant;
   flip?: boolean; // true = left (CCW) turn
@@ -67,7 +67,7 @@ export function connectors(piece: PieceDef) {
     const flip = (piece as CornerDef).flip ?? false;
     const θd   = (piece as CornerDef).angle;          // degrees
     const θr   = θd * (Math.PI / 180);
-    const clR  = piece.type === 'corner' ? TIGHT.clR : BIG.clR;
+    const clR  = CORNER_RADII[piece.type].clR;
     const sign = flip ? 1 : -1;                        // mirrors entry/exit about Y axis
 
     c = {
@@ -100,7 +100,7 @@ export function trackBounds(pieces: PlacedPiece[]) {
   for (const p of pieces) {
     const r = p.type === 'straight'
       ? Math.max(STRAIGHT_LEN[(p as StraightDef).size] / 2, HALF_TRACK)
-      : (p.type === 'corner' ? TIGHT : BIG).outerR;
+      : CORNER_RADII[p.type].outerR;
     minX = Math.min(minX, p.x - r);
     minY = Math.min(minY, p.y - r);
     maxX = Math.max(maxX, p.x + r);

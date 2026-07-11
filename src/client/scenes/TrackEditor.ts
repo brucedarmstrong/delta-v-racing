@@ -7,7 +7,7 @@ import {
   type PieceDef, type PlacedPiece, type CornerDef, type StraightDef,
 } from '../track/TrackLayout';
 import {
-  HALF_TRACK, TIGHT, BIG, STRAIGHT_LEN,
+  HALF_TRACK, TIGHT, CORNER_RADII, CORNER_FAMILIES, STRAIGHT_LEN,
   CORNER_ANGLES, STRAIGHT_SIZES,
   type CornerAngle, type CornerFamily, type WallVariant, type StraightSize,
 } from '../track/TrackGeometry';
@@ -170,7 +170,7 @@ function pieceVisibleBounds(p: PlacedPiece): { x: number; y: number; width: numb
   const dir    = flip ? -1 : 1;
   const a0 = wStart, a1 = wStart + dir * θr;
   const lo = Math.min(a0, a1), hi = Math.max(a0, a1);
-  const { outerR, innerR } = p.type === 'corner' ? TIGHT : BIG;
+  const { outerR, innerR } = CORNER_RADII[p.type];
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const consider = (angle: number, r: number) => {
@@ -424,7 +424,7 @@ function drawCornerIcon(
   const ctx = canvas.getContext('2d')!;
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
-  const { outerR: rO, innerR: rI } = family === 'corner' ? TIGHT : BIG;
+  const { outerR: rO, innerR: rI } = CORNER_RADII[family];
   const θ = angleDeg * Math.PI / 180;
   const margin = Math.max(3, W * 0.06);
   const avW = W - margin, avH = H - margin;
@@ -1069,6 +1069,7 @@ export class TrackEditor extends Scene {
     const straights = this.pieces.filter(p => p.type === 'straight').length;
     const tight     = this.pieces.filter(p => p.type === 'corner').length;
     const big       = this.pieces.filter(p => p.type === 'big_corner').length;
+    const huge      = this.pieces.filter(p => p.type === 'huge_corner').length;
     const pct       = total / MAX_PIECES;
     const barColor  = pct >= 1 ? '#ff5555' : pct >= 0.8 ? '#ffaa44' : '#44ff99';
 
@@ -1087,6 +1088,7 @@ export class TrackEditor extends Scene {
     pieceSec.appendChild(statRow('Straights',     String(straights)));
     pieceSec.appendChild(statRow('Tight corners', String(tight)));
     pieceSec.appendChild(statRow('Big corners',   String(big)));
+    pieceSec.appendChild(statRow('Huge corners',  String(huge)));
     card.appendChild(pieceSec);
 
     // ── Markers ───────────────────────────────────────────────────────────────
@@ -1555,8 +1557,7 @@ export class TrackEditor extends Scene {
         const lx = dx * c + dy * s, ly = -dx * s + dy * c;
         if (Math.abs(lx) <= HALF_TRACK * 1.15 && Math.abs(ly) <= half * 1.1) return i;
       } else {
-        const outerR = p.type === 'corner' ? TIGHT.outerR : BIG.outerR;
-        const innerR = p.type === 'corner' ? TIGHT.innerR : BIG.innerR;
+        const { outerR, innerR } = CORNER_RADII[p.type];
         const dist   = Math.hypot(dx, dy);
         // Annular radial check
         if (dist >= outerR || dist <= Math.max(innerR - 8, 4)) continue;
@@ -2951,15 +2952,14 @@ export class TrackEditor extends Scene {
       famCanvas.width = ICON; famCanvas.height = ICON;
       famCanvas.style.cssText = `width:${ICON}px;height:${ICON}px;display:block;flex-shrink:0;`;
       drawCornerIcon(famCanvas, curFamily, 90, false, 'both', false);
-      const famNames: Record<CornerFamily, string> = { corner: 'Tight', big_corner: 'Big' };
+      const famNames: Record<CornerFamily, string> = { corner: 'Tight', big_corner: 'Big', huge_corner: 'Huge' };
       const famLabel = document.createElement('span');
       famLabel.style.cssText = 'font:bold 12px Arial,sans-serif;line-height:1;color:#8899bb;';
       famLabel.textContent = famNames[curFamily];
       famBtn.appendChild(famCanvas);
       famBtn.appendChild(famLabel);
       famBtn.addEventListener('click', () => {
-        const cycle: CornerFamily[] = ['corner', 'big_corner'];
-        const next = cycle[(cycle.indexOf(curFamily) + 1) % cycle.length];
+        const next = CORNER_FAMILIES[(CORNER_FAMILIES.indexOf(curFamily) + 1) % CORNER_FAMILIES.length];
         this.palCornerFamily = next;
         this.rebuildTabs();
         this.rebuildContent();

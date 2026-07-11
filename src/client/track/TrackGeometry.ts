@@ -21,6 +21,13 @@ export const BIG = {
   clR: 180,
 } as const;
 
+// Same clR ratio as TIGHT->BIG (×3) applied again: BIG->HUGE.
+export const HUGE = {
+  outerR: 593, // 540 + 53
+  innerR: 487, // 540 - 53
+  clR: 540,
+} as const;
+
 /**
  * Usable corridor length (px) for each straight variant.
  * Derived from sprite height h: corridorLen = h - 20 (10 px margin each end).
@@ -28,7 +35,7 @@ export const BIG = {
  */
 export const STRAIGHT_LEN = { 25: 30, 50: 60, 75: 90, 100: 120 } as const;
 
-export type CornerFamily = 'corner' | 'big_corner';
+export type CornerFamily = 'corner' | 'big_corner' | 'huge_corner';
 export type CornerAngle = 15 | 30 | 45 | 60 | 75 | 90;
 export type StraightSize = 25 | 50 | 75 | 100;
 export type WallVariant = 'both' | 'outer' | 'inner';
@@ -36,3 +43,11 @@ export type WallVariant = 'both' | 'outer' | 'inner';
 export const CORNER_ANGLES: CornerAngle[] = [15, 30, 45, 60, 75, 90];
 export const STRAIGHT_SIZES: StraightSize[] = [25, 50, 75, 100];
 export const WALL_VARIANTS: WallVariant[] = ['both', 'outer', 'inner'];
+export const CORNER_FAMILIES: CornerFamily[] = ['corner', 'big_corner', 'huge_corner'];
+
+// Single source of truth for {outerR, innerR, clR} by corner family — replaces
+// the `type === 'corner' ? TIGHT : BIG` ternary that used to be duplicated
+// across every consumer (collision, rendering, connectors, editor UI).
+export const CORNER_RADII: Record<CornerFamily, { outerR: number; innerR: number; clR: number }> = {
+  corner: TIGHT, big_corner: BIG, huge_corner: HUGE,
+};
