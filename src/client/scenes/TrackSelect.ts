@@ -713,6 +713,59 @@ export class TrackSelect extends Scene {
     document.body.appendChild(overlay);
   }
 
+  // Devvit's webview is sandboxed without the `allow-modals` flag, so native
+  // window.confirm() is silently ignored (always resolves falsy) — this is
+  // an in-app replacement.
+  private static showConfirm(msg: string, actionLabel: string, onConfirm: () => void): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:1100',
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'background:rgba(0,0,0,0.75)',
+    ].join(';');
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'background:#0d0d1e', 'border:1.5px solid #444488', 'border-radius:10px',
+      'padding:20px 18px', 'width:min(300px,calc(100% - 32px))',
+      'display:flex', 'flex-direction:column', 'gap:12px',
+      'box-shadow:0 8px 32px rgba(0,0,0,0.85)',
+    ].join(';');
+
+    const title = document.createElement('div');
+    title.textContent = msg;
+    title.style.cssText = 'font:bold 15px "Arial Black",Arial,sans-serif;color:#e8e8ff;text-align:center;';
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.cssText = [
+      'flex:1', 'padding:10px', 'font:14px Arial,sans-serif',
+      'color:#aaaacc', 'background:#1a1a2a', 'border:1px solid #444466',
+      'border-radius:6px', 'cursor:pointer',
+    ].join(';');
+    cancelBtn.addEventListener('click', () => overlay.remove());
+
+    const actionBtn = document.createElement('button');
+    actionBtn.textContent = actionLabel;
+    actionBtn.style.cssText = [
+      'flex:1', 'padding:10px', 'font:bold 14px Arial,sans-serif',
+      'color:#ff8888', 'background:#1a0808', 'border:1px solid #663333',
+      'border-radius:6px', 'cursor:pointer',
+    ].join(';');
+    actionBtn.addEventListener('click', () => { overlay.remove(); onConfirm(); });
+
+    row.appendChild(cancelBtn);
+    row.appendChild(actionBtn);
+    card.appendChild(title);
+    card.appendChild(row);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+  }
+
   private static showPromoteDailyDialog(trackName: string, onConfirm: (date: string) => void): void {
     const today = new Date().toISOString().slice(0, 10);
 
@@ -965,7 +1018,7 @@ export class TrackSelect extends Scene {
     const playBtn     = mkBtn('▶ Play',      '#88ffaa', '#001a08', '#226633');
     const editBtn     = mkBtn('✎ Edit',      '#aaaaff', '#0a0a22', '#333366');
     const deleteBtn   = mkBtn('✕ Del',       '#ff8888', '#1a0808', '#663333');
-    const aiVerifyBtn = draft.verified ? null : mkBtn('🤖 AI', '#ffcc44', '#1a1400', '#665500');
+    const aiVerifyBtn = (draft.verified || !this.isMod) ? null : mkBtn('🤖 AI', '#ffcc44', '#1a1400', '#665500');
 
     const canUpload = draft.verified;
     const uploadBtn = document.createElement('button');
@@ -1075,22 +1128,23 @@ export class TrackSelect extends Scene {
       }
     });
 
-    deleteBtn.addEventListener('click', async () => {
-      if (!confirm(`Delete "${draft.name}"?`)) return;
-      deleteBtn.textContent = '…';
-      deleteBtn.disabled = true;
-      try {
-        if (draft.local) {
-          deleteLocalDraft(draft.id);
-        } else {
-          await deleteMineTrack(draft.id);
+    deleteBtn.addEventListener('click', () => {
+      TrackSelect.showConfirm(`Delete "${draft.name}"?`, 'Delete', async () => {
+        deleteBtn.textContent = '…';
+        deleteBtn.disabled = true;
+        try {
+          if (draft.local) {
+            deleteLocalDraft(draft.id);
+          } else {
+            await deleteMineTrack(draft.id);
+          }
+          this.drafts = this.drafts.filter(d => d.id !== draft.id);
+          this.buildList();
+        } catch {
+          deleteBtn.textContent = '✕ Del';
+          deleteBtn.disabled = false;
         }
-        this.drafts = this.drafts.filter(d => d.id !== draft.id);
-        this.buildList();
-      } catch {
-        deleteBtn.textContent = '✕ Del';
-        deleteBtn.disabled = false;
-      }
+      });
     });
 
     if (aiVerifyBtn) {
@@ -1107,7 +1161,13 @@ export class TrackSelect extends Scene {
             startHeading: payload.startHeading ?? 90,
             pieces: payload.pieces, markers: payload.markers,
           };
-          const ghost = solveTrack(entry, 'average', 24);
+          // 'average'/'rookie' use a greedy heuristic (2-step lookahead, no
+          // backtracking) that can fail to find a path even when one exists —
+          // e.g. it can't plan the deceleration needed before a tight corner.
+          // Verification should prove "is this solvable at all", so use
+          // 'skilled', which falls back to exhaustive BFS (see GhostSolver's
+          // LOOKAHEAD table) instead of the heuristic.
+          const ghost = solveTrack(entry, 'skilled', 24);
           if (!ghost) {
             aiStatusEl.textContent = 'AI couldn\'t complete this track.';
             aiStatusEl.style.color = '#ffaa44';
