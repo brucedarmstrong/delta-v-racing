@@ -12,6 +12,7 @@ import { GridTest } from './scenes/GridTest';
 import * as Phaser from 'phaser';
 import { AUTO, Game } from 'phaser';
 import { Preloader } from './scenes/Preloader';
+import { attachGlobalUiClicks } from './audio/Sfx';
 
 //  Find out more information about the Game Config at:
 //  https://docs.phaser.io/api-documentation/typedef/types-core#gameconfig
@@ -67,4 +68,5 @@ const StartGame = (parent: string) => {
 
 document.addEventListener('DOMContentLoaded', () => {
   StartGame('game-container');
+  attachGlobalUiClicks();
 });

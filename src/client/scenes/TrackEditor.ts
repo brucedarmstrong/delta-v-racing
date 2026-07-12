@@ -17,6 +17,7 @@ import { saveDraft, fetchMineTrack } from '../track/TrackUpload';
 import { getEditorSettings, setEditorSettings, type EditorSettings } from '../track/EditorSettings';
 import { PhaserStarField } from '../starfield';
 import type { TrackPayload } from '../track/TrackUpload';
+import { isSfxMuted, setSfxMuted } from '../audio/Sfx';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1007,6 +1008,31 @@ export class TrackEditor extends Scene {
     renderGrpRow();
     grpSec.appendChild(grpRow);
     card.appendChild(grpSec);
+
+    // ── Sound ─────────────────────────────────────────────────────────────────
+    const sndSec = document.createElement('div');
+    sndSec.style.cssText = 'margin-top:14px;';
+    const sndSecHead = document.createElement('div');
+    sndSecHead.textContent = 'Sound';
+    sndSecHead.style.cssText = 'font:bold 10px Arial,sans-serif;color:#5566aa;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a2a4a;padding-bottom:4px;margin-bottom:8px;';
+    sndSec.appendChild(sndSecHead);
+
+    const sndRow = document.createElement('div');
+    sndRow.style.cssText = 'display:flex;gap:8px;';
+    const renderSndRow = () => {
+      sndRow.innerHTML = '';
+      sndRow.appendChild(this.mkOptBtn('Sound on', !isSfxMuted(), () => {
+        setSfxMuted(false);
+        renderSndRow();
+      }));
+      sndRow.appendChild(this.mkOptBtn('Muted', isSfxMuted(), () => {
+        setSfxMuted(true);
+        renderSndRow();
+      }));
+    };
+    renderSndRow();
+    sndSec.appendChild(sndRow);
+    card.appendChild(sndSec);
 
     overlay.appendChild(card);
     document.body.appendChild(overlay);

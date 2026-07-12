@@ -7,6 +7,9 @@ import { convertGmsTrack, convertGmsMarkers, type GmsTrack } from './track/conve
 import ovalSmallJson from './tracks/gms/Oval_Small.json';
 import type { CommunityTrackResponse } from '../shared/api';
 import type { TrackPayload } from './track/TrackUpload';
+import { attachGlobalUiClicks } from './audio/Sfx';
+
+attachGlobalUiClicks();
 
 // ── Star field ────────────────────────────────────────────────────────────────
 

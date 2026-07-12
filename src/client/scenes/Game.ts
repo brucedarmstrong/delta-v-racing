@@ -12,6 +12,7 @@ import { fetchOrGenerateAiGhost, generateAndUploadAiGhosts } from '../track/AiGh
 import { verifyMineTrack, markLocalDraftVerified } from '../track/TrackUpload';
 import { PhaserStarField } from '../starfield';
 import { drawMiniCar } from '../track/CarShape';
+import { playCrash, playCheckpoint, playFinish, playPersonalBest, playPickMove, isSfxMuted, setSfxMuted } from '../audio/Sfx';
 
 // ── Grid / camera constants ────────────────────────────────────────────────────
 const gridPx = 24;
@@ -825,6 +826,7 @@ export class Game extends Scene {
 
     // Commit ripple — pulse from the destination dot.
     this.spawnCommitRipple(newGX * gridPx, newGY * gridPx);
+    playPickMove();
 
     const newVX      = this.velX + dvx;
     const newVY      = this.velY + dvy;
@@ -1029,7 +1031,7 @@ export class Game extends Scene {
         this.tweens.timeScale = CRASH_SLO;
         this.time.timeScale   = CRASH_SLO;
 
-        this.playCrashSound();
+        playCrash();
 
         // Particle emitter starts at contact, slides into the barrier toward the crash cell.
         const emitter = this.spawnCrashParticles(contactWX, contactWY);
@@ -1279,6 +1281,7 @@ export class Game extends Scene {
           duration: 160, ease: 'Back.easeOut', yoyo: true,
         });
         this.spawnCheckpointRing(m.x, m.y);
+        playCheckpoint();
         anyNewlyTouched = true;
       }
     }
@@ -1330,6 +1333,7 @@ export class Game extends Scene {
 
     // Flash + brief zoom-out.
     this.spawnFinishFlash();
+    playFinish();
     const cam     = this.cameras.main;
     const curZoom = cam.zoom;
     this.tweens.add({
@@ -1682,6 +1686,7 @@ export class Game extends Scene {
           const label = data.previousBest === undefined ? 'Uploaded!' : 'New Personal Best!';
           setStatus(`${label} · Rank #${data.rank ?? '?'}`, '#88ccff');
           this.spawnConfetti();
+          playPersonalBest();
         } else {
           setStatus(`Your best: ${data.previousBest!.toFixed(2)} · Rank #${data.rank ?? '?'}`, '#8899cc');
         }
@@ -1849,34 +1854,6 @@ export class Game extends Scene {
       .catch(() => {
         container.innerHTML = '<div style="color:#ff6655;text-align:center;padding:16px;font:13px Arial">Leaderboard unavailable</div>';
       });
-  }
-
-  private playCrashSound() {
-    try {
-      const ac      = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const rate    = ac.sampleRate;
-      const len     = Math.floor(rate * 0.4);
-      const buf     = ac.createBuffer(1, len, rate);
-      const data    = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) {
-        const t     = i / rate;
-        // White-noise burst + low thump.
-        const noise = (Math.random() * 2 - 1) * Math.exp(-t * 12);
-        const thump = Math.sin(2 * Math.PI * 60 * t)   * Math.exp(-t * 25);
-        const crack = Math.sin(2 * Math.PI * 220 * t)  * Math.exp(-t * 40);
-        data[i] = noise * 0.55 + thump * 0.30 + crack * 0.15;
-      }
-      const src  = ac.createBufferSource();
-      src.buffer = buf;
-      const gain = ac.createGain();
-      gain.gain.setValueAtTime(0.9, ac.currentTime);
-      src.connect(gain);
-      gain.connect(ac.destination);
-      src.start();
-      src.onended = () => ac.close();
-    } catch (e) {
-      console.warn('[crash sound]', e);
-    }
   }
 
 
@@ -2985,9 +2962,31 @@ export class Game extends Scene {
       racerSection.appendChild(mkRacerRow(dotColor, name, `Turn ${gs.moveIdx}${gCrashStr}`, '#ccccee'));
     }
 
+    // ── Sound toggle ─────────────────────────────────────────────────────────
+    const sndRow = document.createElement('div');
+    sndRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;border-top:1px solid #2a2a55;padding-top:8px;';
+    const sndLabel = document.createElement('span');
+    sndLabel.textContent = 'Sound';
+    sndLabel.style.cssText = 'font:12px Arial,sans-serif;color:#8888aa;';
+    const sndBtn = document.createElement('button');
+    const renderSndBtn = () => {
+      const on = !isSfxMuted();
+      sndBtn.textContent = on ? '🔊 On' : '🔇 Off';
+      sndBtn.style.cssText = [
+        'padding:5px 10px', 'border-radius:5px', 'font:bold 12px Arial,sans-serif', 'cursor:pointer',
+        on ? 'background:#22224a;color:#ccccff;border:1.5px solid #6666cc;'
+           : 'background:#111128;color:#6666aa;border:1px solid #2a2a44;',
+      ].join(';');
+    };
+    renderSndBtn();
+    sndBtn.addEventListener('click', () => { setSfxMuted(!isSfxMuted()); renderSndBtn(); });
+    sndRow.appendChild(sndLabel);
+    sndRow.appendChild(sndBtn);
+
     dialog.appendChild(title);
     dialog.appendChild(body);
     dialog.appendChild(racerSection);
+    dialog.appendChild(sndRow);
     dialog.appendChild(makeBtn('Continue', '#66ff99', () => this.resumeGame()));
     dialog.appendChild(makeBtn('Restart',  '#ffcc44', () => this.clearPauseAndGo(() => this.scene.start('Game', { track: this.trackEntry, returnTab: this.returnTab }))));
     dialog.appendChild(makeBtn('Exit',     '#ff6666', () => this.clearPauseAndGo(() => this.exitToMenu())));
