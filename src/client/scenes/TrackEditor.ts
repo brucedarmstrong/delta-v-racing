@@ -777,8 +777,13 @@ export class TrackEditor extends Scene {
     backBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#8888ff;font-size:16px;padding:0 6px;height:100%;flex-shrink:0;display:inline-flex;align-items:center;';
     backBtn.addEventListener('click', () => this.goBack());
 
-    const titleEl = document.createElement('div');
-    titleEl.style.cssText = 'flex:1;';
+    // Everything between Back and More lives in a horizontally-scrollable
+    // strip. Back and More stay pinned outside it — on a narrow enough
+    // device the middle toolbar can need a swipe to reach everything, but
+    // More (the overflow escape hatch for the rest of the toolbar) must
+    // never itself be the thing that goes off-screen.
+    const middleWrap = document.createElement('div');
+    middleWrap.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;gap:4px;overflow-x:auto;overflow-y:hidden;';
 
     const mkBtn = (html: string, title: string, color: string, bg: string, border: string, fn: () => void) => {
       const b = document.createElement('button');
@@ -845,18 +850,19 @@ export class TrackEditor extends Scene {
       return b;
     };
 
+    middleWrap.appendChild(sep());
+    middleWrap.appendChild(snapBtn);
+    middleWrap.appendChild(sep());
+    middleWrap.appendChild(mkBtn(ic('undo'),          'Undo',       '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
+    middleWrap.appendChild(mkBtn(ic('redo'),          'Redo',       '#ffaa44', '#1a0e00', '#553300', () => this.redo()));
+    middleWrap.appendChild(sep());
+    middleWrap.appendChild(mkBtn(ic('play'),          'Test track', '#44ffcc', '#001a12', '#226644', () => this.testTrack()));
+    middleWrap.appendChild(mkBtn(ic('content-save'),  'Save track', '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
+    middleWrap.appendChild(sep());
+    middleWrap.appendChild(selectBtn);
+
     hdr.appendChild(backBtn);
-    hdr.appendChild(titleEl);
-    hdr.appendChild(sep());
-    hdr.appendChild(snapBtn);
-    hdr.appendChild(sep());
-    hdr.appendChild(mkBtn(ic('undo'),          'Undo',       '#ffaa44', '#1a0e00', '#553300', () => this.undo()));
-    hdr.appendChild(mkBtn(ic('redo'),          'Redo',       '#ffaa44', '#1a0e00', '#553300', () => this.redo()));
-    hdr.appendChild(sep());
-    hdr.appendChild(mkBtn(ic('play'),          'Test track', '#44ffcc', '#001a12', '#226644', () => this.testTrack()));
-    hdr.appendChild(mkBtn(ic('content-save'),  'Save track', '#66ff99', '#001a08', '#226633', () => this.showSaveDialog()));
-    hdr.appendChild(sep());
-    hdr.appendChild(selectBtn);
+    hdr.appendChild(middleWrap);
     hdr.appendChild(sep());
     const moreBtn = circleBtn('⋮', 'More', () => this.toggleMoreMenu(moreBtn));
     hdr.appendChild(moreBtn);
