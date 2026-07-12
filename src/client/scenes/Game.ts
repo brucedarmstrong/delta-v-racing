@@ -19,9 +19,16 @@ const gridPx = 24;
 // The race grid itself is stationary, but the starfield drifts slowly on its
 // own for a "grid drifting through space" feel — opposite direction from the
 // scrolling background grid on the splash/ModeSelect screens (GRID_DX/GRID_DY
-// there are -3/-8 px/s).
-const STARFIELD_DRIFT_X = 3;
-const STARFIELD_DRIFT_Y = 8;
+// there are -3/-8 px/s). Note: PhaserStarField SUBTRACTS its drift offset from
+// star position while ModeSelect ADDS its grid offset to line position, so
+// matching (not negating) GRID_DX/GRID_DY here is what makes the two actually
+// drift opposite ways on screen.
+const STARFIELD_DRIFT_X = -3;
+const STARFIELD_DRIFT_Y = -8;
+
+// How long the finish flash + camera zoom-out/in take before the win dialog
+// appears (550ms zoom-out + 450ms zoom-in — the longer of the two finish effects).
+const WIN_DIALOG_DELAY_MS = 1000;
 
 // Tint + trail colour assigned to each racing ghost slot (up to 3).
 const GHOST_COLORS = [
@@ -190,6 +197,9 @@ export class Game extends Scene {
 
   // RAF id for the picker animation loop (dot pulse, danger glow).
   private pickRafId = 0;
+  // RAF id for the checkpoint proximity-pulse loop (Phaser's own update() is
+  // unreliable in this environment — see feedback_phaser4_workarounds memory).
+  private checkpointPulseRafId = 0;
 
   // Pause menu
   private paused           = false;
@@ -299,6 +309,7 @@ export class Game extends Scene {
     this.carImg  = this.add.image(startWX, startWY, 'car').setAngle(this.trackEntry.startHeading ?? 90).setDepth(10);
     this.velGfx  = this.add.graphics().setDepth(8);
     this.pickGfx = this.add.graphics().setDepth(9);
+    this.startCheckpointPulse();
 
     this.cameras.main.setZoom(1.2);
     this.cameras.main.centerOn(startWX, startWY);
@@ -556,53 +567,69 @@ export class Game extends Scene {
     settingsBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       if (settingsDlg) { closeSettingsDlg(); return; }
-      const dlg = document.createElement('div');
-      dlg.style.cssText = [
-        'position:fixed', 'z-index:1002',
-        'background:#0d0d1e', 'border:1px solid #444488', 'border-radius:6px',
-        'padding:6px 4px', 'display:flex', 'flex-direction:column', 'gap:2px',
-      ].join(';');
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'position:fixed;z-index:1002;display:flex;flex-direction:column;align-items:center;';
+
       const rect = container.getBoundingClientRect();
       const snapOnLeft = this.mmSnap.endsWith('-left');
-      if (snapOnLeft) {
-        dlg.style.left  = `${rect.left}px`;
-      } else {
-        dlg.style.right = `${window.innerWidth - rect.right}px`;
-      }
-      if (this.mmSnap.startsWith('bottom')) {
-        dlg.style.bottom = `${window.innerHeight - rect.top + 4}px`;
-      } else {
-        dlg.style.top = `${rect.bottom + 4}px`;
-      }
-      const options: Array<{ label: string; value: MmSnap }> = [
-        { label: '↖ Top Left',     value: 'top-left'     },
-        { label: '↗ Top Right',    value: 'top-right'    },
-        { label: '↙ Bottom Left',  value: 'bottom-left'  },
-        { label: '↘ Bottom Right', value: 'bottom-right' },
-        { label: '   Minimized',   value: 'minimized'    },
-      ];
-      for (const opt of options) {
-        const row = document.createElement('button');
-        const active = this.mmSnap === opt.value;
-        row.textContent = (active ? '● ' : '○ ') + opt.label;
-        row.style.cssText = [
-          'background:transparent', 'border:none', 'text-align:left',
-          `color:${active ? '#aaccff' : '#8888aa'}`,
-          'font:13px Arial,sans-serif', 'cursor:pointer',
-          'padding:5px 10px', 'border-radius:4px', 'white-space:nowrap',
+      const onBottom   = this.mmSnap.startsWith('bottom');
+      if (snapOnLeft) wrap.style.left  = `${rect.left}px`;
+      else            wrap.style.right = `${window.innerWidth - rect.right}px`;
+      if (onBottom)   wrap.style.bottom = `${window.innerHeight - rect.top + 6}px`;
+      else            wrap.style.top    = `${rect.bottom + 6}px`;
+
+      // 2×2 corner-picker grid — a triangle in each tile points toward the
+      // panel corner it represents; the active corner is highlighted.
+      const panel = document.createElement('div');
+      panel.style.cssText = [
+        'display:grid', 'grid-template-columns:repeat(2,34px)', 'grid-template-rows:repeat(2,34px)', 'gap:4px',
+        'background:#12122a', 'border:1.5px solid #444488', 'border-radius:12px',
+        'padding:6px', 'box-shadow:0 6px 20px rgba(0,0,0,0.6)',
+      ].join(';');
+
+      // wedge path per corner: a right triangle filling that corner of a 32×32 tile.
+      const wedgePath: Record<MmSnap & string, string> = {
+        'top-left':     'M4,4 L18,4 L4,18 Z',
+        'top-right':    'M28,4 L28,18 L14,4 Z',
+        'bottom-left':  'M4,28 L4,14 L18,28 Z',
+        'bottom-right': 'M28,28 L14,28 L28,14 Z',
+        'minimized':    '',
+      };
+      const corners: Exclude<MmSnap, 'minimized'>[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+      for (const corner of corners) {
+        const active = this.mmSnap === corner;
+        const tile = document.createElement('button');
+        tile.title = corner.replace('-', ' ');
+        tile.style.cssText = [
+          'width:34px', 'height:34px', 'padding:0', 'cursor:pointer', 'border-radius:6px',
+          active ? 'background:#2244aa;border:1.5px solid #88aaff;' : 'background:#1a1a3a;border:1px solid #33335a;',
         ].join(';');
-        row.addEventListener('click', () => {
-          this.mmSnap = opt.value;
+        tile.innerHTML = `<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+          <path d="${wedgePath[corner]}" fill="${active ? '#eef4ff' : '#7788bb'}"/>
+        </svg>`;
+        tile.addEventListener('click', () => {
+          this.mmSnap = corner;
           localStorage.setItem('dv-mm-snap', this.mmSnap);
           this.applyMmSnap(container, restoreBtn);
-          if (opt.value !== 'minimized') showStrip();
+          showStrip();
           closeSettingsDlg();
         });
-        dlg.appendChild(row);
+        panel.appendChild(tile);
       }
-      dlg.addEventListener('pointerdown', (e) => e.stopPropagation());
-      settingsDlg = dlg;
-      document.body.appendChild(dlg);
+
+      // Small tail pointing back toward the ⚙ button that opened this popover.
+      const tail = document.createElement('div');
+      const tailSize = 7;
+      tail.style.cssText = onBottom
+        ? `width:0;height:0;border-left:${tailSize}px solid transparent;border-right:${tailSize}px solid transparent;border-top:${tailSize}px solid #444488;margin-top:-1px;`
+        : `width:0;height:0;border-left:${tailSize}px solid transparent;border-right:${tailSize}px solid transparent;border-bottom:${tailSize}px solid #444488;margin-bottom:-1px;`;
+      tail.style.alignSelf = snapOnLeft ? 'flex-start' : 'flex-end';
+      if (onBottom) { wrap.appendChild(tail); wrap.appendChild(panel); }
+      else          { wrap.appendChild(panel); wrap.appendChild(tail); }
+
+      wrap.addEventListener('pointerdown', (e) => e.stopPropagation());
+      settingsDlg = wrap;
+      document.body.appendChild(wrap);
       setTimeout(() => document.addEventListener('pointerdown', closeSettingsDlg, { once: true }), 0);
     });
 
@@ -1244,9 +1271,13 @@ export class Game extends Scene {
       const m  = this.trackMarkers[mi];
       if (this.crossesMarker(m, carWX, carWY)) {
         this.checkpointTouched[i] = true;
-        this.markerImgList[mi].setTexture(
-          m.shape === 'circle' ? 'tile_checkpoint_circle_1' : 'tile_checkpoint_1',
-        );
+        const img = this.markerImgList[mi];
+        img.setTexture(m.shape === 'circle' ? 'tile_checkpoint_circle_1' : 'tile_checkpoint_1');
+        img.setScale(1); // stop the proximity pulse at a clean baseline before the pop
+        this.tweens.add({
+          targets: img, scaleX: 1.5, scaleY: 1.5,
+          duration: 160, ease: 'Back.easeOut', yoyo: true,
+        });
         this.spawnCheckpointRing(m.x, m.y);
         anyNewlyTouched = true;
       }
@@ -1318,6 +1349,8 @@ export class Game extends Scene {
     );
     const score    = this.turn + this.crashes + Math.min(finesse, 0.99);
     const scoreStr = score.toFixed(2);
+    this.updateHud(); // pop the turn/crash counters one last time
+    if (this.scoreValEl) this.scoreValEl.textContent = scoreStr;
 
     this.currentGhost = {
       v:          1,
@@ -1330,6 +1363,13 @@ export class Game extends Scene {
       recordedAt: Date.now(),
     };
 
+    // Wait for the finish flash/zoom to play out before showing the dialog,
+    // so the player actually sees the finish animation instead of it being
+    // instantly covered up.
+    this.time.delayedCall(WIN_DIALOG_DELAY_MS, () => this.showWinDialog(score, scoreStr));
+  }
+
+  private showWinDialog(score: number, scoreStr: string): void {
     // ── Overlay shell ─────────────────────────────────────────────────────────
     const overlay = document.createElement('div');
     overlay.style.cssText = [
@@ -1536,7 +1576,7 @@ export class Game extends Scene {
         ghost.startGX * gridPx,
         ghost.startGY * gridPx,
         `ghost-car-${i}`,
-      ).setAngle(90).setDepth(9).setAlpha(0.55);
+      ).setAngle(this.trackEntry.startHeading ?? 90).setDepth(9).setAlpha(0.55);
 
       // Soft glow halo behind the ghost car — tweened alongside carImg.
       const glowImg = this.add.arc(
@@ -2099,18 +2139,73 @@ export class Game extends Scene {
   }
 
   private spawnCheckpointRing(worldX: number, worldY: number): void {
-    const ring = this.add.graphics();
-    ring.lineStyle(3, 0x33ee88, 1.0);
-    ring.strokeCircle(0, 0, gridPx);
-    ring.setPosition(worldX, worldY);
-    ring.setDepth(10);
-    this.tweens.add({
-      targets: ring,
-      scaleX: 3.5, scaleY: 3.5, alpha: 0,
-      duration: 550,
-      ease: 'Quad.easeOut',
-      onComplete: () => ring.destroy(),
-    });
+    // Two staggered rings (tight/fast + wide/slow) instead of one, plus a
+    // small sparkle burst radiating from the checkpoint.
+    const mkRing = (color: number, maxScale: number, duration: number, delay: number) => {
+      const ring = this.add.graphics();
+      ring.lineStyle(3, color, 1.0);
+      ring.strokeCircle(0, 0, gridPx);
+      ring.setPosition(worldX, worldY);
+      ring.setDepth(10);
+      ring.setAlpha(0);
+      this.tweens.add({
+        targets: ring, alpha: 1, duration: 70, delay,
+        onComplete: () => {
+          this.tweens.add({
+            targets: ring, scaleX: maxScale, scaleY: maxScale, alpha: 0,
+            duration, ease: 'Quad.easeOut',
+            onComplete: () => ring.destroy(),
+          });
+        },
+      });
+    };
+    mkRing(0x33ee88, 3.5, 550, 0);
+    mkRing(0x88ffee, 2.3, 400, 90);
+
+    try {
+      const emitter = this.add.particles(worldX, worldY, 'spark', {
+        speed:    { min: 40, max: 150 },
+        angle:    { min: 0, max: 360 },
+        scale:    { start: 1.3, end: 0 },
+        alpha:    { start: 1, end: 0 },
+        tint:     [0x33ee88, 0x88ffee, 0xffffff, 0xffee66],
+        lifespan: 420,
+        emitting: false,
+      });
+      emitter.setDepth(10);
+      emitter.explode(10);
+      this.time.delayedCall(500, () => emitter.destroy());
+    } catch (e) {
+      console.warn('[checkpoint burst]', e);
+    }
+  }
+
+  // Untouched checkpoint sprites breathe faster/wider the closer the car
+  // gets — barely perceptible far away, unmissable right on top of it.
+  // Driven by requestAnimationFrame (Phaser's own update() is unreliable
+  // here — see feedback_phaser4_workarounds memory).
+  private startCheckpointPulse(): void {
+    cancelAnimationFrame(this.checkpointPulseRafId);
+    const tick = (time: number) => {
+      if (!this.paused && !this.won) this.updateCheckpointPulse(time);
+      this.checkpointPulseRafId = requestAnimationFrame(tick);
+    };
+    this.checkpointPulseRafId = requestAnimationFrame(tick);
+  }
+
+  private updateCheckpointPulse(time: number): void {
+    if (!this.carImg) return;
+    const NEAR = gridPx * 1.5, FAR = gridPx * 10;
+    for (let i = 0; i < this.checkpointIndices.length; i++) {
+      if (this.checkpointTouched[i]) continue;
+      const img = this.markerImgList[this.checkpointIndices[i]];
+      if (!img?.active) continue;
+      const dist = Math.hypot(img.x - this.carImg.x, img.y - this.carImg.y);
+      const t     = Math.min(Math.max(1 - (dist - NEAR) / (FAR - NEAR), 0), 1); // 0 far, 1 close
+      const amp   = 0.02 + t * 0.20;
+      const speed = 0.0035 + t * 0.006;
+      img.setScale(1 + Math.sin(time * speed) * amp);
+    }
   }
 
   private spawnFinishFlash(): void {
@@ -2406,7 +2501,10 @@ export class Game extends Scene {
 
     // ── Stats — TURN / CRASH / SCORE, each a small label over a bold value ─────
     const stats = document.createElement('div');
-    stats.style.cssText = 'display:flex;align-items:center;gap:14px;';
+    // Color set here (not on each value div) so the hudPop flash below —
+    // animated on this container's own `color` — cascades down to the
+    // values instead of being hidden behind an explicit per-value color.
+    stats.style.cssText = 'display:flex;align-items:center;gap:14px;color:#eef2ff;';
 
     const mkStat = (label: string): HTMLElement => {
       const col = document.createElement('div');
@@ -2415,7 +2513,7 @@ export class Game extends Scene {
       lbl.textContent = label;
       lbl.style.cssText = 'font:bold 9px Arial,sans-serif;letter-spacing:0.1em;color:#7788aa;';
       const val = document.createElement('div');
-      val.style.cssText = 'font:bold 17px/1 Arial,sans-serif;color:#eef2ff;';
+      val.style.cssText = 'font:bold 17px/1 Arial,sans-serif;';
       col.appendChild(lbl);
       col.appendChild(val);
       stats.appendChild(col);
@@ -2476,6 +2574,8 @@ export class Game extends Scene {
 
     this.events.once('shutdown', () => {
       window.removeEventListener('keydown', onKey);
+      cancelAnimationFrame(this.checkpointPulseRafId);
+      this.checkpointPulseRafId = 0;
       this.topBarEl?.remove();
       this.topBarEl   = null;
       this.pauseBtnEl = null;
@@ -2531,7 +2631,9 @@ export class Game extends Scene {
     if (!this.hudDiv) return;
     if (this.turnValEl)  this.turnValEl.textContent  = String(this.turn);
     if (this.crashValEl) this.crashValEl.textContent = String(this.crashes);
-    if (this.scoreValEl) this.scoreValEl.textContent = String(this.turn + this.crashes);
+    // Once won, triggerWin() sets the precise (turns + crashes + finesse)
+    // score directly — don't stomp it with the live integer estimate.
+    if (this.scoreValEl && !this.won) this.scoreValEl.textContent = String(this.turn + this.crashes);
     if (this.turn > 0) {
       if (!Game._hudCssInjected) {
         Game._hudCssInjected = true;

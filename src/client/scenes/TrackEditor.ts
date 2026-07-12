@@ -87,9 +87,12 @@ const PAL_BTN_MAX = 84;
 
 const DEFAULT_START_X = 0, DEFAULT_START_Y = 0, DEFAULT_START_H = 180;
 const BG = 0x0a0a16;
-// Same drift as the race screen's starfield (Game.ts).
-const STARFIELD_DRIFT_X = 3;
-const STARFIELD_DRIFT_Y = 8;
+// Same drift as the race screen's starfield (Game.ts) — negative to match
+// (not negate) ModeSelect's GRID_DX/GRID_DY, since PhaserStarField subtracts
+// its offset while the scrolling grid adds its offset, so matching signs is
+// what makes the two actually drift opposite ways on screen.
+const STARFIELD_DRIFT_X = -3;
+const STARFIELD_DRIFT_Y = -8;
 
 // ── Module helpers ─────────────────────────────────────────────────────────────
 
