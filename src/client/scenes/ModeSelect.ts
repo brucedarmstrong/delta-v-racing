@@ -109,14 +109,16 @@ export class ModeSelect extends Scene {
 
     this.startGrid();
 
-    this.title = this.add.text(0, 0, 'DELTA-V', {
+    this.title = this.add.text(0, 0, 'DELTA-∇', {
       fontFamily: 'Arial Black', fontSize: '52px',
-      color: '#ffffff', stroke: '#000000', strokeThickness: 4,
+      color: '#ffee00', stroke: '#000000', strokeThickness: 4,
+      shadow: { offsetX: 0, offsetY: 0, color: '#ff8800', blur: 16, fill: true },
     }).setScrollFactor(0).setOrigin(0.5).setDepth(10);
 
     this.sub = this.add.text(0, 0, 'RACING', {
       fontFamily: 'Arial Black', fontSize: '24px',
-      color: '#8888ff', stroke: '#000000', strokeThickness: 3,
+      color: '#33ee88', stroke: '#000000', strokeThickness: 3,
+      shadow: { offsetX: 0, offsetY: 0, color: '#00ff66', blur: 12, fill: true },
     }).setScrollFactor(0).setOrigin(0.5).setDepth(10);
 
     const defs: BtnDef[] = [
