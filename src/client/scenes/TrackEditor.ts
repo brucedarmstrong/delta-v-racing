@@ -2871,7 +2871,7 @@ export class TrackEditor extends Scene {
       btn.style.cssText = [
         'flex:1', 'min-width:0', `max-width:${PAL_BTN_MAX * 2}px`, 'display:flex', 'flex-direction:column',
         'align-items:center', 'justify-content:center',
-        'gap:4px', 'padding:6px 4px', 'border-radius:6px', 'cursor:pointer',
+        'gap:2px', 'padding:3px 2px', 'border-radius:6px', 'cursor:pointer',
         `background:#111120;border:1px solid ${color}55;`,
       ].join(';');
       const img = document.createElement('img');
@@ -2881,7 +2881,7 @@ export class TrackEditor extends Scene {
       btn.appendChild(img);
       const sp = document.createElement('span');
       sp.textContent = label;
-      sp.style.cssText = `font:bold 11px Arial,sans-serif;color:${color};`;
+      sp.style.cssText = `font:bold 9px Arial,sans-serif;line-height:1;color:${color};`;
       btn.appendChild(sp);
       return btn;
     };
