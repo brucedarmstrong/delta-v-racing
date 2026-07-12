@@ -1,4 +1,5 @@
 import { Scene } from 'phaser';
+import { playClick } from '../audio/Sfx';
 import { appVersion, postData } from '../devvitContext';
 import { fetchCommunityTrack } from '../track/TrackUpload';
 import { fetchRaceGhosts } from '../track/RaceGhosts';
@@ -149,6 +150,7 @@ export class ModeSelect extends Scene {
       for (const btn of this.btns) {
         if (ptr.x >= btn.bx && ptr.x <= btn.bx + btn.bw &&
             ptr.y >= btn.by && ptr.y <= btn.by + btn.bh) {
+          playClick();
           btn.action();
           return;
         }

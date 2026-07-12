@@ -469,16 +469,21 @@ export class Game extends Scene {
       pxMin = 0; pyMin = 0; pxMax = probeW - 1; pyMax = probeH - 1;
     }
 
-    // Expand to cover every checkpoint and the finish line too — markers can
-    // be dragged away from the track geometry in the editor, so the
-    // barrier-only pixel scan above isn't guaranteed to include them.
-    for (const m of this.trackMarkers) {
-      if (m.kind !== 'checkpoint' && m.kind !== 'finish') continue;
-      const px = (m.x - lWL) * probeScale;
-      const py = (m.y - lWT) * probeScale;
+    // Expand to cover every checkpoint, the finish line, and the car's start
+    // position too — all of these can be dragged away from the track
+    // geometry in the editor, so the barrier-only pixel scan above isn't
+    // guaranteed to include them.
+    const expandFor = (wx: number, wy: number) => {
+      const px = (wx - lWL) * probeScale;
+      const py = (wy - lWT) * probeScale;
       pxMin = Math.min(pxMin, px); pxMax = Math.max(pxMax, px);
       pyMin = Math.min(pyMin, py); pyMax = Math.max(pyMax, py);
+    };
+    for (const m of this.trackMarkers) {
+      if (m.kind !== 'checkpoint' && m.kind !== 'finish') continue;
+      expandFor(m.x, m.y);
     }
+    expandFor(this.startWX, this.startWY);
 
     const mmBorder = 12; // world-pixel border around actual barriers
     this.mmWL = lWL + pxMin / probeScale - mmBorder;

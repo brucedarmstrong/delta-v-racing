@@ -3341,6 +3341,10 @@ export class TrackEditor extends Scene {
       }
     });
 
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !saveBtn.disabled) saveBtn.click();
+    });
+
     btnRow.appendChild(cancelBtn); btnRow.appendChild(saveBtn);
     card.appendChild(title); card.appendChild(input); card.appendChild(status); card.appendChild(btnRow);
     setTimeout(() => input.focus(), 50);

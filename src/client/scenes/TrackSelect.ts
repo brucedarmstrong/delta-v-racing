@@ -1,4 +1,5 @@
 import { Scene, GameObjects } from 'phaser';
+import { playClick } from '../audio/Sfx';
 import { STANDARD_TRACKS, type TrackEntry } from '../tracks/trackRegistry';
 import { TUTORIAL_TRACKS } from '../tracks/tutorialTracks';
 import { trackBounds } from '../track/TrackLayout';
@@ -121,6 +122,7 @@ export class TrackSelect extends Scene {
       for (const h of this.chromeHits) {
         if (ptr.x >= h.x && ptr.x <= h.x + h.w &&
             ptr.y >= h.y && ptr.y <= h.y + h.h) {
+          playClick();
           h.action();
           return;
         }
