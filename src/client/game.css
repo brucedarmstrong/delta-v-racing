@@ -1,3 +1,38 @@
+/* Self-hosted display/body fonts, registered under the family names already
+   used everywhere in the app ("Arial Black" for headers/titles, "Arial" for
+   body/UI text) so every existing font declaration picks them up without
+   needing to touch each one individually. Both are free/open-license
+   (SIL OFL) Google Fonts, self-hosted to avoid depending on an external CDN
+   inside Devvit's sandboxed webview. */
+@font-face {
+  font-family: 'Arial Black';
+  src: url('/assets/fonts/Orbitron-VariableFont.woff2') format('woff2');
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Arial';
+  src: url('/assets/fonts/Rajdhani-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Arial';
+  src: url('/assets/fonts/Rajdhani-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Arial';
+  src: url('/assets/fonts/Rajdhani-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 body {
   margin: 0;
   padding: 0;
