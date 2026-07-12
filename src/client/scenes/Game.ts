@@ -2189,13 +2189,17 @@ export class Game extends Scene {
   private updateCheckpointPulse(time: number): void {
     if (!this.carImg) return;
     const NEAR = gridPx * 1.5, FAR = gridPx * 10;
+    const targets: number[] = [];
     for (let i = 0; i < this.checkpointIndices.length; i++) {
-      if (this.checkpointTouched[i]) continue;
-      const img = this.markerImgList[this.checkpointIndices[i]];
+      if (!this.checkpointTouched[i]) targets.push(this.checkpointIndices[i]);
+    }
+    if (this.finishActive && this.finishIndex >= 0) targets.push(this.finishIndex);
+    for (const mi of targets) {
+      const img = this.markerImgList[mi];
       if (!img?.active) continue;
       const dist = Math.hypot(img.x - this.carImg.x, img.y - this.carImg.y);
       const t     = Math.min(Math.max(1 - (dist - NEAR) / (FAR - NEAR), 0), 1); // 0 far, 1 close
-      const amp   = 0.02 + t * 0.20;
+      const amp   = 0.005 + t * 0.05;
       const speed = 0.0035 + t * 0.006;
       img.setScale(1 + Math.sin(time * speed) * amp);
     }
