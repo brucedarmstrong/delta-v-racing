@@ -101,22 +101,26 @@
   font-family: "Arial Black", Arial, sans-serif;
   font-size: clamp(28px, 10vw, 52px);
   font-weight: 900;
-  color: #ffee00;
-  text-shadow:
-    0 0 12px #ff8800,
-    0 0 28px #ff440066,
-    0 2px 4px #000;
+  color: #ffffff;
+  -webkit-text-stroke: 4px #000000;
+  paint-order: stroke fill;
+  text-shadow: 0 2px 4px #000;
   letter-spacing: 0.06em;
+}
+
+.title-nabla {
+  display: inline-block;
+  transform: scaleY(0.86); /* nabla glyph runs taller than the Arial Black letterforms around it */
 }
 
 .title-racing {
   font-family: "Arial Black", Arial, sans-serif;
-  font-size: clamp(14px, 5vw, 26px);
+  font-size: clamp(14px, 5vw, 24px);
   font-weight: 900;
-  color: #33ee88;
-  text-shadow:
-    0 0 10px #00ff6644,
-    0 1px 3px #000;
+  color: #8888ff;
+  -webkit-text-stroke: 3px #000000;
+  paint-order: stroke fill;
+  text-shadow: 0 1px 3px #000;
   letter-spacing: 0.22em;
   margin-top: 2px;
 }
@@ -229,22 +233,22 @@
 }
 
 .sec-btn {
-  background: #0d0d1e;
-  color: #5566aa;
-  border: 1px solid #22224a;
+  background: #1a1a44;
+  color: #ccddff;
+  border: 1.5px solid #5566cc;
   border-radius: 6px;
   padding: 6px 14px;
   font-family: Arial, sans-serif;
   font-size: clamp(11px, 3vw, 13px);
   cursor: pointer;
   letter-spacing: 0.04em;
-  transition: color 0.15s, border-color 0.15s, transform 0.1s ease-out;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s ease-out;
 }
 
 .sec-btn:hover,
 .sec-btn:focus {
-  color: #99aaff;
-  border-color: #4455aa;
+  background: #22265a;
+  border-color: #8899ff;
   outline: none;
 }
 
