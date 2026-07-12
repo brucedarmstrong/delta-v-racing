@@ -391,8 +391,8 @@ function palFlat(ctx: CanvasRenderingContext2D, path: () => void, lw: number): v
   ctx.restore();
 }
 
-// Two parallel walls at 45°, using exact piece proportions (HALF_TRACK width, real length).
-// The canvas is rotated 45° so local-space coordinates draw correctly.
+// Two parallel walls, straight up and down, using exact piece proportions
+// (HALF_TRACK width, real length).
 function drawStraightIcon(canvas: HTMLCanvasElement, size: StraightSize, walls: WallVariant = 'both', glow = true): void {
   const ctx = canvas.getContext('2d')!;
   const W = canvas.width, H = canvas.height;
@@ -409,7 +409,6 @@ function drawStraightIcon(canvas: HTMLCanvasElement, size: StraightSize, walls: 
   const stroke = glow ? palNeon : palFlat;
   ctx.save();
   ctx.translate(W / 2, H / 2);
-  ctx.rotate(Math.PI / 4);
   if (walls !== 'inner') stroke(ctx, () => { ctx.beginPath(); ctx.moveTo(-hw, -hl); ctx.lineTo(-hw, +hl); }, lw);
   if (walls !== 'outer') stroke(ctx, () => { ctx.beginPath(); ctx.moveTo(+hw, -hl); ctx.lineTo(+hw, +hl); }, lw);
   ctx.restore();
@@ -2791,7 +2790,7 @@ export class TrackEditor extends Scene {
       } else if (def.imgBase) {
         const img = document.createElement('img');
         img.src = `${def.imgBase}${active ? 1 : 0}.png`;
-        img.style.cssText = `width:${ICO}px;height:${ICO}px;object-fit:contain;transform:rotate(45deg);`;
+        img.style.cssText = `width:${ICO}px;height:${ICO}px;object-fit:contain;`;
         img.onerror = () => { img.style.display = 'none'; };
         btn.appendChild(img);
       }
@@ -2859,7 +2858,6 @@ export class TrackEditor extends Scene {
     };
 
     // Helper: sprite image button (finish/checkpoint).
-    // Sprites rotated 45° to sit on the top-left→bottom-right diagonal of the piece icons.
     // displayPx: CSS display size of the image; pass a smaller value for the circle
     // checkpoint so it appears at the same pixel density as the gate (120px sprite).
     const mkSpriteBtn = (src: string, label: string, color: string, displayPx = ICO): HTMLButtonElement => {
@@ -2872,7 +2870,7 @@ export class TrackEditor extends Scene {
       ].join(';');
       const img = document.createElement('img');
       img.src = src;
-      img.style.cssText = `width:${displayPx}px;height:${displayPx}px;object-fit:contain;transform:rotate(45deg);`;
+      img.style.cssText = `width:${displayPx}px;height:${displayPx}px;object-fit:contain;`;
       img.onerror = () => { img.style.display = 'none'; };
       btn.appendChild(img);
       const sp = document.createElement('span');
