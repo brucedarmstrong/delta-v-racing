@@ -842,10 +842,11 @@ export class Game extends Scene {
 
     // Commit ripple — pulse from the destination dot.
     this.spawnCommitRipple(newGX * gridPx, newGY * gridPx);
-    playPickMove();
 
     const newVX      = this.velX + dvx;
     const newVY      = this.velY + dvy;
+    const spd        = Math.hypot(newVX, newVY);
+    playPickMove(spd);
     const headingDeg = Math.atan2(newVX, -newVY) * (180 / Math.PI);
 
     // Anticipation lean: dip a few degrees opposite the turn before snapping
@@ -868,7 +869,6 @@ export class Game extends Scene {
     }
 
     // Speed lines — drawn into velGfx (cleared at tween start, reset in onComplete).
-    const spd       = Math.hypot(newVX, newVY);
     const showLines = spd >= 2.5;
     const snx = newVX / (spd || 1), sny = newVY / (spd || 1); // unit velocity
     const spx = -sny, spy = snx;                               // perpendicular
