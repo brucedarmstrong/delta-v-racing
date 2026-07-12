@@ -109,7 +109,7 @@ export class ModeSelect extends Scene {
 
     this.startGrid();
 
-    this.title = this.add.text(0, 0, 'delta-v', {
+    this.title = this.add.text(0, 0, 'DELTA-V', {
       fontFamily: 'Arial Black', fontSize: '52px',
       color: '#ffffff', stroke: '#000000', strokeThickness: 4,
     }).setScrollFactor(0).setOrigin(0.5).setDepth(10);
