@@ -140,10 +140,11 @@ export function playPersonalBest(): void {
 }
 
 // Subtle tick when a move is committed. Pitch rises with the car's post-move
-// speed (grid units/turn) so faster stretches of the track sound snappier.
+// speed (grid units/turn) — deterministic, not randomized, so repeating the
+// same move (e.g. clicking the natural/center target) sounds identical.
 export function playPickMove(speed = 0): void {
   const mul = 1 + Math.min(Math.max(speed, 0), 8) * 0.09; // up to ~1.72x at speed 8
-  tone(rand(340, 420) * mul, 0.045, 'square', 0.09);
+  tone(380 * mul, 0.045, 'square', 0.09);
 }
 
 // Crash impact — noise burst + low thump + mid "crack", each with randomized

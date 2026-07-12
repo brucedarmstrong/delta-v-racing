@@ -996,14 +996,18 @@ export class Game extends Scene {
       this.carImg.setAngle(Math.atan2(hdx, -hdy) * (180 / Math.PI));
     }
 
-    // Pan only when necessary: if both the car and the crash target are already
-    // on screen, leave the view alone. Otherwise centre on their midpoint so
-    // the whole path of the move is visible before the animation starts.
+    // Pan only when necessary: if both the car and the barrier contact point
+    // (where the crash actually happens — the popup, particles, and fragments
+    // all originate there) are already on screen, leave the view alone.
+    // Otherwise centre on their midpoint. Using the contact point rather than
+    // the selected crash cell matters for high-speed crashes, where the crash
+    // cell can be many grid units past the wall — panning toward it would push
+    // the actual impact point toward the edge of the screen or off it entirely.
     const wv = this.cameras.main.worldView;
-    if (!wv.contains(this.carImg.x, this.carImg.y) || !wv.contains(crashWX, crashWY)) {
+    if (!wv.contains(this.carImg.x, this.carImg.y) || !wv.contains(contactWX, contactWY)) {
       this.panTo(
-        (this.carImg.x + crashWX) / 2,
-        (this.carImg.y + crashWY) / 2,
+        (this.carImg.x + contactWX) / 2,
+        (this.carImg.y + contactWY) / 2,
         200,
       );
     }
