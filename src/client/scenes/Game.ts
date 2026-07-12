@@ -54,10 +54,6 @@ type GhostState = {
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 5.0;
 
-// Slow-motion multiplier applied from crash contact until car reappears.
-// Set to 1 to disable once the animation is tuned.
-const CRASH_SLO = 0.4;
-
 type MmSnap = 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left' | 'minimized';
 
 function migrateMmSnap(v: string | null): MmSnap {
@@ -1044,9 +1040,6 @@ export class Game extends Scene {
 
         this.showCrashPopup(contactWX, contactWY);
 
-        this.tweens.timeScale = CRASH_SLO;
-        this.time.timeScale   = CRASH_SLO;
-
         playCrash();
 
         // Particle emitter starts at contact, slides into the barrier toward the crash cell.
@@ -1068,10 +1061,6 @@ export class Game extends Scene {
         // ── Phase 3: car regenerates at wreck endpoint, drives to safe point ───
         this.time.delayedCall(520, () => {
           emitter?.destroy();
-
-          // Restore normal speed before recovery so the drive feels snappy.
-          this.tweens.timeScale = 1;
-          this.time.timeScale   = 1;
 
           // Briefly materialise at the wreck endpoint (the selected crash cell).
           this.carImg.setPosition(crashWX, crashWY);
