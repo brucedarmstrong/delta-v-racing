@@ -101,7 +101,7 @@ function redrawTrailGfx(gfx: GameObjects.Graphics, segs: TrailSeg[]): void {
     const lineAlpha = (crash ? 0.30 : 0.45) * fade;
     const fromWX = fromGX * gridPx, fromWY = fromGY * gridPx;
     const toWX   = toGX   * gridPx, toWY   = toGY   * gridPx;
-    gfx.lineStyle(2, color, lineAlpha);
+    gfx.lineStyle(4, color, lineAlpha);
     gfx.beginPath();
     gfx.moveTo(fromWX, fromWY);
     gfx.lineTo(toWX, toWY);

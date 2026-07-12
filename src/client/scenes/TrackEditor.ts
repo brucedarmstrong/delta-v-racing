@@ -3238,6 +3238,11 @@ export class TrackEditor extends Scene {
     };
     this.scene.start('Game', {
       track:       entry,
+      // Every editor test-drive shares the literal '__test__' track id, so
+      // without this Game would fall back to fetching/solving an AI ghost
+      // keyed on that shared id — showing an unrelated bot racer (and in
+      // production, cross-contaminating between different drafts).
+      ghosts:      [],
       mineTrackId: this.mineTrackId ?? undefined,
       returnTab:   'editor',
     });
