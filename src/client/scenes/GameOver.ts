@@ -34,14 +34,19 @@ export class GameOver extends Scene {
     this.updateLayout(this.scale.width, this.scale.height);
 
     // Update layout on canvas resize / orientation change
-    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+    const onResize = (gameSize: Phaser.Structs.Size) => {
       const { width, height } = gameSize;
       this.updateLayout(width, height);
-    });
+    };
+    this.scale.on('resize', onResize);
 
     // Return to Main Menu on tap / click
     this.input.once('pointerdown', () => {
       this.scene.start('MainMenu');
+    });
+
+    this.events.once('shutdown', () => {
+      this.scale.off('resize', onResize);
     });
   }
 

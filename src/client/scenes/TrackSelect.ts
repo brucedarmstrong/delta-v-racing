@@ -115,7 +115,8 @@ export class TrackSelect extends Scene {
     );
 
     this.layout();
-    this.scale.on('resize', () => this.layout());
+    const onResize = () => this.layout();
+    this.scale.on('resize', onResize);
 
     this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
       if (ptr.y > HEADER_H + TAB_H) return;
@@ -136,6 +137,7 @@ export class TrackSelect extends Scene {
 
     this.events.once('shutdown', () => {
       window.removeEventListener('keydown', onEsc);
+      this.scale.off('resize', onResize);
       this.listEl?.remove();
       this.listEl = null;
       this.searchBarEl?.remove();

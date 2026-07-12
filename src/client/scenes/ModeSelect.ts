@@ -140,7 +140,8 @@ export class ModeSelect extends Scene {
     }).setScrollFactor(0).setOrigin(0.5).setDepth(10);
 
     this.layout();
-    this.scale.on('resize', () => this.layout());
+    const onResize = () => this.layout();
+    this.scale.on('resize', onResize);
 
     if (!localStorage.getItem('dv-ftue')) {
       this.showFirstRunOverlay();
@@ -170,6 +171,7 @@ export class ModeSelect extends Scene {
       // stopGrid() is handled by Phaser destroying the scene's objects;
       // just null the ref so update() stops drawing.
       this.gridGfx = null;
+      this.scale.off('resize', onResize);
       this.ftueEl?.remove();
       this.ftueEl = null;
       if (this.ftueResetTimer) clearTimeout(this.ftueResetTimer);

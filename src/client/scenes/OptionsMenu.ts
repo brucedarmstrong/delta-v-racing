@@ -33,7 +33,8 @@ export class OptionsMenu extends Scene {
     }).setScrollFactor(0).setOrigin(0.5).setDepth(11);
 
     this.layout();
-    this.scale.on('resize', () => this.layout());
+    const onResize = () => this.layout();
+    this.scale.on('resize', onResize);
 
     this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
       const h = this.backHit;
@@ -42,6 +43,8 @@ export class OptionsMenu extends Scene {
         this.scene.start('ModeSelect');
       }
     });
+
+    this.events.once('shutdown', () => this.scale.off('resize', onResize));
   }
 
   private layout(): void {

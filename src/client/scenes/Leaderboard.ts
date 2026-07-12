@@ -35,15 +35,17 @@ export class Leaderboard extends Scene {
       fontFamily: 'Arial', fontSize: '16px', fontStyle: 'bold', color: '#8888cc',
     }).setScrollFactor(0).setOrigin(0.5, 0.5).setDepth(11);
 
+    this.layout();
+    const onResize = () => this.layout();
+    this.scale.on('resize', onResize);
+
     this.events.on('shutdown', () => {
+      this.scale.off('resize', onResize);
       this.listEl?.remove();
       this.listEl = null;
       this.helpOverlayEl?.remove();
       this.helpOverlayEl = null;
     });
-
-    this.layout();
-    this.scale.on('resize', () => this.layout());
 
     this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
       if (ptr.y >= HEADER_H) return;

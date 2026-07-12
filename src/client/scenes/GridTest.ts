@@ -146,6 +146,9 @@ export class GridTest extends Scene {
 
     const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') this.scene.start('ModeSelect'); };
     window.addEventListener('keydown', onEsc);
-    this.events.once('shutdown', () => window.removeEventListener('keydown', onEsc));
+    this.events.once('shutdown', () => {
+      window.removeEventListener('keydown', onEsc);
+      this.scale.off('resize', drawHdr);
+    });
   }
 }

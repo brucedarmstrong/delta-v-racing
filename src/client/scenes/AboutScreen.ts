@@ -30,7 +30,8 @@ export class AboutScreen extends Scene {
 
     this.buildBody();
     this.layout();
-    this.scale.on('resize', () => this.layout());
+    const onResize = () => this.layout();
+    this.scale.on('resize', onResize);
 
     this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
       const h = this.backHit;
@@ -42,7 +43,11 @@ export class AboutScreen extends Scene {
       }
     });
 
-    this.events.once('shutdown', () => { this.bodyEl?.remove(); this.bodyEl = null; });
+    this.events.once('shutdown', () => {
+      this.scale.off('resize', onResize);
+      this.bodyEl?.remove();
+      this.bodyEl = null;
+    });
   }
 
   private buildBody(): void {

@@ -39,7 +39,9 @@ export class MainMenu extends Scene {
       .setDepth(20);
 
     this.fitCamera();
-    this.scale.on('resize', () => this.fitCamera());
+    const onResize = () => this.fitCamera();
+    this.scale.on('resize', onResize);
+    this.events.once('shutdown', () => this.scale.off('resize', onResize));
 
     // Scene-level pointer listener — fires for any tap/click anywhere on the canvas.
     // On each pointer event, update the title so we can see if input is reaching Phaser.
