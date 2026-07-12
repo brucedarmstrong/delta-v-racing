@@ -97,10 +97,11 @@ function noiseBurst(duration: number, decay: number, peak = 0.3, delay = 0, filt
 
 // ── Named sound effects ──────────────────────────────────────────────────────
 
-// Generic UI click — buttons, tabs, toggles. Short and quiet so it stays
-// pleasant even when clicking rapidly (e.g. cycling piece sizes).
+// Generic UI click — buttons, tabs, toggles. A fixed, brief, subtle tick —
+// identical every time so rapid clicking (e.g. cycling piece sizes) stays
+// unobtrusive. Unlike in-race sounds, this never varies with game state.
 export function playClick(): void {
-  tone(rand(700, 840), 0.05, 'square', 0.10);
+  noiseBurst(0.018, 90, 0.14, 0, 2600);
 }
 
 // A slightly richer two-tone blip for toggles/mode switches.
