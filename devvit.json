@@ -47,7 +47,9 @@
     "exampleForm": "/internal/form/example-submit"
   },
   "triggers": {
-    "onAppInstall": "/internal/triggers/on-app-install"
+    "onAppInstall": "/internal/triggers/on-app-install",
+    "onModAction": "/internal/triggers/on-mod-action",
+    "onPostDelete": "/internal/triggers/on-post-delete"
   },
   "scheduler": {
     "tasks": {

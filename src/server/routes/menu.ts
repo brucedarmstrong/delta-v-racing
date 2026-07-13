@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import type { UiResponse } from '@devvit/web/shared';
-import { context, redis } from '@devvit/web/server';
+import { context } from '@devvit/web/server';
 import { createPost } from '../core/post';
+import { removeCommunityTrackByPostId } from '../core/trackCleanup';
 
 export const menu = new Hono();
 
@@ -32,22 +33,10 @@ menu.post('/remove-track', async (c) => {
     return c.json<UiResponse>({ showToast: 'No post context' }, 400);
   }
 
-  const trackId = await redis.get(`track-post:${postId}`);
+  const trackId = await removeCommunityTrackByPostId(postId);
   if (!trackId) {
     return c.json<UiResponse>({ showToast: 'No track is linked to this post' }, 200);
   }
-
-  const raw = await redis.get(`track:${trackId}`);
-  if (raw) {
-    try {
-      const rec = JSON.parse(raw) as { name: string; author: string };
-      await redis.del(`track-name:${rec.author}:${rec.name.trim().toLowerCase()}`);
-    } catch { /* skip if corrupt */ }
-    await redis.del(`track:${trackId}`);
-  }
-
-  await redis.zRem('tracks:community', [trackId]);
-  await redis.del(`track-post:${postId}`);
 
   console.log(`[mod remove-track] postId=${postId} trackId=${trackId}`);
   return c.json<UiResponse>({ showToast: 'Track removed from community list' }, 200);

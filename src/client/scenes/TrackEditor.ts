@@ -78,6 +78,7 @@ const PALETTE_H = 210;
 const SNAP_R    = 55;
 const MAX_UNDO  = 40;
 const MAX_PIECES = 120;
+const MAX_CHECKPOINTS = 20;
 const HIT_R_MARKER = 46;
 const HANDLE_HIT_R = 22;   // hit radius for the rotate handle
 // Caps how wide a palette/tab button can grow on wide desktop viewports —
@@ -1136,7 +1137,7 @@ export class TrackEditor extends Scene {
     ));
     markerSec.appendChild(statRow(
       'Checkpoints',
-      this.checkpoints.length === 0 ? 'None' : String(this.checkpoints.length),
+      `${this.checkpoints.length} / ${MAX_CHECKPOINTS}`,
     ));
     card.appendChild(markerSec);
 
@@ -2305,6 +2306,10 @@ export class TrackEditor extends Scene {
 
   private placeCheckpoint(shape: 'gate' | 'circle'): void {
     if (this.pieces.length === 0) { this.showToast('Add track pieces first'); return; }
+    if (this.checkpoints.length >= MAX_CHECKPOINTS) {
+      this.showToast(`Checkpoint limit reached (${MAX_CHECKPOINTS})`);
+      return;
+    }
     this.saveUndo();
     const { x, y, rotation } = this.markerSpawnPos();
     const idx = this.checkpoints.length;
@@ -2595,6 +2600,10 @@ export class TrackEditor extends Scene {
     }
     if (this.pieces.length + this.clipboard.pieces.length > MAX_PIECES) {
       this.showToast(`Track limit reached (${MAX_PIECES} pieces)`);
+      return;
+    }
+    if (this.checkpoints.length + this.clipboard.checkpoints.length > MAX_CHECKPOINTS) {
+      this.showToast(`Checkpoint limit reached (${MAX_CHECKPOINTS})`);
       return;
     }
     this.saveUndo();

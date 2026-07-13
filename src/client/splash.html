@@ -12,12 +12,6 @@
   <body class="app">
     <canvas class="stars" id="stars-canvas" aria-hidden="true"></canvas>
     <div class="grid" aria-hidden="true"></div>
-    <div class="secondary-btns">
-      <button class="sec-btn" id="profile-btn">Profile Stats</button>
-      <button class="sec-btn" id="community-btn">Community Tracks</button>
-      <button class="sec-btn" id="leaderboard-btn">Leaderboard</button>
-      <button class="sec-btn" id="create-btn">Create Your Own</button>
-    </div>
     <div class="content">
       <div class="title-block">
         <div class="title-delta">DELTA-<span class="title-nabla">&#8711;</span></div>
@@ -42,10 +36,16 @@
             <div class="track-stat-val" id="stat-avg">–</div>
             <div class="track-stat-label">Avg Score</div>
           </div>
+          <div class="track-completed" id="track-completed" style="display:none"></div>
         </div>
-        <div class="track-completed" id="track-completed" style="display:none"></div>
       </div>
       <button class="play-btn" id="play-btn">PLAY</button>
+      <div class="secondary-btns">
+        <button class="sec-btn" id="profile-btn">Profile Stats</button>
+        <button class="sec-btn" id="community-btn">Community Tracks</button>
+        <button class="sec-btn" id="leaderboard-btn">Leaderboard</button>
+        <button class="sec-btn" id="create-btn">Create Your Own</button>
+      </div>
       <div class="build-stamp" id="build-stamp"></div>
     </div>
     <script type="module" src="splash.ts" defer></script>

@@ -509,7 +509,7 @@ function showProfileStatsDialog(): void {
 
   const heading = document.createElement('div');
   heading.textContent = 'Profile Stats';
-  heading.style.cssText = 'font:bold 18px "Arial Black",Arial,sans-serif;color:#aaccff;margin-bottom:14px;';
+  heading.style.cssText = 'font:bold 18px "Arial Black",Arial,sans-serif;color:#aaccff;margin-bottom:2px;';
 
   card.appendChild(closeBtn);
   card.appendChild(heading);
@@ -523,6 +523,11 @@ function showProfileStatsDialog(): void {
     document.body.appendChild(overlay);
     return;
   }
+
+  const usernameLine = document.createElement('div');
+  usernameLine.textContent = `u/${username}`;
+  usernameLine.style.cssText = 'font:13px Arial,sans-serif;color:#8899ff;margin-bottom:14px;';
+  card.appendChild(usernameLine);
 
   const body = document.createElement('div');
   body.style.cssText = 'font:14px Arial,sans-serif;color:#aaaacc;';

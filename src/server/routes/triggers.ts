@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
-import type { OnAppInstallRequest, TriggerResponse } from '@devvit/web/shared';
+import type { OnAppInstallRequest, OnModActionRequest, OnPostDeleteRequest, TriggerResponse } from '@devvit/web/shared';
 import type { TaskResponse } from '@devvit/scheduler';
 import { context, redis, reddit } from '@devvit/web/server';
 import { createPost } from '../core/post';
+import { removeCommunityTrackByPostId, toPostFullname } from '../core/trackCleanup';
 
 export const triggers = new Hono();
 
@@ -65,10 +66,7 @@ triggers.post('/cleanup-deleted-posts', async (c) => {
     }
 
     if (postGone) {
-      await redis.zRem('tracks:community', [trackId]);
-      await redis.del(`track:${trackId}`);
-      await redis.del(`track-name:${record.author}:${record.name.trim().toLowerCase()}`);
-      await redis.del(`track-post:t3_${shortId}`);
+      await removeCommunityTrackByPostId(`t3_${shortId}`);
       removed++;
       console.log(`[cleanup] removed track ${trackId} (post gone: ${record.postUrl})`);
     }
@@ -76,4 +74,34 @@ triggers.post('/cleanup-deleted-posts', async (c) => {
 
   console.log(`[cleanup] checked=${checked} removed=${removed}`);
   return c.json<TaskResponse>({});
+});
+
+// Real-time counterpart to the daily cleanup-deleted-posts sweep: a moderator
+// removing (or spam-removing) a track's post should unlist it immediately
+// instead of waiting for the next cron run.
+const REMOVE_ACTIONS = new Set(['removelink', 'spamlink']);
+
+triggers.post('/on-mod-action', async (c) => {
+  const input = await c.req.json<OnModActionRequest>();
+  const postId = input.targetPost?.id;
+
+  if (postId && input.action && REMOVE_ACTIONS.has(input.action)) {
+    const trackId = await removeCommunityTrackByPostId(toPostFullname(postId));
+    if (trackId) console.log(`[mod-action cleanup] action=${input.action} postId=${postId} trackId=${trackId}`);
+  }
+
+  return c.json<TriggerResponse>({ status: 'success', message: 'ok' }, 200);
+});
+
+// Covers full post deletion (by the author, or by an admin) — moderator
+// "remove" is a separate, reversible action caught by on-mod-action above.
+triggers.post('/on-post-delete', async (c) => {
+  const input = await c.req.json<OnPostDeleteRequest>();
+
+  if (input.postId) {
+    const trackId = await removeCommunityTrackByPostId(toPostFullname(input.postId));
+    if (trackId) console.log(`[post-delete cleanup] postId=${input.postId} trackId=${trackId}`);
+  }
+
+  return c.json<TriggerResponse>({ status: 'success', message: 'ok' }, 200);
 });
