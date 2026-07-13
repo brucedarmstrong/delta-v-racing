@@ -111,7 +111,7 @@
 
 .title-nabla {
   display: inline-block;
-  transform: scaleY(1.3); /* nabla glyph runs shorter than the Arial Black letterforms around it */
+  transform: scale(1.3); /* nabla glyph runs shorter than the Arial Black letterforms around it — scale both axes so the triangle shape isn't distorted */
 }
 
 .title-racing {

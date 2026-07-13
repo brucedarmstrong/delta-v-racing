@@ -110,13 +110,13 @@ export class ModeSelect extends Scene {
     this.startGrid();
 
     this.title = this.add.text(0, 0, 'DELTA-∇', {
-      fontFamily: 'Arial Black', fontSize: '52px',
+      fontFamily: 'Arial Black', fontSize: '52px', fontStyle: '900',
       color: '#ffee00', stroke: '#000000', strokeThickness: 4,
       shadow: { offsetX: 0, offsetY: 0, color: '#ff8800', blur: 16, fill: true },
     }).setScrollFactor(0).setOrigin(0.5).setDepth(10);
 
     this.sub = this.add.text(0, 0, 'RACING', {
-      fontFamily: 'Arial Black', fontSize: '24px',
+      fontFamily: 'Arial Black', fontSize: '24px', fontStyle: '900',
       color: '#33ee88', stroke: '#000000', strokeThickness: 3,
       shadow: { offsetX: 0, offsetY: 0, color: '#00ff66', blur: 12, fill: true },
     }).setScrollFactor(0).setOrigin(0.5).setDepth(10);
@@ -131,7 +131,7 @@ export class ModeSelect extends Scene {
       ...d,
       gfx:  this.add.graphics().setScrollFactor(0).setDepth(10),
       text: this.add.text(0, 0, d.label, {
-        fontFamily: 'Arial Black', fontSize: '24px',
+        fontFamily: 'Arial Black', fontSize: '24px', fontStyle: '900',
         color: '#e8e8ff', stroke: '#000000', strokeThickness: 3,
       }).setScrollFactor(0).setOrigin(0.5).setDepth(11),
       bx: 0, by: 0, bw: 0, bh: 0,
