@@ -1,11 +1,12 @@
+import '@mdi/font/css/materialdesignicons.min.css';
 import { requestExpandedMode } from '@devvit/web/client';
-import { username, appVersion, postData } from './devvitContext';
+import { username, isLoggedIn, appVersion, postData } from './devvitContext';
 import { drawBarriersOnCanvas, drawMarkersOnCanvas, onMarkerSpritesReady } from './track/TrackBarrierCanvas';
 import { drawMiniCar } from './track/CarShape';
 import { trackBounds } from './track/TrackLayout';
 import { convertGmsTrack, convertGmsMarkers, type GmsTrack } from './track/convertGmsTrack';
 import ovalSmallJson from './tracks/gms/Oval_Small.json';
-import type { CommunityTrackResponse, TrackStatsResponse } from '../shared/api';
+import type { CommunityTrackResponse, TrackStatsResponse, UserStatsCategory, UserStatsResponse } from '../shared/api';
 import type { TrackPayload } from './track/TrackUpload';
 import { attachGlobalUiClicks } from './audio/Sfx';
 
@@ -133,6 +134,7 @@ requestAnimationFrame(tickStars);
 // ── DOM element references ─────────────────────────────────────────────────────
 
 const playBtn       = document.getElementById('play-btn')          as HTMLButtonElement;
+const profileBtn    = document.getElementById('profile-btn')       as HTMLButtonElement;
 const communityBtn  = document.getElementById('community-btn')     as HTMLButtonElement;
 const lbBtn         = document.getElementById('leaderboard-btn')   as HTMLButtonElement;
 const createBtn     = document.getElementById('create-btn')        as HTMLButtonElement;
@@ -415,6 +417,151 @@ if (!postData?.trackId) {
   onMarkerSpritesReady(() => drawStaticThumb(p));
   startGhostAnimation(p, 'oval_small');
 }
+
+// ── Profile stats dialog ─────────────────────────────────────────────────────
+
+let profileDialogEl: HTMLElement | null = null;
+
+function closeProfileDialog(): void {
+  profileDialogEl?.remove();
+  profileDialogEl = null;
+}
+
+function mkCategoryRow(icon: string, label: string, stats: UserStatsCategory): HTMLElement {
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #22224a;';
+
+  const iconEl = document.createElement('i');
+  iconEl.className = `mdi mdi-${icon}`;
+  iconEl.style.cssText = 'font-size:22px;color:#8899ff;flex:0 0 auto;width:26px;text-align:center;';
+
+  const body = document.createElement('div');
+  body.style.cssText = 'flex:1;min-width:0;';
+
+  const labelEl = document.createElement('div');
+  labelEl.textContent = label;
+  labelEl.style.cssText = 'font:bold 13px "Arial Black",Arial,sans-serif;color:#ccddff;margin-bottom:3px;';
+
+  const figuresEl = document.createElement('div');
+  figuresEl.style.cssText = 'font:12px Arial,sans-serif;color:#8888aa;display:flex;gap:12px;flex-wrap:wrap;';
+  figuresEl.innerHTML = `
+    <span>Finished <b style="color:#ccccee">${stats.finished}</b></span>
+    <span>Rank <b style="color:#ccccee">${stats.rank != null ? `#${stats.rank}` : '—'}</b></span>
+    <span>Points <b style="color:#ccccee">${stats.points}</b></span>
+  `;
+
+  body.appendChild(labelEl);
+  body.appendChild(figuresEl);
+  row.appendChild(iconEl);
+  row.appendChild(body);
+  return row;
+}
+
+function mkCreatedRow(icon: string, label: string, count: number): HTMLElement {
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 0;';
+
+  const iconEl = document.createElement('i');
+  iconEl.className = `mdi mdi-${icon}`;
+  iconEl.style.cssText = 'font-size:22px;color:#8899ff;flex:0 0 auto;width:26px;text-align:center;';
+
+  const body = document.createElement('div');
+  body.style.cssText = 'flex:1;min-width:0;';
+
+  const labelEl = document.createElement('div');
+  labelEl.textContent = label;
+  labelEl.style.cssText = 'font:bold 13px "Arial Black",Arial,sans-serif;color:#ccddff;margin-bottom:3px;';
+
+  const figuresEl = document.createElement('div');
+  figuresEl.style.cssText = 'font:12px Arial,sans-serif;color:#8888aa;';
+  figuresEl.innerHTML = `<b style="color:#ccccee">${count}</b> track${count === 1 ? '' : 's'}`;
+
+  body.appendChild(labelEl);
+  body.appendChild(figuresEl);
+  row.appendChild(iconEl);
+  row.appendChild(body);
+  return row;
+}
+
+function showProfileStatsDialog(): void {
+  closeProfileDialog();
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = [
+    'position:fixed', 'inset:0', 'z-index:2000',
+    'display:flex', 'align-items:center', 'justify-content:center',
+    'background:rgba(0,0,0,0.82)', 'padding:16px', 'box-sizing:border-box',
+  ].join(';');
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeProfileDialog(); });
+  profileDialogEl = overlay;
+
+  const card = document.createElement('div');
+  card.style.cssText = [
+    'background:#12122a', 'border:1.5px solid #6666cc', 'border-radius:10px',
+    'padding:20px 20px 18px', 'max-width:340px', 'width:100%',
+    'box-sizing:border-box', 'position:relative', 'font-family:Arial,sans-serif',
+  ].join(';');
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'position:absolute;top:10px;right:10px;background:none;border:none;color:#8888aa;font-size:18px;cursor:pointer;padding:4px;line-height:1;';
+  closeBtn.addEventListener('click', closeProfileDialog);
+
+  const heading = document.createElement('div');
+  heading.textContent = 'Profile Stats';
+  heading.style.cssText = 'font:bold 18px "Arial Black",Arial,sans-serif;color:#aaccff;margin-bottom:14px;';
+
+  card.appendChild(closeBtn);
+  card.appendChild(heading);
+
+  if (!isLoggedIn) {
+    const msg = document.createElement('div');
+    msg.textContent = 'Log in to Reddit to see your stats.';
+    msg.style.cssText = 'font:13px Arial,sans-serif;color:#8888aa;padding:8px 0 4px;';
+    card.appendChild(msg);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    return;
+  }
+
+  const body = document.createElement('div');
+  body.style.cssText = 'font:14px Arial,sans-serif;color:#aaaacc;';
+  body.textContent = 'Loading…';
+  card.appendChild(body);
+
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  fetch('/api/user/stats')
+    .then(r => r.json() as Promise<UserStatsResponse>)
+    .then(stats => {
+      body.textContent = '';
+      body.appendChild(mkCategoryRow('calendar-month', 'Daily Tracks', stats.daily));
+      body.appendChild(mkCategoryRow('earth', 'Community Tracks', stats.community));
+      body.appendChild(mkCreatedRow('pencil-ruler', 'Created', stats.created));
+
+      const seeAllBtn = document.createElement('button');
+      seeAllBtn.textContent = 'See all your tracks ›';
+      seeAllBtn.style.cssText = [
+        'display:block', 'width:100%', 'padding:11px 0', 'margin-top:16px',
+        'background:#22224a', 'color:#ccccff', 'border:1.5px solid #6666cc',
+        'border-radius:6px', 'font:bold 14px Arial,sans-serif', 'cursor:pointer',
+      ].join(';');
+      seeAllBtn.addEventListener('click', (e) => {
+        closeProfileDialog();
+        localStorage.setItem('dv-route', 'community');
+        localStorage.setItem('dv-route-mine', '1');
+        requestExpandedMode(e, 'game');
+      });
+      body.appendChild(seeAllBtn);
+    })
+    .catch(() => {
+      body.textContent = 'Failed to load stats.';
+      body.style.color = '#885555';
+    });
+}
+
+profileBtn.addEventListener('click', showProfileStatsDialog);
 
 // ── Navigation buttons ────────────────────────────────────────────────────────
 

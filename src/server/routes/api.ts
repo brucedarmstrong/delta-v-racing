@@ -21,6 +21,8 @@ import type {
   MineTrackResponse,
   MineTracksResponse,
   TrackStatsResponse,
+  UserStatsCategory,
+  UserStatsResponse,
   OverallLeaderboardEntry,
   OverallLeaderboardResponse,
   SaveMineTrackRequest,
@@ -1094,20 +1096,15 @@ api.get('/race-ghosts/:trackId', async (c) => {
 
 const POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1];
 
-api.get('/leaderboard/overall', async (c) => {
-  // Discover all tracks that have at least one ghost uploaded.
-  const trackIds = await redis.hKeys('lb:tracks');
-  if (trackIds.length === 0) {
-    return c.json<OverallLeaderboardResponse>({ type: 'overall_leaderboard', entries: [] });
-  }
+// Aggregate top-10 points per player across a set of track leaderboards.
+// Shared by the overall leaderboard and the per-category profile stats.
+async function pointsTotalsForTracks(trackIds: string[]): Promise<Map<string, { points: number; tracksPlayed: number }>> {
+  const totals = new Map<string, { points: number; tracksPlayed: number }>();
+  if (trackIds.length === 0) return totals;
 
-  // Fetch top-10 from each track's leaderboard in parallel.
   const perTrack = await Promise.all(
     trackIds.map(id => redis.zRange(`lb:${id}`, 0, POINTS.length - 1, { by: 'rank' })),
   );
-
-  // Aggregate points per player.
-  const totals = new Map<string, { points: number; tracksPlayed: number }>();
   for (const entries of perTrack) {
     entries.forEach(({ member }, idx) => {
       const pts = POINTS[idx] ?? 0;
@@ -1115,6 +1112,13 @@ api.get('/leaderboard/overall', async (c) => {
       totals.set(member, { points: cur.points + pts, tracksPlayed: cur.tracksPlayed + 1 });
     });
   }
+  return totals;
+}
+
+api.get('/leaderboard/overall', async (c) => {
+  // Discover all tracks that have at least one ghost uploaded.
+  const trackIds = await redis.hKeys('lb:tracks');
+  const totals = await pointsTotalsForTracks(trackIds);
 
   // Sort highest points first.
   const sorted: OverallLeaderboardEntry[] = [...totals.entries()]
@@ -1122,6 +1126,63 @@ api.get('/leaderboard/overall', async (c) => {
     .sort((a, b) => b.points - a.points);
 
   return c.json<OverallLeaderboardResponse>({ type: 'overall_leaderboard', entries: sorted });
+});
+
+// ── Profile stats ─────────────────────────────────────────────────────────────
+
+async function categoryStats(trackIds: string[], username: string): Promise<UserStatsCategory> {
+  if (trackIds.length === 0) return { finished: 0, rank: null, points: 0 };
+
+  const [totals, myScores] = await Promise.all([
+    pointsTotalsForTracks(trackIds),
+    Promise.all(trackIds.map(id => redis.zScore(`lb:${id}`, username))),
+  ]);
+
+  const sorted = [...totals.entries()].sort((a, b) => b[1].points - a[1].points);
+  const myIdx  = sorted.findIndex(([u]) => u === username);
+
+  return {
+    finished: myScores.filter(s => s !== undefined).length,
+    rank:     myIdx >= 0 ? myIdx + 1 : null,
+    points:   totals.get(username)?.points ?? 0,
+  };
+}
+
+api.get('/user/stats', async (c) => {
+  const username = await reddit.getCurrentUsername();
+  if (!username) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+  }
+
+  const [dailySchedule, communityTotal, lbTrackIds] = await Promise.all([
+    redis.hGetAll('daily:schedule') as Promise<Record<string, string>>,
+    redis.zCard('tracks:community'),
+    redis.hKeys('lb:tracks'),
+  ]);
+
+  const dailyTrackIdSet = new Set(Object.values(dailySchedule));
+  const communityIds = communityTotal > 0
+    ? (await redis.zRange('tracks:community', 0, communityTotal - 1, { by: 'rank' })).map(e => e.member)
+    : [];
+  const communityTrackIdSet = new Set(communityIds);
+
+  // A track promoted to Daily is scored under Daily only, not double-counted under Community.
+  const dailyLbIds     = lbTrackIds.filter(id => dailyTrackIdSet.has(id));
+  const communityLbIds = lbTrackIds.filter(id => !dailyTrackIdSet.has(id) && communityTrackIdSet.has(id));
+
+  const [daily, community, createdRaws] = await Promise.all([
+    categoryStats(dailyLbIds, username),
+    categoryStats(communityLbIds, username),
+    communityIds.length > 0 ? redis.mGet(communityIds.map(id => `track:${id}`)) : Promise.resolve([]),
+  ]);
+
+  const created = createdRaws.filter(raw => {
+    if (!raw) return false;
+    try { return (JSON.parse(raw) as { author: string }).author === username; }
+    catch { return false; }
+  }).length;
+
+  return c.json<UserStatsResponse>({ type: 'user_stats', username, daily, community, created });
 });
 
 api.get('/leaderboard/:trackId/around/:username', async (c) => {

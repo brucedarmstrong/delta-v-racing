@@ -143,6 +143,22 @@ export type TrackStatsResponse = {
   completed: boolean;          // true if the logged-in user has a leaderboard entry
 };
 
+// ── Profile stats ──────────────────────────────────────────────────────────────
+
+export type UserStatsCategory = {
+  finished: number;    // distinct tracks in this category the user has completed
+  rank: number | null; // 1-based placement among players with points in this category; null if the user has none
+  points: number;      // total points earned across tracks in this category (same scoring as the overall leaderboard)
+};
+
+export type UserStatsResponse = {
+  type: "user_stats";
+  username: string;
+  daily: UserStatsCategory;
+  community: UserStatsCategory;
+  created: number; // community tracks authored by this user
+};
+
 // ── Mine tracks (user's saved drafts) ────────────────────────────────────────
 
 export type MineTrackMeta = {

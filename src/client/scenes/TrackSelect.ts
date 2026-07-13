@@ -78,13 +78,13 @@ export class TrackSelect extends Scene {
 
   constructor() { super('TrackSelect'); }
 
-  init(data?: { activeTab?: Tab }): void {
+  init(data?: { activeTab?: Tab; mineFilter?: boolean }): void {
     if (data?.activeTab) this.activeTab = data.activeTab;
     this.communityLoaded = false;
     this.communityPage   = 0;
     this.communityTotal  = 0;
     this.communityQuery  = '';
-    this.mineFilter      = false;
+    this.mineFilter      = data?.mineFilter ?? false;
     this.draftsLoaded    = false;
     this.drafts          = [];
     this.communityTracks = [];

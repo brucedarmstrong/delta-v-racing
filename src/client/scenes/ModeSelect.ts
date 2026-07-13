@@ -36,10 +36,12 @@ export class ModeSelect extends Scene {
 
   create(data?: { skipAutoRace?: boolean }) {
     // Deep-link routing — splash secondary buttons set dv-route even on track posts.
-    const route = localStorage.getItem('dv-route');
+    const route     = localStorage.getItem('dv-route');
+    const routeMine = localStorage.getItem('dv-route-mine') === '1';
     if (route) {
       localStorage.removeItem('dv-route');
-      if (route === 'community')   { this.scene.start('TrackSelect', { activeTab: 'community' }); return; }
+      localStorage.removeItem('dv-route-mine');
+      if (route === 'community')   { this.scene.start('TrackSelect', { activeTab: 'community', mineFilter: routeMine }); return; }
       if (route === 'leaderboard') { this.scene.start('Leaderboard'); return; }
       if (route === 'create')      { this.scene.start('TrackEditor'); return; }
     }
