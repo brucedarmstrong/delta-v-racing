@@ -20,6 +20,7 @@ import type {
   MineTrackMeta,
   MineTrackResponse,
   MineTracksResponse,
+  TrackStatsResponse,
   OverallLeaderboardEntry,
   OverallLeaderboardResponse,
   SaveMineTrackRequest,
@@ -805,6 +806,45 @@ api.get('/track/:id', async (c) => {
   } catch {
     return c.json<ErrorResponse>({ status: 'error', message: 'Corrupt track data' }, 500);
   }
+});
+
+api.get('/track/:id/stats', async (c) => {
+  const { id } = c.req.param();
+  const raw = await redis.get(`track:${id}`);
+  if (!raw) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Track not found' }, 404);
+  }
+
+  let pieceCount: number;
+  try {
+    const r = JSON.parse(raw) as { data: string };
+    const payload = JSON.parse(r.data) as { pieces?: unknown[] };
+    pieceCount = payload.pieces?.length ?? 0;
+  } catch {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Corrupt track data' }, 500);
+  }
+
+  const lbKey = `lb:${id}`;
+  const [playerCount, username] = await Promise.all([
+    redis.zCard(lbKey),
+    reddit.getCurrentUsername(),
+  ]);
+
+  let averageScore: number | null = null;
+  let completed = false;
+
+  if (playerCount > 0) {
+    const [entries, myScore] = await Promise.all([
+      redis.zRange(lbKey, 0, playerCount - 1, { by: 'rank' }),
+      username ? redis.zScore(lbKey, username) : Promise.resolve(undefined),
+    ]);
+    averageScore = entries.reduce((sum, e) => sum + e.score, 0) / entries.length;
+    completed = myScore !== undefined;
+  }
+
+  return c.json<TrackStatsResponse>({
+    type: 'track_stats', trackId: id, pieceCount, playerCount, averageScore, completed,
+  });
 });
 
 // ── Mine tracks (user drafts, not yet published) ──────────────────────────────

@@ -134,13 +134,6 @@
   margin-top: 2px;
 }
 
-.username {
-  font-family: Arial, sans-serif;
-  font-size: clamp(11px, 3vw, 13px);
-  color: #9999cc;
-  min-height: 1.4em;
-}
-
 .attract-thumb {
   border: 1px solid #33335a;
   border-radius: 6px;
@@ -225,24 +218,79 @@
   color: #6666aa;
 }
 
-.secondary-btns {
+.track-stats {
   display: flex;
-  gap: 8px;
+  gap: 18px;
   margin-top: 4px;
-  flex-wrap: wrap;
-  justify-content: center;
+}
+
+.track-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.track-stat-val {
+  font-family: "Arial Black", Arial, sans-serif;
+  font-size: clamp(13px, 3.6vw, 16px);
+  font-weight: 900;
+  color: #ccddff;
+}
+
+.track-stat-label {
+  font-family: Arial, sans-serif;
+  font-size: clamp(9px, 2.6vw, 11px);
+  color: #6666aa;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-top: 1px;
+}
+
+.track-completed {
+  font-family: Arial, sans-serif;
+  font-size: clamp(11px, 3vw, 13px);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 3px 12px;
+  border-radius: 12px;
+  margin-top: 2px;
+}
+
+.track-completed.is-done {
+  color: #33ee88;
+  background: #0f2a1c;
+  border: 1px solid #1e6b45;
+}
+
+.track-completed.is-not-done {
+  color: #9999cc;
+  background: #16163a;
+  border: 1px solid #33335a;
+}
+
+.secondary-btns {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
 }
 
 .sec-btn {
-  background: #1a1a44;
+  background: #1a1a44cc;
   color: #ccddff;
   border: 1.5px solid #5566cc;
   border-radius: 6px;
-  padding: 6px 14px;
+  padding: 5px 10px;
   font-family: Arial, sans-serif;
-  font-size: clamp(11px, 3vw, 13px);
+  font-size: clamp(9px, 2.4vw, 11px);
   cursor: pointer;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
+  text-align: right;
+  white-space: nowrap;
   transition: background 0.15s, border-color 0.15s, transform 0.1s ease-out;
 }
 

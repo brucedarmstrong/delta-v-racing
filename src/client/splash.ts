@@ -5,7 +5,7 @@ import { drawMiniCar } from './track/CarShape';
 import { trackBounds } from './track/TrackLayout';
 import { convertGmsTrack, convertGmsMarkers, type GmsTrack } from './track/convertGmsTrack';
 import ovalSmallJson from './tracks/gms/Oval_Small.json';
-import type { CommunityTrackResponse } from '../shared/api';
+import type { CommunityTrackResponse, TrackStatsResponse } from '../shared/api';
 import type { TrackPayload } from './track/TrackUpload';
 import { attachGlobalUiClicks } from './audio/Sfx';
 
@@ -132,7 +132,6 @@ requestAnimationFrame(tickStars);
 
 // ── DOM element references ─────────────────────────────────────────────────────
 
-const usernameEl    = document.getElementById('username')          as HTMLDivElement;
 const playBtn       = document.getElementById('play-btn')          as HTMLButtonElement;
 const communityBtn  = document.getElementById('community-btn')     as HTMLButtonElement;
 const lbBtn         = document.getElementById('leaderboard-btn')   as HTMLButtonElement;
@@ -143,10 +142,11 @@ const trackThumb    = document.getElementById('track-thumb')       as HTMLCanvas
 const attractThumb  = document.getElementById('attract-thumb')     as HTMLCanvasElement;
 const trackNameEl   = document.getElementById('track-info-name')   as HTMLDivElement;
 const trackAuthorEl = document.getElementById('track-info-author') as HTMLDivElement;
-
-if (username) {
-  usernameEl.textContent = `u/${username}`;
-}
+const trackStatsEl  = document.getElementById('track-stats')       as HTMLDivElement;
+const statPiecesEl  = document.getElementById('stat-pieces')       as HTMLDivElement;
+const statPlayersEl = document.getElementById('stat-players')      as HTMLDivElement;
+const statAvgEl     = document.getElementById('stat-avg')          as HTMLDivElement;
+const trackCompletedEl = document.getElementById('track-completed') as HTMLDivElement;
 
 buildStampEl.textContent = appVersion;
 
@@ -371,6 +371,22 @@ if (postData?.trackId) {
       startGhostAnimation(p, trackId);
     })
     .catch(() => { /* thumbnail stays blank */ });
+
+  fetch(`/api/track/${encodeURIComponent(trackId)}/stats`)
+    .then(r => r.json() as Promise<TrackStatsResponse>)
+    .then(stats => {
+      trackStatsEl.style.display = 'flex';
+      statPiecesEl.textContent  = String(stats.pieceCount);
+      statPlayersEl.textContent = String(stats.playerCount);
+      statAvgEl.textContent     = stats.averageScore != null ? stats.averageScore.toFixed(2) : '–';
+
+      if (username) {
+        trackCompletedEl.style.display = 'block';
+        trackCompletedEl.textContent   = stats.completed ? '✓ Completed' : 'Not completed yet';
+        trackCompletedEl.className     = `track-completed ${stats.completed ? 'is-done' : 'is-not-done'}`;
+      }
+    })
+    .catch(() => { /* stats stay hidden */ });
 }
 
 // ── Attract-mode thumbnail (Oval Small, always shown unless a community post overrides) ──

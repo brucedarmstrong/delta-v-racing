@@ -12,25 +12,39 @@
   <body class="app">
     <canvas class="stars" id="stars-canvas" aria-hidden="true"></canvas>
     <div class="grid" aria-hidden="true"></div>
+    <div class="secondary-btns">
+      <button class="sec-btn" id="community-btn">Community Tracks</button>
+      <button class="sec-btn" id="leaderboard-btn">Leaderboard</button>
+      <button class="sec-btn" id="create-btn">Create Your Own</button>
+    </div>
     <div class="content">
       <div class="title-block">
         <div class="title-delta">DELTA-<span class="title-nabla">&#8711;</span></div>
         <div class="title-racing">RACING</div>
       </div>
       <div class="tagline">Turn-based vector racing</div>
-      <div class="username" id="username"></div>
       <canvas class="attract-thumb" id="attract-thumb" width="260" height="160"></canvas>
       <div class="track-info" id="track-info" style="display:none">
         <canvas class="track-thumb" id="track-thumb" width="200" height="130"></canvas>
         <div class="track-info-name" id="track-info-name"></div>
         <div class="track-info-author" id="track-info-author"></div>
+        <div class="track-stats" id="track-stats" style="display:none">
+          <div class="track-stat">
+            <div class="track-stat-val" id="stat-pieces">–</div>
+            <div class="track-stat-label">Pieces</div>
+          </div>
+          <div class="track-stat">
+            <div class="track-stat-val" id="stat-players">–</div>
+            <div class="track-stat-label">Players</div>
+          </div>
+          <div class="track-stat">
+            <div class="track-stat-val" id="stat-avg">–</div>
+            <div class="track-stat-label">Avg Score</div>
+          </div>
+        </div>
+        <div class="track-completed" id="track-completed" style="display:none"></div>
       </div>
       <button class="play-btn" id="play-btn">PLAY</button>
-      <div class="secondary-btns">
-        <button class="sec-btn" id="community-btn">Community Tracks</button>
-        <button class="sec-btn" id="leaderboard-btn">Leaderboard</button>
-        <button class="sec-btn" id="create-btn">Create Your Own</button>
-      </div>
       <div class="build-stamp" id="build-stamp"></div>
     </div>
     <script type="module" src="splash.ts" defer></script>

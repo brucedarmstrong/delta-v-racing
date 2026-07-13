@@ -134,6 +134,15 @@ export type CommunityTrackResponse = {
   data: string; // same format as UploadTrackRequest.data
 };
 
+export type TrackStatsResponse = {
+  type: "track_stats";
+  trackId: string;
+  pieceCount: number;
+  playerCount: number;
+  averageScore: number | null; // null when no one has posted a time yet
+  completed: boolean;          // true if the logged-in user has a leaderboard entry
+};
+
 // ── Mine tracks (user's saved drafts) ────────────────────────────────────────
 
 export type MineTrackMeta = {
