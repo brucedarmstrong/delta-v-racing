@@ -166,6 +166,7 @@ export class Game extends Scene {
   private turnValEl:  HTMLElement | null = null;
   private crashValEl: HTMLElement | null = null;
   private scoreValEl: HTMLElement | null = null;
+  private dvValEl:    HTMLElement | null = null;
 
   // Minimap state — persisted across sessions
   private mmSnap:        MmSnap = migrateMmSnap(localStorage.getItem('dv-mm-snap'));
@@ -180,6 +181,8 @@ export class Game extends Scene {
   private finishIndex        = -1;
   private finishActive       = false;
   private won                = false;
+  private finishIsStartPos   = false; // finish marker sits on the start tile (loop tracks) — skip the early-finish warning there
+  private finishEarlyWarned  = false; // avoid re-toasting every frame while the car lingers on the finish tile
 
   // Last move origin/target — used by triggerWin to compute finesse fraction.
   private moveFromWX = 0;
@@ -1235,6 +1238,8 @@ export class Game extends Scene {
     this.finishIndex       = -1;
     this.finishActive      = false;
     this.won               = false;
+    this.finishIsStartPos  = false;
+    this.finishEarlyWarned = false;
 
     for (let i = 0; i < this.trackMarkers.length; i++) {
       const m   = this.trackMarkers[i];
@@ -1250,7 +1255,8 @@ export class Game extends Scene {
         this.checkpointIndices.push(i);
         this.checkpointTouched.push(false);
       } else {
-        this.finishIndex = i;
+        this.finishIndex      = i;
+        this.finishIsStartPos = Math.hypot(m.x - this.startWX, m.y - this.startWY) < 1;
       }
       this.markerImgList.push(img);
     }
@@ -1293,6 +1299,15 @@ export class Game extends Scene {
       if (this.crossesMarker(fm, carWX, carWY)) {
         this.triggerWin();
       }
+    } else if (this.finishIndex >= 0 && !this.finishIsStartPos) {
+      const fm       = this.trackMarkers[this.finishIndex];
+      const touching = this.crossesMarker(fm, carWX, carWY);
+      if (touching && !this.finishEarlyWarned) {
+        this.finishEarlyWarned = true;
+        this.showToast('You still have checkpoints left!');
+      } else if (!touching) {
+        this.finishEarlyWarned = false;
+      }
     }
   }
 
@@ -1315,6 +1330,29 @@ export class Game extends Scene {
     const localX =  dx * Math.cos(angle) + dy * Math.sin(angle);
     const localY = -dx * Math.sin(angle) + dy * Math.cos(angle);
     return Math.abs(localX) <= CORRIDOR / 2 && Math.abs(localY) <= gridPx;
+  }
+
+  private showToast(msg: string): void {
+    const el = document.createElement('div');
+    el.textContent = msg;
+    el.style.cssText = [
+      'position:fixed', 'bottom:32px', 'left:50%',
+      'transform:translateX(-50%) translateY(12px)', 'opacity:0',
+      'transition:opacity 0.2s ease, transform 0.2s ease',
+      'background:#22224a', 'color:#aaccff', 'border:1px solid #6666cc',
+      'border-radius:6px', 'padding:8px 18px', 'font:13px Arial,sans-serif',
+      'z-index:9500', 'pointer-events:none', 'white-space:nowrap',
+    ].join(';');
+    document.body.appendChild(el);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      el.style.opacity   = '1';
+      el.style.transform = 'translateX(-50%) translateY(0)';
+    }));
+    setTimeout(() => {
+      el.style.opacity   = '0';
+      el.style.transform = 'translateX(-50%) translateY(-8px)';
+    }, 2020);
+    setTimeout(() => el.remove(), 2300);
   }
 
   private triggerWin(): void {
@@ -2503,6 +2541,8 @@ export class Game extends Scene {
     const crashVal = mkStat('CRASH');
     divider();
     const scoreVal = mkStat('SCORE');
+    divider();
+    const dvVal = mkStat('ΔV');
 
     bar.appendChild(backBtn);
     bar.appendChild(stats);
@@ -2514,6 +2554,7 @@ export class Game extends Scene {
     this.turnValEl  = turnVal;
     this.crashValEl = crashVal;
     this.scoreValEl = scoreVal;
+    this.dvValEl    = dvVal;
     this.updateHud();
 
     const onKey = (e: KeyboardEvent) => {
@@ -2554,6 +2595,7 @@ export class Game extends Scene {
       this.turnValEl  = null;
       this.crashValEl = null;
       this.scoreValEl = null;
+      this.dvValEl    = null;
       this.pauseOverlayEl?.remove();
       this.pauseOverlayEl = null;
       this.finishOverlayEl?.remove();
@@ -2605,6 +2647,7 @@ export class Game extends Scene {
     // Once won, triggerWin() sets the precise (turns + crashes + finesse)
     // score directly — don't stomp it with the live integer estimate.
     if (this.scoreValEl && !this.won) this.scoreValEl.textContent = String(this.turn + this.crashes);
+    if (this.dvValEl) this.dvValEl.textContent = Math.hypot(this.velX, this.velY).toFixed(1);
     if (this.turn > 0) {
       if (!Game._hudCssInjected) {
         Game._hudCssInjected = true;
