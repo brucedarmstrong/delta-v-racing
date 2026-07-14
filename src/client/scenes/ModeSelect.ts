@@ -18,6 +18,15 @@ const GRID_PERIOD = GRID_CELL * GRID_MAJOR; // 120 px
 const GRID_DX     = -3;   // px/s westward
 const GRID_DY     = -8;   // px/s northward (NNW, ~1:2.7 ratio)
 
+// FTUE "don't show again" is tied to appVersion (not just a bare flag) so a
+// new release surfaces it again for existing players, not just new ones.
+function ftueSeenThisVersion(): boolean {
+  return localStorage.getItem('dv-ftue') === appVersion;
+}
+function markFtueSeen(): void {
+  localStorage.setItem('dv-ftue', appVersion);
+}
+
 export class ModeSelect extends Scene {
   private btns:          BtnObj[]                 = [];
   private title:         Phaser.GameObjects.Text | null = null;
@@ -51,7 +60,7 @@ export class ModeSelect extends Scene {
     const pending = localStorage.getItem('dv-pending-track');
     if (pending) {
       localStorage.removeItem('dv-pending-track');
-      localStorage.setItem('dv-ftue', '1');
+      markFtueSeen();
       fetchCommunityTrack(pending)
         .then(track =>
           fetchRaceGhosts(pending, track)
@@ -80,7 +89,7 @@ export class ModeSelect extends Scene {
           .catch(() => this.buildMenu(data));
       };
 
-      if (!localStorage.getItem('dv-ftue')) {
+      if (!ftueSeenThisVersion()) {
         this.showFirstRunOverlay({ pendingTrackId: trackId, onSkip: launchTrack });
       } else {
         launchTrack();
@@ -147,7 +156,7 @@ export class ModeSelect extends Scene {
     const onResize = () => this.layout();
     this.scale.on('resize', onResize);
 
-    if (!localStorage.getItem('dv-ftue')) {
+    if (!ftueSeenThisVersion()) {
       this.showFirstRunOverlay();
     }
 
@@ -185,7 +194,7 @@ export class ModeSelect extends Scene {
   // opts absent  → plain menu overlay, single "Let's race!" dismiss button
   // opts present → post-entry variant with "Take Tutorial" + "Jump Right In"
   private showFirstRunOverlay(opts?: { pendingTrackId?: string; onSkip?: () => void }): void {
-    localStorage.setItem('dv-ftue', '1');
+    markFtueSeen();
 
     const overlay = document.createElement('div');
     overlay.style.cssText = [
