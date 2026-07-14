@@ -1022,9 +1022,7 @@ export class TrackSelect extends Scene {
     const playBtn     = mkBtn('▶ Play',      '#88ffaa', '#001a08', '#226633');
     const editBtn     = mkBtn('✎ Edit',      '#aaaaff', '#0a0a22', '#333366');
     const deleteBtn   = mkBtn('✕ Del',       '#ff8888', '#1a0808', '#663333');
-    // TODO(pre-production): restrict this back to mods only (`|| !this.isMod`)
-    // before launch — opened up temporarily so non-mods can exercise/verify it.
-    const aiVerifyBtn = draft.verified ? null : mkBtn('🤖 AI', '#ffcc44', '#1a1400', '#665500');
+    const aiVerifyBtn = (draft.verified || !this.isMod) ? null : mkBtn('🤖 AI', '#ffcc44', '#1a1400', '#665500');
 
     const canUpload = draft.verified;
     const uploadBtn = document.createElement('button');
