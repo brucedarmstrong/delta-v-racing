@@ -139,6 +139,7 @@ const profileBtn    = document.getElementById('profile-btn')       as HTMLButton
 const communityBtn  = document.getElementById('community-btn')     as HTMLButtonElement;
 const lbBtn         = document.getElementById('leaderboard-btn')   as HTMLButtonElement;
 const createBtn     = document.getElementById('create-btn')        as HTMLButtonElement;
+const joinBtn        = document.getElementById('join-btn')         as HTMLButtonElement;
 const buildStampEl  = document.getElementById('build-stamp')       as HTMLDivElement;
 const trackInfoEl   = document.getElementById('track-info')        as HTMLDivElement;
 const trackThumb    = document.getElementById('track-thumb')       as HTMLCanvasElement;
@@ -588,6 +589,31 @@ lbBtn.addEventListener('click', (e) => {
 createBtn.addEventListener('click', (e) => {
   localStorage.setItem('dv-route', 'create');
   requestExpandedMode(e, 'game');
+});
+
+const joinBtnDefaultHtml = joinBtn.innerHTML;
+
+joinBtn.addEventListener('click', () => {
+  if (joinBtn.classList.contains('is-joined')) return;
+
+  if (!isLoggedIn) {
+    joinBtn.textContent = 'Log in to Reddit first';
+    setTimeout(() => { joinBtn.innerHTML = joinBtnDefaultHtml; }, 2000);
+    return;
+  }
+
+  joinBtn.disabled = true;
+  joinBtn.textContent = 'Joining…';
+  fetch('/api/join-subreddit', { method: 'POST' })
+    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
+    .then(() => {
+      joinBtn.textContent = 'Joined ✓';
+      joinBtn.classList.add('is-joined');
+    })
+    .catch(() => {
+      joinBtn.disabled = false;
+      joinBtn.innerHTML = joinBtnDefaultHtml;
+    });
 });
 
 // ── Migration tool (temporary, dev -> prod track transfer) ──────────────────

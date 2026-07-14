@@ -45,6 +45,7 @@ import type {
   SeedGhostsResponse,
   SeedAiGhostsRequest,
   SeedAiGhostsResponse,
+  JoinSubredditResponse,
 } from '../../shared/api';
 
 type ErrorResponse = {
@@ -118,6 +119,20 @@ api.get('/init', async (c) => {
       { status: 'error', message: errorMessage },
       400
     );
+  }
+});
+
+api.post('/join-subreddit', async (c) => {
+  const username = await reddit.getCurrentUsername();
+  if (!username) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+  }
+  try {
+    await reddit.subscribeToCurrentSubreddit();
+    return c.json<JoinSubredditResponse>({ type: 'join_subreddit', joined: true });
+  } catch (error) {
+    console.error(`Error subscribing to subreddit: ${error}`);
+    return c.json<ErrorResponse>({ status: 'error', message: 'Failed to join' }, 500);
   }
 });
 
