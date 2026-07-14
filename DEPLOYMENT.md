@@ -41,17 +41,22 @@ empty install the first time — nothing carries over from dev automatically.
 
 The app has a one-time, mod-only migration tool for exactly this move:
 `GET/POST /api/migration/export` + `/import` in
-`src/server/routes/api.ts`, backed by a hidden dialog in `src/client/splash.ts`
-triggered by `?migrate=1` in the post URL.
+`src/server/routes/api.ts`, backed by a hidden dialog in `src/client/splash.ts`.
+
+The dialog is triggered by **tapping the version number (bottom of the splash
+screen) 5x within 1.5 seconds** — same hidden-gesture pattern as the FTUE
+reset tap in `ModeSelect.ts`. (A `?migrate=1` URL param does *not* work:
+Devvit renders the post's content in a sandboxed webview with its own URL, so
+query params on the outer reddit.com post page never reach the script.)
 
 On **r/delta_v_racing_dev**, as a moderator:
-1. Open the post, append `?migrate=1` to the URL.
+1. Open the post, tap the version number 5x quickly.
 2. Click **Export** — pulls community tracks, your own drafts, leaderboard
    ghosts, and AI ghosts into one JSON blob.
 3. Copy the JSON.
 
 On **r/delta_v_racing**, as a moderator:
-4. Open the post with `?migrate=1`.
+4. Open the post, tap the version number 5x quickly.
 5. Paste the JSON into the Import box, click **Import**.
 6. Check the status line for counts (tracks / drafts / ghosts / AI ghosts) to
    confirm nothing came back empty.

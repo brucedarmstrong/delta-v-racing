@@ -715,6 +715,19 @@ function showMigrationDialog(): void {
   document.body.appendChild(overlay);
 }
 
-if (new URLSearchParams(location.search).get('migrate') === '1') {
-  void fetchIsMod().then(isMod => { if (isMod) showMigrationDialog(); });
-}
+// Hidden mod-only trigger: tap the build-stamp version text 5x within 1.5s.
+// (A ?migrate=1 URL param can't work here -- Devvit renders the post's
+// content in a sandboxed webview with its own URL, so query params on the
+// outer reddit.com post page never reach this script's location.search.)
+let migrateTapCount = 0;
+let migrateTapTimer: ReturnType<typeof setTimeout> | null = null;
+buildStampEl.addEventListener('click', () => {
+  migrateTapCount++;
+  if (migrateTapTimer) clearTimeout(migrateTapTimer);
+  if (migrateTapCount >= 5) {
+    migrateTapCount = 0;
+    void fetchIsMod().then(isMod => { if (isMod) showMigrationDialog(); });
+    return;
+  }
+  migrateTapTimer = setTimeout(() => { migrateTapCount = 0; }, 1500);
+});
