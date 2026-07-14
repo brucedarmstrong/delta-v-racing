@@ -199,6 +199,50 @@ export type IsModResponse = {
   isMod: boolean;
 };
 
+// One-time dev-subreddit → prod-subreddit data transfer. Remove once the
+// hackathon launch migration is done (see TODO(pre-production) in api.ts).
+export type MigrationCommunityTrack = { id: string; name: string; author: string; uploadedAt: number; data: string };
+export type MigrationDraftTrack     = { id: string; name: string; author: string; createdAt: number; verified: boolean; uploadedId?: string; data: string };
+export type MigrationGhost          = { trackId: string; username: string; score: number; ghost: string };
+export type MigrationAiGhost        = { trackId: string; skill: AiSkillLevel; ghost: string };
+
+export type MigrationExportResponse = {
+  type: 'migration_export';
+  communityTracks: MigrationCommunityTrack[];
+  myDrafts: MigrationDraftTrack[];
+  ghosts: MigrationGhost[];
+  aiGhosts: MigrationAiGhost[];
+};
+
+export type MigrationImportRequest = {
+  communityTracks: MigrationCommunityTrack[];
+  myDrafts: MigrationDraftTrack[];
+};
+
+export type MigrationImportResponse = {
+  type: 'migration_import';
+  communityCount: number;
+  draftCount: number;
+};
+
+export type SeedGhostsRequest = {
+  ghosts: MigrationGhost[];
+};
+
+export type SeedGhostsResponse = {
+  type: 'seed_ghosts';
+  count: number;
+};
+
+export type SeedAiGhostsRequest = {
+  ghosts: MigrationAiGhost[];
+};
+
+export type SeedAiGhostsResponse = {
+  type: 'seed_ai_ghosts';
+  count: number;
+};
+
 export type DeleteCommunityTrackResponse = {
   type: 'delete_community_track';
   trackId: string;

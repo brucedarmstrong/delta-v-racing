@@ -6,8 +6,9 @@ import { drawMiniCar } from './track/CarShape';
 import { trackBounds } from './track/TrackLayout';
 import { convertGmsTrack, convertGmsMarkers, type GmsTrack } from './track/convertGmsTrack';
 import ovalSmallJson from './tracks/gms/Oval_Small.json';
-import type { CommunityTrackResponse, TrackStatsResponse, UserStatsCategory, UserStatsResponse } from '../shared/api';
+import type { CommunityTrackResponse, TrackStatsResponse, UserStatsCategory, UserStatsResponse, MigrationExportResponse } from '../shared/api';
 import type { TrackPayload } from './track/TrackUpload';
+import { fetchIsMod, fetchMigrationExport, importMigrationData, importGhosts, importAiGhosts } from './track/TrackUpload';
 import { attachGlobalUiClicks } from './audio/Sfx';
 
 attachGlobalUiClicks();
@@ -588,3 +589,98 @@ createBtn.addEventListener('click', (e) => {
   localStorage.setItem('dv-route', 'create');
   requestExpandedMode(e, 'game');
 });
+
+// ── Migration tool (temporary, dev -> prod track transfer) ──────────────────
+// TODO(pre-production): delete this section plus the /api/migration/* routes
+// and TrackUpload fetch helpers once the launch migration has been run.
+
+function showMigrationDialog(): void {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = [
+    'position:fixed', 'inset:0', 'z-index:3000',
+    'display:flex', 'align-items:center', 'justify-content:center',
+    'background:rgba(0,0,0,0.85)', 'padding:16px', 'box-sizing:border-box',
+  ].join(';');
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+  const card = document.createElement('div');
+  card.style.cssText = [
+    'background:#12122a', 'border:1.5px solid #6666cc', 'border-radius:10px',
+    'padding:20px', 'max-width:520px', 'width:100%', 'max-height:85vh', 'overflow:auto',
+    'box-sizing:border-box', 'font-family:Arial,sans-serif', 'color:#ccccee',
+  ].join(';');
+
+  const heading = document.createElement('div');
+  heading.textContent = 'Migration Tool (mod only)';
+  heading.style.cssText = 'font:bold 16px "Arial Black",Arial,sans-serif;color:#aaccff;margin-bottom:10px;';
+  card.appendChild(heading);
+
+  const status = document.createElement('div');
+  status.style.cssText = 'font:12px Arial,sans-serif;color:#8888aa;margin-bottom:10px;min-height:16px;';
+  card.appendChild(status);
+
+  const exportBtn = document.createElement('button');
+  exportBtn.textContent = 'Export from this subreddit';
+  exportBtn.style.cssText = 'padding:8px 14px;margin-bottom:8px;background:#22224a;color:#ccccff;border:1.5px solid #6666cc;border-radius:6px;font:bold 13px Arial,sans-serif;cursor:pointer;';
+  card.appendChild(exportBtn);
+
+  const exportArea = document.createElement('textarea');
+  exportArea.readOnly = true;
+  exportArea.placeholder = 'Click Export, then copy this and paste it into the Import box on the target subreddit.';
+  exportArea.style.cssText = 'width:100%;height:120px;box-sizing:border-box;margin-bottom:16px;font:11px monospace;background:#0a0a1a;color:#aaccff;border:1px solid #444488;border-radius:6px;padding:8px;';
+  card.appendChild(exportArea);
+
+  exportBtn.addEventListener('click', () => {
+    status.textContent = 'Exporting…';
+    fetchMigrationExport()
+      .then(data => {
+        exportArea.value = JSON.stringify(data);
+        exportArea.select();
+        status.textContent = `Exported ${data.communityTracks.length} community track(s), ${data.myDrafts.length} draft(s), `
+          + `${data.ghosts.length} ghost(s), ${data.aiGhosts.length} AI ghost(s).`;
+      })
+      .catch(() => { status.textContent = 'Export failed.'; });
+  });
+
+  const importArea = document.createElement('textarea');
+  importArea.placeholder = 'Paste exported JSON here, then click Import.';
+  importArea.style.cssText = 'width:100%;height:120px;box-sizing:border-box;margin-bottom:8px;font:11px monospace;background:#0a0a1a;color:#aaccff;border:1px solid #444488;border-radius:6px;padding:8px;';
+  card.appendChild(importArea);
+
+  const importBtn = document.createElement('button');
+  importBtn.textContent = 'Import into this subreddit';
+  importBtn.style.cssText = 'padding:8px 14px;background:#22224a;color:#ccccff;border:1.5px solid #6666cc;border-radius:6px;font:bold 13px Arial,sans-serif;cursor:pointer;';
+  card.appendChild(importBtn);
+
+  importBtn.addEventListener('click', () => {
+    let payload: Partial<MigrationExportResponse>;
+    try { payload = JSON.parse(importArea.value); } catch {
+      status.textContent = 'Invalid JSON.';
+      return;
+    }
+    status.textContent = 'Importing…';
+    Promise.all([
+      importMigrationData({ communityTracks: payload.communityTracks ?? [], myDrafts: payload.myDrafts ?? [] }),
+      importGhosts(payload.ghosts ?? []),
+      importAiGhosts(payload.aiGhosts ?? []),
+    ])
+      .then(([tracks, ghosts, aiGhosts]) => {
+        status.textContent = `Imported ${tracks.communityCount} community track(s), ${tracks.draftCount} draft(s), `
+          + `${ghosts.count} ghost(s), ${aiGhosts.count} AI ghost(s).`;
+      })
+      .catch(() => { status.textContent = 'Import failed.'; });
+  });
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = 'Close';
+  closeBtn.style.cssText = 'display:block;margin-top:16px;padding:8px 14px;background:none;color:#8888aa;border:1px solid #444488;border-radius:6px;font:13px Arial,sans-serif;cursor:pointer;';
+  closeBtn.addEventListener('click', () => overlay.remove());
+  card.appendChild(closeBtn);
+
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+}
+
+if (new URLSearchParams(location.search).get('migrate') === '1') {
+  fetchIsMod().then(isMod => { if (isMod) showMigrationDialog(); });
+}

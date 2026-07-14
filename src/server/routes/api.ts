@@ -36,6 +36,15 @@ import type {
   DailyTracksResponse,
   DirectDailyRequest,
   DirectDailyResponse,
+  MigrationExportResponse,
+  MigrationImportRequest,
+  MigrationImportResponse,
+  MigrationGhost,
+  MigrationAiGhost,
+  SeedGhostsRequest,
+  SeedGhostsResponse,
+  SeedAiGhostsRequest,
+  SeedAiGhostsResponse,
 } from '../../shared/api';
 
 type ErrorResponse = {
@@ -562,6 +571,92 @@ api.post('/seed-tracks', async (c) => {
   return c.json({ type: 'seed_tracks', count: body.tracks.length });
 });
 
+// TODO(pre-production): dev-subreddit -> prod-subreddit data transfer, for the
+// one-time hackathon launch move. Delete both routes once the migration has
+// been run against the production install.
+api.get('/migration/export', async (c) => {
+  if (!(await isModerator())) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Moderator access required' }, 403);
+  }
+  const username = context.username;
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+
+  const communityTotal = await redis.zCard('tracks:community');
+  const communityIds = communityTotal > 0
+    ? (await redis.zRange('tracks:community', 0, communityTotal - 1, { by: 'rank' })).map(e => e.member)
+    : [];
+  const communityRaws = communityIds.length > 0 ? await redis.mGet(communityIds.map(id => `track:${id}`)) : [];
+  const communityTracks = communityRaws
+    .filter((raw): raw is string => !!raw)
+    .map(raw => JSON.parse(raw))
+    .map(t => ({ id: t.id, name: t.name, author: t.author, uploadedAt: t.uploadedAt, data: t.data }));
+
+  const mineTotal = await redis.zCard(`mine:${username}`);
+  const mineIds = mineTotal > 0
+    ? (await redis.zRange(`mine:${username}`, 0, mineTotal - 1, { by: 'rank' })).map(e => e.member)
+    : [];
+  const mineRaws = mineIds.length > 0 ? await redis.mGet(mineIds.map(id => `mine-track:${id}`)) : [];
+  const myDrafts = mineRaws.filter((raw): raw is string => !!raw).map(raw => JSON.parse(raw));
+
+  // Leaderboards + player ghosts, for every track that has one.
+  const lbTracks = await redis.hGetAll('lb:tracks') as Record<string, string>;
+  const lbTrackIds = Object.keys(lbTracks);
+  const ghosts: MigrationGhost[] = [];
+  for (const trackId of lbTrackIds) {
+    const total = await redis.zCard(`lb:${trackId}`);
+    if (total === 0) continue;
+    const entries = await redis.zRange(`lb:${trackId}`, 0, total - 1, { by: 'rank' });
+    const ghostRaws = await redis.mGet(entries.map(e => `ghost:${trackId}:${e.member}`));
+    entries.forEach((e, i) => {
+      const g = ghostRaws[i];
+      if (g) ghosts.push({ trackId, username: e.member, score: e.score, ghost: g });
+    });
+  }
+
+  // AI ghosts have no index of their own (keyed only by trackId+skill), so
+  // probe every track we already know about across all skill levels.
+  const aiCandidateIds = new Set<string>([...lbTrackIds, ...communityIds]);
+  const aiGhosts: MigrationAiGhost[] = [];
+  for (const trackId of aiCandidateIds) {
+    const skills = [...VALID_SKILLS];
+    const raws = await redis.mGet(skills.map(skill => `ai-ghost:${trackId}:${skill}`));
+    skills.forEach((skill, i) => {
+      const g = raws[i];
+      if (g) aiGhosts.push({ trackId, skill, ghost: g });
+    });
+  }
+
+  return c.json<MigrationExportResponse>({ type: 'migration_export', communityTracks, myDrafts, ghosts, aiGhosts });
+});
+
+api.post('/migration/import', async (c) => {
+  if (!(await isModerator())) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Moderator access required' }, 403);
+  }
+  let body: MigrationImportRequest;
+  try { body = await c.req.json(); } catch {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON' }, 400);
+  }
+
+  for (const t of body.communityTracks ?? []) {
+    const record = JSON.stringify({ id: t.id, name: t.name, author: t.author, uploadedAt: t.uploadedAt, data: t.data });
+    await redis.set(`track:${t.id}`, record);
+    await redis.zAdd('tracks:community', { score: t.uploadedAt, member: t.id });
+    await redis.set(`track-name:${t.author}:${t.name.trim().toLowerCase()}`, t.id);
+  }
+
+  for (const d of body.myDrafts ?? []) {
+    await redis.set(`mine-track:${d.id}`, JSON.stringify(d));
+    await redis.zAdd(`mine:${d.author}`, { score: d.createdAt, member: d.id });
+  }
+
+  return c.json<MigrationImportResponse>({
+    type: 'migration_import',
+    communityCount: (body.communityTracks ?? []).length,
+    draftCount: (body.myDrafts ?? []).length,
+  });
+});
+
 // Bulk-import player leaderboard ghosts (e.g. migrating from a dev environment
 // to production). Unlike POST /ghost, this writes an explicit username rather
 // than the current session's, so it's restricted to subreddit moderators.
@@ -569,7 +664,7 @@ api.post('/seed-ghosts', async (c) => {
   if (!(await isModerator())) {
     return c.json<ErrorResponse>({ status: 'error', message: 'Moderator access required' }, 403);
   }
-  let body: { ghosts: Array<{ trackId: string; username: string; score: number; ghost: string }> };
+  let body: SeedGhostsRequest;
   try { body = await c.req.json(); } catch {
     return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON' }, 400);
   }
@@ -578,7 +673,7 @@ api.post('/seed-ghosts', async (c) => {
     await redis.zAdd(`lb:${g.trackId}`, { score: g.score, member: g.username });
     await redis.hSet('lb:tracks', { [g.trackId]: '1' });
   }
-  return c.json({ type: 'seed_ghosts', count: body.ghosts.length });
+  return c.json<SeedGhostsResponse>({ type: 'seed_ghosts', count: body.ghosts.length });
 });
 
 // Bulk-import AI ghosts (per track + skill level). Also mod-only, since it's
@@ -587,7 +682,7 @@ api.post('/seed-ai-ghosts', async (c) => {
   if (!(await isModerator())) {
     return c.json<ErrorResponse>({ status: 'error', message: 'Moderator access required' }, 403);
   }
-  let body: { ghosts: Array<{ trackId: string; skill: AiSkillLevel; ghost: string }> };
+  let body: SeedAiGhostsRequest;
   try { body = await c.req.json(); } catch {
     return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON' }, 400);
   }
@@ -595,7 +690,7 @@ api.post('/seed-ai-ghosts', async (c) => {
     if (!VALID_SKILLS.has(g.skill)) continue;
     await redis.set(`ai-ghost:${g.trackId}:${g.skill}`, g.ghost);
   }
-  return c.json({ type: 'seed_ai_ghosts', count: body.ghosts.length });
+  return c.json<SeedAiGhostsResponse>({ type: 'seed_ai_ghosts', count: body.ghosts.length });
 });
 
 api.get('/tracks/community', async (c) => {

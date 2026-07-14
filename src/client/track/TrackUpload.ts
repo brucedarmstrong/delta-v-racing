@@ -16,6 +16,13 @@ import type {
   DailyTracksResponse,
   PromoteDailyResponse,
   DirectDailyResponse,
+  MigrationExportResponse,
+  MigrationImportRequest,
+  MigrationImportResponse,
+  MigrationGhost,
+  MigrationAiGhost,
+  SeedGhostsResponse,
+  SeedAiGhostsResponse,
 } from '../../shared/api';
 import type { PlacedPiece } from './TrackLayout';
 import type { TrackMarker } from './convertGmsTrack';
@@ -220,6 +227,44 @@ export async function fetchDailyTracks(): Promise<DailyTrackEntry[]> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json() as DailyTracksResponse;
   return json.entries;
+}
+
+// TODO(pre-production): remove with the /api/migration/* routes once the
+// dev -> prod launch migration has been run.
+export async function fetchMigrationExport(): Promise<MigrationExportResponse> {
+  const res = await fetch('/api/migration/export');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<MigrationExportResponse>;
+}
+
+export async function importMigrationData(payload: MigrationImportRequest): Promise<MigrationImportResponse> {
+  const res = await fetch('/api/migration/import', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<MigrationImportResponse>;
+}
+
+export async function importGhosts(ghosts: MigrationGhost[]): Promise<SeedGhostsResponse> {
+  const res = await fetch('/api/seed-ghosts', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ ghosts }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<SeedGhostsResponse>;
+}
+
+export async function importAiGhosts(ghosts: MigrationAiGhost[]): Promise<SeedAiGhostsResponse> {
+  const res = await fetch('/api/seed-ai-ghosts', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ ghosts }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<SeedAiGhostsResponse>;
 }
 
 export async function promoteToDailyTrack(id: string, date: string): Promise<void> {
