@@ -132,6 +132,14 @@ initStarField();
 window.addEventListener('resize', initStarField);
 requestAnimationFrame(tickStars);
 
+// Clicking empty background (not a button or other control) launches a
+// shooting star, same direction as the ambient random ones.
+document.body.addEventListener('click', (e) => {
+  const target = e.target as HTMLElement;
+  if (target.closest('button, canvas, a, input, textarea, select')) return;
+  spawnShootingStar();
+});
+
 // ── DOM element references ─────────────────────────────────────────────────────
 
 const playBtn       = document.getElementById('play-btn')          as HTMLButtonElement;
