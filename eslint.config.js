@@ -48,6 +48,10 @@ export default defineConfig([
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-unused-vars': ['off'],
       'no-unused-vars': ['off'],
+      // Ambient global type namespaces (e.g. Phaser's own .d.ts) aren't real
+      // runtime globals, so plain no-undef false-positives on them in type
+      // positions. tsc already catches genuine undefined-symbol errors.
+      'no-undef': ['off'],
     },
     ignores: [
       '**/node_modules/**',

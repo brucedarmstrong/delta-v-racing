@@ -682,5 +682,5 @@ function showMigrationDialog(): void {
 }
 
 if (new URLSearchParams(location.search).get('migrate') === '1') {
-  fetchIsMod().then(isMod => { if (isMod) showMigrationDialog(); });
+  void fetchIsMod().then(isMod => { if (isMod) showMigrationDialog(); });
 }

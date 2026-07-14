@@ -51,7 +51,7 @@ export async function fetchOrGenerateAiGhost(
   if (!ghost) return null;
 
   const serialized = serializeGhost(ghost);
-  uploadAiGhost(trackId, skill, serialized); // fire-and-forget
+  void uploadAiGhost(trackId, skill, serialized); // fire-and-forget
   return ghost;
 }
 

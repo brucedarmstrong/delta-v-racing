@@ -9,7 +9,7 @@ import {
   fetchMineTrack, fetchMineTracks, deleteMineTrack, saveMineTrack,
   getLocalDrafts, deleteLocalDraft, markLocalDraftVerified, verifyMineTrack,
   fetchIsMod, deleteCommunityTrack, fetchDailyTracks, promoteToDailyTrack, promoteDraftToDaily,
-  type TrackPayload, type LocalDraft,
+  type TrackPayload,
 } from '../track/TrackUpload';
 import { fetchRaceGhosts } from '../track/RaceGhosts';
 import { deserializeGhost, serializeGhost } from '../track/GhostData';
@@ -17,7 +17,7 @@ import { generateAndUploadAiGhosts } from '../track/AiGhost';
 import { solveTrack } from '../track/GhostSolver';
 import { navigateTo } from '@devvit/web/client';
 import { username, isLoggedIn } from '../devvitContext';
-import type { CommunityTrackMeta, MineTrackMeta, LeaderboardEntry, LeaderboardResponse, DailyTrackEntry } from '../../shared/api';
+import type { CommunityTrackMeta, LeaderboardEntry, LeaderboardResponse, DailyTrackEntry } from '../../shared/api';
 
 const BG         = 0x0a0a16;
 const SURFACE    = 0x12122a;
@@ -589,56 +589,6 @@ export class TrackSelect extends Scene {
     return card;
   }
 
-  private buildCard(track: TrackEntry): HTMLElement {
-    const card = document.createElement('div');
-    card.style.cssText = [
-      'display:flex', 'align-items:center', 'gap:12px',
-      'background:#12122a', 'border:1px solid #3a3a6a', 'border-radius:6px',
-      'padding:10px', 'margin-bottom:10px', 'cursor:pointer',
-      '-webkit-tap-highlight-color:rgba(100,100,200,0.2)',
-      'user-select:none', '-webkit-user-select:none',
-    ].join(';');
-
-    const canvas  = document.createElement('canvas');
-    canvas.width  = THUMB_W;
-    canvas.height = THUMB_H;
-    canvas.style.cssText = 'flex-shrink:0;border:1px solid #3a3a6a;border-radius:3px;';
-    this.drawThumbnail(canvas, track);
-
-    const info = document.createElement('div');
-    info.style.cssText = 'flex:1;min-width:0;';
-
-    const name = document.createElement('div');
-    name.textContent = track.name;
-    name.style.cssText = 'font:bold 17px "Arial Black",Arial,sans-serif;color:#e8e8ff;margin-bottom:8px;';
-
-    const author = document.createElement('div');
-    author.textContent = `by ${track.author}`;
-    author.style.cssText = 'font:13px Arial,sans-serif;color:#6666aa;';
-
-    info.appendChild(name);
-    info.appendChild(author);
-
-    const arrow = document.createElement('div');
-    arrow.textContent = '›';
-    arrow.style.cssText = 'font:28px Arial,sans-serif;color:#5555aa;flex-shrink:0;line-height:1;';
-
-    card.appendChild(canvas);
-    card.appendChild(info);
-    card.appendChild(arrow);
-
-    card.addEventListener('click', () => {
-      arrow.textContent = '…';
-      card.style.opacity = '0.6';
-      card.style.pointerEvents = 'none';
-      fetchRaceGhosts(track.id, track)
-        .then(ghosts  => this.scene.start('Game', { trackId: track.id, ghosts, returnTab: 'standard' }))
-        .catch(()     => this.scene.start('Game', { trackId: track.id, returnTab: 'standard' }));
-    });
-
-    return card;
-  }
-
   // ── Draft card (Drafts tab) ───────────────────────────────────────────────────
 
   private static ensureSpinStyle(): void {
@@ -944,7 +894,7 @@ export class TrackSelect extends Scene {
     });
 
     // Render thumbnail asynchronously
-    (async () => {
+    void (async () => {
       try {
         const track   = await fetchCommunityTrack(entry.trackId);
         const payload = { pieces: track.pieces, markers: track.markers };
@@ -954,7 +904,7 @@ export class TrackSelect extends Scene {
         ctx.save();
         ctx.translate(THUMB_W / 2 - bounds.cx * scale, THUMB_H / 2 - bounds.cy * scale);
         ctx.scale(scale, scale);
-        drawBarriersOnCanvas(ctx, payload.pieces);
+        drawBarriersOnCanvas(ctx, payload.pieces, 0, 0, 1, 1);
         ctx.restore();
       } catch { /* thumbnail stays blank */ }
     })();
@@ -1250,7 +1200,7 @@ export class TrackSelect extends Scene {
           }
         };
 
-        (async () => {
+        void (async () => {
           let data: string;
           let serverId: string;
 
@@ -1327,14 +1277,14 @@ export class TrackSelect extends Scene {
     }  // end upload listener
 
     // Load thumbnail
-    (async () => {
+    void (async () => {
       try {
         const { data } = await resolveData();
         const payload = JSON.parse(data) as TrackPayload;
         const ctx = canvas.getContext('2d');
         if (ctx) this.drawThumbnail(canvas, {
           id: draft.id, name: draft.name, author: '',
-          startX: payload.startX, startY: payload.startY,
+          startX: payload.startX, startY: payload.startY, startHeading: payload.startHeading ?? 0,
           pieces: payload.pieces, markers: payload.markers,
         });
       } catch { /* thumbnail stays blank */ }

@@ -148,7 +148,6 @@ export class Game extends Scene {
   private dotGfx!:   GameObjects.Graphics;
   private trailGfx!:  GameObjects.Graphics;
   private trailSegs:  TrailSeg[] = [];
-  private starField:  PhaserStarField | null = null;
 
   // Ghost recording
   private ghostMoves:   GhostMove[] = [];
@@ -164,7 +163,6 @@ export class Game extends Scene {
   // DOM HUD — immune to Phaser camera zoom/scroll (setScrollFactor(0) only prevents scroll, not zoom)
   private topBarEl:   HTMLElement | null = null;
   private hudDiv:     HTMLElement | null = null;
-  private pauseBtnEl: HTMLElement | null = null;
   private turnValEl:  HTMLElement | null = null;
   private crashValEl: HTMLElement | null = null;
   private scoreValEl: HTMLElement | null = null;
@@ -273,7 +271,7 @@ export class Game extends Scene {
     this.picking = false;
     this.shownCoachTurns = new Set();
 
-    this.starField = new PhaserStarField(this, {
+    new PhaserStarField(this, {
       depth: -10, parallax: 0.08, texKey: 'starfield_game',
       driftX: STARFIELD_DRIFT_X, driftY: STARFIELD_DRIFT_Y,
     });
@@ -1149,22 +1147,6 @@ export class Game extends Scene {
     return 1;
   }
 
-  private findNearestValid(crashWX: number, crashWY: number): { gx: number; gy: number } | null {
-    const cx = Math.round(crashWX / gridPx);
-    const cy = Math.round(crashWY / gridPx);
-    // Expand in Chebyshev rings (matches the 8-connected grid structure).
-    for (let r = 0; r <= 15; r++) {
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-          const gx = cx + dx, gy = cy + dy;
-          if (!pointInsideBarrier(gx * gridPx, gy * gridPx, this.trackPieces)) return { gx, gy };
-        }
-      }
-    }
-    return null;
-  }
-
   private spawnCrashParticles(
     wx: number, wy: number,
   ): Phaser.GameObjects.Particles.ParticleEmitter | null {
@@ -1220,7 +1202,9 @@ export class Game extends Scene {
 
       gfx.fillStyle(0xff44cc, 1.0);
       gfx.fillPoints(
-        half.verts.map(([x, y]) => ({ x: x - lCX, y: y - lCY })),
+        // fillPoints only reads .x/.y at runtime; its TS signature demands a
+        // real Phaser.Math.Vector2[] though, so plain {x,y} literals need this cast.
+        half.verts.map(([x, y]) => ({ x: x - lCX, y: y - lCY })) as unknown as Phaser.Math.Vector2[],
         true,
       );
 
@@ -1682,7 +1666,6 @@ export class Game extends Scene {
     };
 
     const ghost        = this.currentGhost;
-    const mineTrackId  = this.mineTrackId;
     fetch('/api/ghost', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2527,7 +2510,6 @@ export class Game extends Scene {
     document.body.appendChild(bar);
 
     this.topBarEl   = bar;
-    this.pauseBtnEl = pauseBtn;
     this.hudDiv     = stats;
     this.turnValEl  = turnVal;
     this.crashValEl = crashVal;
@@ -2568,7 +2550,6 @@ export class Game extends Scene {
       this.checkpointPulseRafId = 0;
       this.topBarEl?.remove();
       this.topBarEl   = null;
-      this.pauseBtnEl = null;
       this.hudDiv     = null;
       this.turnValEl  = null;
       this.crashValEl = null;

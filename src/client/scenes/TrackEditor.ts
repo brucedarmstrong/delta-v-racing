@@ -116,34 +116,6 @@ function worldConnectors(p: PlacedPiece): { entry: WorldConn; exit: WorldConn } 
   };
 }
 
-// Draw one corner-wall arc on a Phaser Graphics object using lineBetween segments.
-// Matches the same geometry as addPiecePaths / TrackBarrierCanvas.
-// localStart: π for right turn (flip=false), 0 for left turn (flip=true).
-function drawCornerArcOnGfx(
-  g: GameObjects.Graphics,
-  p: PlacedPiece,
-  radius: number,
-  lineW: number,
-  color: number,
-  alpha: number,
-): void {
-  const flip    = (p as CornerDef).flip ?? false;
-  const θr      = (p as CornerDef).angle * Math.PI / 180;
-  const pRad    = p.rotation * Math.PI / 180;
-  const wStart  = (flip ? 0 : Math.PI) + pRad;
-  const dir     = flip ? -1 : 1;
-  const N       = Math.max(3, Math.ceil((p as CornerDef).angle / 5));
-  g.lineStyle(lineW, color, alpha);
-  for (let i = 0; i < N; i++) {
-    const a1 = wStart + dir * (θr * i       / N);
-    const a2 = wStart + dir * (θr * (i + 1) / N);
-    g.lineBetween(
-      p.x + Math.cos(a1) * radius, p.y + Math.sin(a1) * radius,
-      p.x + Math.cos(a2) * radius, p.y + Math.sin(a2) * radius,
-    );
-  }
-}
-
 // Tight bounding box of a piece's actually-drawn geometry — used for marquee
 // "fully contained" hit-testing. Unlike trackBounds() (used elsewhere, e.g.
 // for texture sizing, which conservatively bounds a corner by its whole
@@ -543,20 +515,16 @@ export class TrackEditor extends Scene {
   private palTab:   PalTab      = 'straight';
   private palWalls: WallVariant = 'both';
   private palFlip   = false;
-  private palAngle: CornerAngle  = 90;
   // Which corner tightness new corner pieces get placed as — the Corner tab
   // covers all tightnesses now instead of a separate tab per size.
   private palCornerFamily: CornerFamily = 'corner';
 
   // Phaser objects
-  private markerGfx!:     GameObjects.Graphics;
   private selectionGfx!:  GameObjects.Graphics;
   private connGfx!:       GameObjects.Graphics;
   private marqueeGfx!:    GameObjects.Graphics;
   private groupOutlineGfx!: GameObjects.Graphics;
-  private starField: PhaserStarField | null = null;
   private barrierImg:       GameObjects.Image | null = null;
-  private barrierExclude:   number[] | null          = null;
   // Pooled marching-ants highlight — one canvas-texture + Image pair per
   // selected piece, so single- and multi-select both get the same precise
   // piece-shaped dashed outline (not just a bounding box).
@@ -604,7 +572,6 @@ export class TrackEditor extends Scene {
     this.redoStack     = [];
     this.clipboard     = null;
     this.startCarImg   = null;
-    this.barrierExclude = null;
     // Empty on scene restart — the pool's images will be in a destroyed state already
     this.selHighlights = [];
 
@@ -628,7 +595,7 @@ export class TrackEditor extends Scene {
     cam.setZoom(0.65);
     cam.centerOn(DEFAULT_START_X, DEFAULT_START_Y);
 
-    this.starField = new PhaserStarField(this, {
+    new PhaserStarField(this, {
       depth: -10, parallax: 0.08, texKey: 'starfield_editor',
       driftX: STARFIELD_DRIFT_X, driftY: STARFIELD_DRIFT_Y,
     });
@@ -640,7 +607,6 @@ export class TrackEditor extends Scene {
     for (let x = -EXT; x <= EXT; x += CELL) gridGfx.lineBetween(x, -EXT, x, EXT);
     for (let y = -EXT; y <= EXT; y += CELL) gridGfx.lineBetween(-EXT, y, EXT, y);
 
-    this.markerGfx        = this.add.graphics().setDepth(5);
     this.groupOutlineGfx  = this.add.graphics().setDepth(6);
     this.selectionGfx     = this.add.graphics().setDepth(8);
     this.connGfx          = this.add.graphics().setDepth(7);
@@ -1316,7 +1282,6 @@ export class TrackEditor extends Scene {
 
   private updateBarrierImg(excludeIdxs: number[] | null = null): void {
     this.redrawGroupOutlines();
-    this.barrierExclude = excludeIdxs;
     if (this.barrierImg) { this.barrierImg.destroy(); this.barrierImg = null; }
     const drawPieces = excludeIdxs !== null
       ? this.pieces.filter((_, i) => !excludeIdxs.includes(i))
@@ -2920,7 +2885,6 @@ export class TrackEditor extends Scene {
       for (const ang of CORNER_ANGLES) {
         const b = mkCanvasBtn((c, g) => drawCornerIcon(c, family, ang, this.palFlip, this.palWalls, g), `${ang}°`, false);
         b.addEventListener('click', () => {
-          this.palAngle = ang;
           this.addPieceFromPalette({ type: family, angle: ang, walls: this.palWalls, flip: this.palFlip });
         });
         row.appendChild(b);

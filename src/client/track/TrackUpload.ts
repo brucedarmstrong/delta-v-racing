@@ -113,7 +113,7 @@ export async function saveMineTrack(
   });
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
-    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch {}
+    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch { /* keep default msg */ }
     throw new Error(msg);
   }
   const json = await res.json() as SaveMineTrackResponse;
@@ -275,7 +275,7 @@ export async function promoteToDailyTrack(id: string, date: string): Promise<voi
   });
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
-    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch {}
+    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch { /* keep default msg */ }
     throw new Error(msg);
   }
   await res.json() as PromoteDailyResponse;
@@ -289,7 +289,7 @@ export async function promoteDraftToDaily(name: string, data: string, date: stri
   });
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
-    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch {}
+    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch { /* keep default msg */ }
     throw new Error(msg);
   }
   await res.json() as DirectDailyResponse;
@@ -299,7 +299,7 @@ export async function deleteCommunityTrack(id: string): Promise<void> {
   const res = await fetch(`/api/community-track/${encodeURIComponent(id)}`, { method: 'DELETE' });
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
-    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch {}
+    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch { /* keep default msg */ }
     throw new Error(msg);
   }
 }

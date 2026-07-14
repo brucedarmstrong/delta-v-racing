@@ -91,7 +91,7 @@ export class ModeSelect extends Scene {
     this.buildMenu(data);
   }
 
-  update(_time: number, delta: number): void {
+  override update(_time: number, delta: number): void {
     if (!this.gridGfx) return;
     this.gridOX = ((this.gridOX + GRID_DX * delta / 1000) % GRID_PERIOD + GRID_PERIOD) % GRID_PERIOD;
     this.gridOY = ((this.gridOY + GRID_DY * delta / 1000) % GRID_PERIOD + GRID_PERIOD) % GRID_PERIOD;
@@ -264,11 +264,6 @@ export class ModeSelect extends Scene {
     this.gridOX  = 0;
     this.gridOY  = 0;
     this.drawScrollingGrid(); // initial draw so it's visible before first update()
-  }
-
-  private stopGrid(): void {
-    this.gridGfx?.destroy();
-    this.gridGfx = null;
   }
 
   private drawScrollingGrid(): void {

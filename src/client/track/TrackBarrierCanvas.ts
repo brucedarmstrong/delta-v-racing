@@ -73,7 +73,7 @@ export function drawMarkersOnCanvas(
   ctx: CanvasRenderingContext2D,
   startX: number,
   startY: number,
-  startHeading: number,
+  _startHeading: number,
   markers: TrackMarker[],
   worldL: number,
   worldT: number,
