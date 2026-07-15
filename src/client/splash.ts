@@ -1,5 +1,5 @@
 import '@mdi/font/css/materialdesignicons.min.css';
-import { requestExpandedMode, navigateTo } from '@devvit/web/client';
+import { requestExpandedMode } from '@devvit/web/client';
 import { username, isLoggedIn, appVersion, postData } from './devvitContext';
 import { drawBarriersOnCanvas, drawMarkersOnCanvas, onMarkerSpritesReady } from './track/TrackBarrierCanvas';
 import { drawMiniCar } from './track/CarShape';
@@ -147,7 +147,6 @@ const profileBtn    = document.getElementById('profile-btn')       as HTMLButton
 const communityBtn  = document.getElementById('community-btn')     as HTMLButtonElement;
 const lbBtn         = document.getElementById('leaderboard-btn')   as HTMLButtonElement;
 const createBtn     = document.getElementById('create-btn')        as HTMLButtonElement;
-const joinBtn        = document.getElementById('join-btn')         as HTMLButtonElement;
 const buildStampEl  = document.getElementById('build-stamp')       as HTMLDivElement;
 const trackInfoEl   = document.getElementById('track-info')        as HTMLDivElement;
 const trackThumb    = document.getElementById('track-thumb')       as HTMLCanvasElement;
@@ -597,14 +596,6 @@ lbBtn.addEventListener('click', (e) => {
 createBtn.addEventListener('click', (e) => {
   localStorage.setItem('dv-route', 'create');
   requestExpandedMode(e, 'game');
-});
-
-// Devvit's asUser permission mechanism (needed for reddit.subscribeToCurrentSubreddit())
-// isn't actually enforced by the platform yet -- declaring SUBSCRIBE_TO_SUBREDDIT in
-// devvit.json gets denied at runtime regardless ("permission not granted"). Link out to
-// the subreddit instead, where the user hits Reddit's own native Join button.
-joinBtn.addEventListener('click', () => {
-  navigateTo('https://www.reddit.com/r/delta_v_racing');
 });
 
 // ── Migration tool (temporary, dev -> prod track transfer) ──────────────────

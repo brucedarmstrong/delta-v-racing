@@ -92,52 +92,14 @@
   padding: 16px;
 }
 
-.title-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(8px, 3vw, 18px);
-  width: 100%;
-}
-
 .title-block {
   line-height: 1;
   text-align: center;
-  min-width: 0;
-}
-
-.join-btn {
-  flex: 0 0 auto;
-  background: #10241a;
-  color: #55dd88;
-  border: 1.5px solid #2a7a4e;
-  border-radius: 8px;
-  padding: 6px 8px;
-  width: clamp(88px, 28vw, 138px);
-  font-family: Arial, sans-serif;
-  font-size: clamp(8px, 2.3vw, 9.5px);
-  font-weight: 700;
-  line-height: 1.35;
-  letter-spacing: 0;
-  text-align: center;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s ease-out;
-}
-
-.join-btn:hover,
-.join-btn:focus {
-  background: #163a26;
-  border-color: #44bb77;
-  outline: none;
-}
-
-.join-btn:active {
-  transform: scale(0.95);
 }
 
 .title-delta {
   font-family: "Arial Black", Arial, sans-serif;
-  font-size: clamp(22px, 8vw, 52px);
+  font-size: clamp(28px, 10vw, 52px);
   font-weight: 900;
   color: #ffee00;
   text-shadow:
@@ -145,7 +107,6 @@
     0 0 28px #ff440066,
     0 2px 4px #000;
   letter-spacing: 0.06em;
-  white-space: nowrap;
 }
 
 .title-nabla {
@@ -155,7 +116,7 @@
 
 .title-racing {
   font-family: "Arial Black", Arial, sans-serif;
-  font-size: clamp(12px, 4vw, 26px);
+  font-size: clamp(14px, 5vw, 26px);
   font-weight: 900;
   color: #33ee88;
   text-shadow:
@@ -163,7 +124,6 @@
     0 1px 3px #000;
   letter-spacing: 0.22em;
   margin-top: 2px;
-  white-space: nowrap;
 }
 
 .tagline {
