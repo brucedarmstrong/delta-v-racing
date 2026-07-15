@@ -10,6 +10,12 @@ export type EditorSettings = {
   // not just while selected (the per-piece marching-ants highlight on
   // selection is unaffected by this setting either way).
   showGroupOutlines: boolean;
+  // Rubber-band marquee hit test: false = a piece must be fully inside to be
+  // selected; true = merely touching (overlapping) it is enough. Either way
+  // only the piece's visible-geometry bounds are considered (see
+  // pieceVisibleBounds in TrackEditor.ts), never the full circle a corner's
+  // arc belongs to.
+  marqueeTouchMode: boolean;
 };
 
 const KEY = 'dv-editor-settings';
@@ -17,6 +23,7 @@ const KEY = 'dv-editor-settings';
 const DEFAULTS: EditorSettings = {
   propsBarLayout: 'wrap',
   showGroupOutlines: true,
+  marqueeTouchMode: false,
 };
 
 export function getEditorSettings(): EditorSettings {

@@ -981,6 +981,36 @@ export class TrackEditor extends Scene {
     grpSec.appendChild(grpRow);
     card.appendChild(grpSec);
 
+    // ── Rubber-band selection ─────────────────────────────────────────────────
+    const marqueeSec = document.createElement('div');
+    marqueeSec.style.cssText = 'margin-top:14px;';
+    const marqueeSecHead = document.createElement('div');
+    marqueeSecHead.textContent = 'Rubber-band Selection';
+    marqueeSecHead.style.cssText = 'font:bold 10px Arial,sans-serif;color:#5566aa;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a2a4a;padding-bottom:4px;margin-bottom:8px;';
+    marqueeSec.appendChild(marqueeSecHead);
+
+    const marqueeDesc = document.createElement('div');
+    marqueeDesc.textContent = 'What a drag-select rectangle picks up — only the visible part of each piece counts either way.';
+    marqueeDesc.style.cssText = 'font:11px Arial,sans-serif;color:#7777aa;margin-bottom:8px;line-height:1.4;';
+    marqueeSec.appendChild(marqueeDesc);
+
+    const marqueeRow = document.createElement('div');
+    marqueeRow.style.cssText = 'display:flex;gap:8px;';
+    const renderMarqueeRow = () => {
+      marqueeRow.innerHTML = '';
+      marqueeRow.appendChild(this.mkOptBtn('Fully inside', !this.settings.marqueeTouchMode, () => {
+        this.settings = setEditorSettings({ marqueeTouchMode: false });
+        renderMarqueeRow();
+      }));
+      marqueeRow.appendChild(this.mkOptBtn('Touching', this.settings.marqueeTouchMode, () => {
+        this.settings = setEditorSettings({ marqueeTouchMode: true });
+        renderMarqueeRow();
+      }));
+    };
+    renderMarqueeRow();
+    marqueeSec.appendChild(marqueeRow);
+    card.appendChild(marqueeSec);
+
     // ── Sound ─────────────────────────────────────────────────────────────────
     const sndSec = document.createElement('div');
     sndSec.style.cssText = 'margin-top:14px;';
@@ -1212,7 +1242,7 @@ export class TrackEditor extends Scene {
       [ic('delete'),                         'Delete',      'Remove the selected piece from the track'],
     ]));
     card.appendChild(section('Multiple items selected', [
-      ['', 'Drag-select',   'In Select Mode, drag from empty canvas space to rubber-band select everything fully inside the rectangle'],
+      ['', 'Drag-select',   'In Select Mode, drag from empty canvas space to rubber-band select — either everything fully inside the rectangle or anything it touches, per the Rubber-band Selection option (⋮ → Options)'],
       ['', 'Shift+click',   'Add/remove a piece, checkpoint, or the finish line from the selection (desktop)'],
       [ic('rotate-left') + ic('rotate-right'), '±15°', 'Rotate the whole selection as a rigid group'],
       ['', 'Arrow keys', 'Nudge the whole selection 1px in that direction'],
@@ -1923,24 +1953,41 @@ export class TrackEditor extends Scene {
       const wx = ptr.worldX, wy = ptr.worldY;
       const x0 = Math.min(op.startWX, wx), x1 = Math.max(op.startWX, wx);
       const y0 = Math.min(op.startWY, wy), y1 = Math.max(op.startWY, wy);
-      // "Contains" semantics: an item is only selected if it's entirely inside
-      // the marquee, not merely touched by it. A pure overlap test used each
-      // piece's (conservative, circle-based for corners) bounding box, so a
-      // corner piece whose bounds happened to graze the rectangle could get
-      // selected even though its visible arc was nowhere near it.
+      // Two hit-test rules, both restricted to each piece's actually-drawn
+      // geometry (pieceVisibleBounds), never the invisible full circle a
+      // corner's arc belongs to:
+      //  - "Fully inside" (default): the piece's visible bounds must sit
+      //    entirely within the marquee rectangle.
+      //  - "Touching": any overlap between the visible bounds and the
+      //    marquee rectangle is enough.
+      // A pure overlap test on a conservative circle-based bounding box would
+      // let a corner piece that merely grazes the rectangle get selected even
+      // though its visible arc is nowhere near it — hence pieceVisibleBounds.
       const rectContainsCircle = (mx: number, my: number, r: number) =>
         mx - r >= x0 && mx + r <= x1 && my - r >= y0 && my + r <= y1;
+      const rectTouchesCircle = (mx: number, my: number, r: number) => {
+        const nearX = Math.max(x0, Math.min(mx, x1));
+        const nearY = Math.max(y0, Math.min(my, y1));
+        return Math.hypot(nearX - mx, nearY - my) <= r;
+      };
+      const rectTouchesRect = (b: { x: number; y: number; width: number; height: number }) =>
+        b.x < x1 && b.x + b.width > x0 && b.y < y1 && b.y + b.height > y0;
 
       const hitPieces: number[] = [];
       for (let i = 0; i < this.pieces.length; i++) {
         const b = pieceVisibleBounds(this.pieces[i]);
-        if (b.x >= x0 && b.x + b.width <= x1 && b.y >= y0 && b.y + b.height <= y1) hitPieces.push(i);
+        const hit = this.settings.marqueeTouchMode
+          ? rectTouchesRect(b)
+          : b.x >= x0 && b.x + b.width <= x1 && b.y >= y0 && b.y + b.height <= y1;
+        if (hit) hitPieces.push(i);
       }
-      const hitFinish = !!this.finishMarker && rectContainsCircle(this.finishMarker.x, this.finishMarker.y, HIT_R_MARKER);
+      const markerHit = (mx: number, my: number) =>
+        this.settings.marqueeTouchMode ? rectTouchesCircle(mx, my, HIT_R_MARKER) : rectContainsCircle(mx, my, HIT_R_MARKER);
+      const hitFinish = !!this.finishMarker && markerHit(this.finishMarker.x, this.finishMarker.y);
       const hitCheckpoints: number[] = [];
       for (let i = 0; i < this.checkpoints.length; i++) {
         const cp = this.checkpoints[i];
-        if (rectContainsCircle(cp.x, cp.y, HIT_R_MARKER)) hitCheckpoints.push(i);
+        if (markerHit(cp.x, cp.y)) hitCheckpoints.push(i);
       }
 
       let finalPieces: number[], finalFinish: boolean, finalCheckpoints: number[];
