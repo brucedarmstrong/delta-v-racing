@@ -43,20 +43,26 @@ The app has a one-time, mod-only migration tool for exactly this move:
 `GET/POST /api/migration/export` + `/import` in
 `src/server/routes/api.ts`, backed by a hidden dialog in `src/client/splash.ts`.
 
-The dialog is triggered by **tapping the version number (bottom of the splash
-screen) 5x within 1.5 seconds** — same hidden-gesture pattern as the FTUE
-reset tap in `ModeSelect.ts`. (A `?migrate=1` URL param does *not* work:
-Devvit renders the post's content in a sandboxed webview with its own URL, so
-query params on the outer reddit.com post page never reach the script.)
+There's no UI trigger for the dialog (a discoverable tap-gesture was removed
+as a mild security hardening — see CLAUDE.md). As a moderator, open the
+browser devtools console on the post and run:
+
+```js
+showMigrationDialog()
+```
+
+(A `?migrate=1` URL param does *not* work: Devvit renders the post's content
+in a sandboxed webview with its own URL, so query params on the outer
+reddit.com post page never reach the script.)
 
 On **r/delta_v_racing_dev**, as a moderator:
-1. Open the post, tap the version number 5x quickly.
+1. Open the post, run `showMigrationDialog()` in devtools console.
 2. Click **Export** — pulls community tracks, your own drafts, leaderboard
    ghosts, and AI ghosts into one JSON blob.
 3. Copy the JSON.
 
 On **r/delta_v_racing**, as a moderator:
-4. Open the post, tap the version number 5x quickly.
+4. Open the post, run `showMigrationDialog()` in devtools console.
 5. Paste the JSON into the Import box, click **Import**.
 6. Check the status line for counts (tracks / drafts / ghosts / AI ghosts) to
    confirm nothing came back empty.
@@ -74,19 +80,13 @@ pulling them would be a privacy overreach for a mod-triggered tool.
 - The "Join r/delta_v_racing" button on the splash screen works (needs a real
   Devvit session — can't be verified outside `devvit playtest`/a live install).
 
-## 6. Clean up the migration tool
+## 6. Migration tool stays installed
 
-Once the migration is confirmed working, remove the temporary tooling before
-any *future* prod update:
-
-```
-grep -rn "TODO(pre-production)" src/
-```
-
-Delete `/api/migration/export`, `/api/migration/import`, the `?migrate=1`
-dialog in `splash.ts`, and the related types/fetch helpers. `/api/seed-ghosts`
-and `/api/seed-ai-ghosts` can stay if you want to keep them as general seeding
-tools, or go too — your call.
+Decided 2026-07-15: the migration tool is **not** deleted after the launch
+migration runs. It's kept as a standing capability for future re-migrations
+or backups — `/api/migration/export`, `/api/migration/import`, and
+`showMigrationDialog()` in `splash.ts` all stay. See CLAUDE.md for why and
+how it's gated now that there's no UI trigger.
 
 ## 7. Ongoing dev workflow
 
