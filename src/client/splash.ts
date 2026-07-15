@@ -1,5 +1,5 @@
 import '@mdi/font/css/materialdesignicons.min.css';
-import { requestExpandedMode } from '@devvit/web/client';
+import { requestExpandedMode, navigateTo } from '@devvit/web/client';
 import { username, isLoggedIn, appVersion, postData } from './devvitContext';
 import { drawBarriersOnCanvas, drawMarkersOnCanvas, onMarkerSpritesReady } from './track/TrackBarrierCanvas';
 import { drawMiniCar } from './track/CarShape';
@@ -599,29 +599,12 @@ createBtn.addEventListener('click', (e) => {
   requestExpandedMode(e, 'game');
 });
 
-const joinBtnDefaultHtml = joinBtn.innerHTML;
-
+// Devvit's asUser permission mechanism (needed for reddit.subscribeToCurrentSubreddit())
+// isn't actually enforced by the platform yet -- declaring SUBSCRIBE_TO_SUBREDDIT in
+// devvit.json gets denied at runtime regardless ("permission not granted"). Link out to
+// the subreddit instead, where the user hits Reddit's own native Join button.
 joinBtn.addEventListener('click', () => {
-  if (joinBtn.classList.contains('is-joined')) return;
-
-  if (!isLoggedIn) {
-    joinBtn.textContent = 'Log in to Reddit first';
-    setTimeout(() => { joinBtn.innerHTML = joinBtnDefaultHtml; }, 2000);
-    return;
-  }
-
-  joinBtn.disabled = true;
-  joinBtn.textContent = 'Joining…';
-  fetch('/api/join-subreddit', { method: 'POST' })
-    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
-    .then(() => {
-      joinBtn.textContent = 'Joined ✓';
-      joinBtn.classList.add('is-joined');
-    })
-    .catch(() => {
-      joinBtn.disabled = false;
-      joinBtn.innerHTML = joinBtnDefaultHtml;
-    });
+  navigateTo('https://www.reddit.com/r/delta_v_racing');
 });
 
 // ── Migration tool (temporary, dev -> prod track transfer) ──────────────────

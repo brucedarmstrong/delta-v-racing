@@ -17,11 +17,6 @@ export type DecrementResponse = {
   count: number;
 };
 
-export type JoinSubredditResponse = {
-  type: "join_subreddit";
-  joined: boolean;
-};
-
 export type UploadGhostRequest = {
   trackId: string;
   score: number;
