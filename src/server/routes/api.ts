@@ -654,7 +654,29 @@ api.post('/migration/import', async (c) => {
   }
 
   for (const t of body.communityTracks ?? []) {
-    const record = JSON.stringify({ id: t.id, name: t.name, author: t.author, uploadedAt: t.uploadedAt, data: t.data });
+    // Each community track needs its own Reddit post on *this* subreddit --
+    // the exported postUrl points at the source subreddit's post, which
+    // doesn't exist here. Guard with a marker so re-running import against
+    // already-migrated tracks doesn't spawn duplicate posts.
+    const postCreatedKey = `track-post-created:${t.id}`;
+    let postUrl: string | undefined;
+    if (!(await redis.get(postCreatedKey))) {
+      const subreddit = await reddit.getSubredditByName(context.subredditName!);
+      const post = await subreddit.submitCustomPost({
+        title:    `${t.name.trim()} — by u/${t.author}`,
+        postData: { trackId: t.id, trackName: t.name.trim(), author: t.author },
+      });
+      postUrl = `https://www.reddit.com${post.permalink}`;
+      await redis.set(`track-post:${post.id}`, t.id);
+      await redis.set(postCreatedKey, '1');
+    }
+
+    const existingRaw = await redis.get(`track:${t.id}`);
+    if (!postUrl && existingRaw) {
+      try { postUrl = (JSON.parse(existingRaw) as { postUrl?: string }).postUrl; } catch { /* fall through with no postUrl */ }
+    }
+
+    const record = JSON.stringify({ id: t.id, name: t.name, author: t.author, uploadedAt: t.uploadedAt, data: t.data, postUrl });
     await redis.set(`track:${t.id}`, record);
     await redis.zAdd('tracks:community', { score: t.uploadedAt, member: t.id });
     await redis.set(`track-name:${t.author}:${t.name.trim().toLowerCase()}`, t.id);
