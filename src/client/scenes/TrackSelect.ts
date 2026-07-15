@@ -514,9 +514,18 @@ export class TrackSelect extends Scene {
           return;
         }
         const today = new Date().toISOString().slice(0, 10);
+        let todayCard: HTMLElement | null = null;
         for (const entry of entries) {
-          el.appendChild(this.buildDailyCard(entry, entry.date === today));
+          const isToday  = entry.date === today;
+          const isLocked = entry.date > today;
+          const card = this.buildDailyCard(entry, isToday, isLocked);
+          if (isToday) todayCard = card;
+          el.appendChild(card);
         }
+        // Land on today's entry by default -- entries are sorted newest-first,
+        // so without this, scheduled-ahead future tracks would push today off
+        // the top of the initial view.
+        todayCard?.scrollIntoView({ block: 'center' });
       }).catch(() => {
         loading.textContent = 'Failed to load daily tracks.';
       });
@@ -832,13 +841,15 @@ export class TrackSelect extends Scene {
     setTimeout(() => t.remove(), duration);
   }
 
-  private buildDailyCard(entry: DailyTrackEntry, isToday: boolean): HTMLElement {
+  private buildDailyCard(entry: DailyTrackEntry, isToday: boolean, isLocked: boolean): HTMLElement {
     const card = document.createElement('div');
     card.style.cssText = [
       'display:flex', 'align-items:center', 'gap:12px',
       `background:${isToday ? '#141428' : '#12122a'}`,
       `border:1px solid ${isToday ? '#5566aa' : '#3a3a6a'}`,
-      'border-radius:6px', 'padding:10px', 'margin-bottom:10px', 'cursor:pointer',
+      'border-radius:6px', 'padding:10px', 'margin-bottom:10px',
+      `cursor:${isLocked ? 'default' : 'pointer'}`,
+      isLocked ? 'opacity:0.5;' : '',
       '-webkit-tap-highlight-color:rgba(100,100,200,0.2)',
       'user-select:none', '-webkit-user-select:none',
     ].join(';');
@@ -860,7 +871,7 @@ export class TrackSelect extends Scene {
     name.style.cssText = 'font:bold 17px "Arial Black",Arial,sans-serif;color:#e8e8ff;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
 
     const author = document.createElement('div');
-    author.textContent = `by ${entry.author}`;
+    author.textContent = isLocked ? `Unlocks ${entry.date}` : `by ${entry.author}`;
     author.style.cssText = 'font:13px Arial,sans-serif;color:#6666aa;';
 
     info.appendChild(dateLabel);
@@ -868,44 +879,38 @@ export class TrackSelect extends Scene {
     info.appendChild(author);
 
     const arrow = document.createElement('div');
-    arrow.textContent = '›';
+    arrow.textContent = isLocked ? '🔒' : '›';
     arrow.style.cssText = 'font:28px Arial,sans-serif;color:#5555aa;flex-shrink:0;line-height:1;';
 
     card.appendChild(canvas);
     card.appendChild(info);
     card.appendChild(arrow);
 
-    card.addEventListener('click', () => {
-      arrow.textContent = '…';
-      card.style.opacity = '0.6';
-      card.style.pointerEvents = 'none';
-      fetchCommunityTrack(entry.trackId)
-        .then(track =>
-          fetchRaceGhosts(entry.trackId, track)
-            .then(ghosts => this.scene.start('Game', { track, ghosts, returnTab: 'daily' }))
-            .catch(()    => this.scene.start('Game', { track, returnTab: 'daily' }))
-        )
-        .catch(() => {
-          arrow.textContent = '›';
-          card.style.opacity = '';
-          card.style.pointerEvents = '';
-          TrackSelect.showToast('Failed to load track');
-        });
-    });
+    if (!isLocked) {
+      card.addEventListener('click', () => {
+        arrow.textContent = '…';
+        card.style.opacity = '0.6';
+        card.style.pointerEvents = 'none';
+        fetchCommunityTrack(entry.trackId)
+          .then(track =>
+            fetchRaceGhosts(entry.trackId, track)
+              .then(ghosts => this.scene.start('Game', { track, ghosts, returnTab: 'daily' }))
+              .catch(()    => this.scene.start('Game', { track, returnTab: 'daily' }))
+          )
+          .catch(() => {
+            arrow.textContent = '›';
+            card.style.opacity = '';
+            card.style.pointerEvents = '';
+            TrackSelect.showToast('Failed to load track');
+          });
+      });
+    }
 
     // Render thumbnail asynchronously
     void (async () => {
       try {
-        const track   = await fetchCommunityTrack(entry.trackId);
-        const payload = { pieces: track.pieces, markers: track.markers };
-        const ctx     = canvas.getContext('2d')!;
-        const bounds  = trackBounds(payload.pieces);
-        const scale   = Math.min((THUMB_W - 4) / bounds.width, (THUMB_H - 4) / bounds.height) * 0.9;
-        ctx.save();
-        ctx.translate(THUMB_W / 2 - bounds.cx * scale, THUMB_H / 2 - bounds.cy * scale);
-        ctx.scale(scale, scale);
-        drawBarriersOnCanvas(ctx, payload.pieces, 0, 0, 1, 1);
-        ctx.restore();
+        const track = await fetchCommunityTrack(entry.trackId);
+        this.drawThumbnail(canvas, track);
       } catch { /* thumbnail stays blank */ }
     })();
 

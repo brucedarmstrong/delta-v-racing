@@ -8,7 +8,7 @@ import { convertGmsTrack, convertGmsMarkers, type GmsTrack } from './track/conve
 import ovalSmallJson from './tracks/gms/Oval_Small.json';
 import type { CommunityTrackResponse, TrackStatsResponse, UserStatsCategory, UserStatsResponse, MigrationExportResponse } from '../shared/api';
 import type { TrackPayload } from './track/TrackUpload';
-import { fetchIsMod, fetchMigrationExport, importMigrationData, importGhosts, importAiGhosts } from './track/TrackUpload';
+import { fetchMigrationExport, importMigrationData, importGhosts, importAiGhosts } from './track/TrackUpload';
 import { attachGlobalUiClicks } from './audio/Sfx';
 
 attachGlobalUiClicks();
@@ -598,9 +598,9 @@ createBtn.addEventListener('click', (e) => {
   requestExpandedMode(e, 'game');
 });
 
-// ── Migration tool (temporary, dev -> prod track transfer) ──────────────────
-// TODO(pre-production): delete this section plus the /api/migration/* routes
-// and TrackUpload fetch helpers once the launch migration has been run.
+// ── Migration tool (dev -> prod track transfer) ──────────────────────────────
+// Kept as a standing capability for future re-migrations/backups, not wired to
+// any UI trigger. Invoke from the browser devtools console: showMigrationDialog()
 
 function showMigrationDialog(): void {
   const overlay = document.createElement('div');
@@ -689,19 +689,6 @@ function showMigrationDialog(): void {
   document.body.appendChild(overlay);
 }
 
-// Hidden mod-only trigger: tap the build-stamp version text 5x within 1.5s.
-// (A ?migrate=1 URL param can't work here -- Devvit renders the post's
-// content in a sandboxed webview with its own URL, so query params on the
-// outer reddit.com post page never reach this script's location.search.)
-let migrateTapCount = 0;
-let migrateTapTimer: ReturnType<typeof setTimeout> | null = null;
-buildStampEl.addEventListener('click', () => {
-  migrateTapCount++;
-  if (migrateTapTimer) clearTimeout(migrateTapTimer);
-  if (migrateTapCount >= 5) {
-    migrateTapCount = 0;
-    void fetchIsMod().then(isMod => { if (isMod) showMigrationDialog(); });
-    return;
-  }
-  migrateTapTimer = setTimeout(() => { migrateTapCount = 0; }, 1500);
-});
+// No UI trigger -- invoke from the browser devtools console (server routes
+// stay mod-gated regardless).
+(window as unknown as { showMigrationDialog: () => void }).showMigrationDialog = showMigrationDialog;
