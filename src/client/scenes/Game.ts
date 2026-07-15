@@ -1279,7 +1279,7 @@ export class Game extends Scene {
           targets: img, scaleX: 1.5, scaleY: 1.5,
           duration: 160, ease: 'Back.easeOut', yoyo: true,
         });
-        this.spawnCheckpointRing(m.x, m.y);
+        this.spawnCheckpointRing(m.x, m.y, this.carImg.angle);
         playCheckpoint();
         anyNewlyTouched = true;
       }
@@ -1364,6 +1364,7 @@ export class Game extends Scene {
 
     // Flash + brief zoom-out.
     this.spawnFinishFlash();
+    this.spawnFinishBurst(this.carImg.x, this.carImg.y, this.carImg.angle);
     playFinish();
     const cam     = this.cameras.main;
     const curZoom = cam.zoom;
@@ -2145,9 +2146,9 @@ export class Game extends Scene {
     });
   }
 
-  private spawnCheckpointRing(worldX: number, worldY: number): void {
+  private spawnCheckpointRing(worldX: number, worldY: number, carAngle: number): void {
     // Two staggered rings (tight/fast + wide/slow) instead of one, plus a
-    // small sparkle burst radiating from the checkpoint.
+    // directional sparkle burst spraying from the car's heading.
     const mkRing = (color: number, maxScale: number, duration: number, delay: number) => {
       const ring = this.add.graphics();
       ring.lineStyle(3, color, 1.0);
@@ -2169,22 +2170,7 @@ export class Game extends Scene {
     mkRing(0x33ee88, 3.5, 550, 0);
     mkRing(0x88ffee, 2.3, 400, 90);
 
-    try {
-      const emitter = this.add.particles(worldX, worldY, 'spark', {
-        speed:    { min: 40, max: 150 },
-        angle:    { min: 0, max: 360 },
-        scale:    { start: 1.3, end: 0 },
-        alpha:    { start: 1, end: 0 },
-        tint:     [0x33ee88, 0x88ffee, 0xffffff, 0xffee66],
-        lifespan: 420,
-        emitting: false,
-      });
-      emitter.setDepth(10);
-      emitter.explode(10);
-      this.time.delayedCall(500, () => emitter.destroy());
-    } catch (e) {
-      console.warn('[checkpoint burst]', e);
-    }
+    this.spawnCheckpointBurst(worldX, worldY, carAngle);
   }
 
   // Untouched checkpoint sprites breathe faster/wider the closer the car
@@ -2217,6 +2203,59 @@ export class Game extends Scene {
       const speed = 0.0035 + t * 0.006;
       img.setScale(1 + Math.sin(time * speed) * amp);
     }
+  }
+
+  // Short-lived directional burst spraying from the car's current heading.
+  // carAngle follows the sprite's heading convention (0 = up, atan2(vx,-vy));
+  // particle "angle" is the standard screen convention (0 = right,
+  // atan2(vy,vx)), hence the -90.
+  private spawnDirectionalBurst(
+    worldX: number, worldY: number, carAngle: number,
+    opts: {
+      speedMin: number; speedMax: number; spread: number;
+      scaleStart: number; tint: number[]; lifespan: number;
+      quantity: number; depth: number;
+    },
+  ): void {
+    const sprayAngle = carAngle - 90;
+    try {
+      const emitter = this.add.particles(worldX, worldY, 'spark', {
+        speed:    { min: opts.speedMin, max: opts.speedMax },
+        angle:    { min: sprayAngle - opts.spread, max: sprayAngle + opts.spread },
+        scale:    { start: opts.scaleStart, end: 0 },
+        alpha:    { start: 1, end: 0 },
+        tint:     opts.tint,
+        lifespan: opts.lifespan,
+        emitting: false,
+      });
+      emitter.setDepth(opts.depth);
+      emitter.explode(opts.quantity);
+      this.time.delayedCall(opts.lifespan + 70, () => emitter.destroy());
+    } catch (e) {
+      console.warn('[directional burst]', e);
+    }
+  }
+
+  private spawnFinishBurst(worldX: number, worldY: number, carAngle: number): void {
+    this.spawnDirectionalBurst(worldX, worldY, carAngle, {
+      speedMin: 60, speedMax: 220, spread: 25,
+      scaleStart: 1.6,
+      tint:     [0xffee00, 0xff8800, 0xffffff, 0xffcc44],
+      lifespan: 580,
+      quantity: 24,
+      depth:    12,
+    });
+  }
+
+  private spawnCheckpointBurst(worldX: number, worldY: number, carAngle: number): void {
+    this.spawnDirectionalBurst(worldX, worldY, carAngle, {
+      speedMin: 30, speedMax: 120, spread: 30,
+      scaleStart: 1.1,
+      tint:     [0x33ee88, 0x88ffee, 0xffffff, 0xffee66],
+      lifespan: 350,
+      quantity: 14,
+      depth:    10,
+    });
   }
 
   private spawnFinishFlash(): void {
