@@ -14,7 +14,10 @@ import type {
   UploadTrackResponse,
   DailyTrackEntry,
   DailyTracksResponse,
-  PromoteDailyResponse,
+  DailyScheduleReassignRequest,
+  DailyScheduleReassignResponse,
+  DailyScheduleRemoveResponse,
+  DirectDailyRequest,
   DirectDailyResponse,
   MigrationExportResponse,
   MigrationImportRequest,
@@ -229,8 +232,8 @@ export async function fetchDailyTracks(): Promise<DailyTrackEntry[]> {
   return json.entries;
 }
 
-// TODO(pre-production): remove with the /api/migration/* routes once the
-// dev -> prod launch migration has been run.
+// Kept intentionally as a standing capability (future re-migrations/backups),
+// not dead code — see the note on the /api/migration/* routes in api.ts.
 export async function fetchMigrationExport(): Promise<MigrationExportResponse> {
   const res = await fetch('/api/migration/export');
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -267,25 +270,35 @@ export async function importAiGhosts(ghosts: MigrationAiGhost[]): Promise<SeedAi
   return res.json() as Promise<SeedAiGhostsResponse>;
 }
 
-export async function promoteToDailyTrack(id: string, date: string): Promise<void> {
-  const res = await fetch(`/api/community-track/${encodeURIComponent(id)}/promote-daily`, {
-    method:  'PATCH',
+export async function reassignDailyTrack(trackId: string, toDate: string, fromDate?: string): Promise<void> {
+  const res = await fetch('/api/daily-schedule/reassign', {
+    method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ date }),
+    body:    JSON.stringify({ trackId, toDate, fromDate } satisfies DailyScheduleReassignRequest),
   });
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
     try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch { /* keep default msg */ }
     throw new Error(msg);
   }
-  await res.json() as PromoteDailyResponse;
+  await res.json() as DailyScheduleReassignResponse;
 }
 
-export async function promoteDraftToDaily(name: string, data: string, date: string): Promise<void> {
+export async function removeDailyTrack(date: string): Promise<void> {
+  const res = await fetch(`/api/daily-schedule/${encodeURIComponent(date)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { const e = await res.json() as { message?: string }; if (e.message) msg = e.message; } catch { /* keep default msg */ }
+    throw new Error(msg);
+  }
+  await res.json() as DailyScheduleRemoveResponse;
+}
+
+export async function promoteDraftToDaily(mineId: string, date: string): Promise<void> {
   const res = await fetch('/api/daily-track/direct', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ date, name, data }),
+    body:    JSON.stringify({ date, mineId } satisfies DirectDailyRequest),
   });
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;

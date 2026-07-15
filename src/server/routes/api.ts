@@ -31,11 +31,13 @@ import type {
   UploadGhostResponse,
   UploadTrackRequest,
   UploadTrackResponse,
-  PromoteDailyResponse,
   DailyTrackEntry,
   DailyTracksResponse,
   DirectDailyRequest,
   DirectDailyResponse,
+  DailyScheduleReassignRequest,
+  DailyScheduleReassignResponse,
+  DailyScheduleRemoveResponse,
   MigrationExportResponse,
   MigrationImportRequest,
   MigrationImportResponse,
@@ -571,9 +573,11 @@ api.post('/seed-tracks', async (c) => {
   return c.json({ type: 'seed_tracks', count: body.tracks.length });
 });
 
-// TODO(pre-production): dev-subreddit -> prod-subreddit data transfer, for the
-// one-time hackathon launch move. Delete both routes once the migration has
-// been run against the production install.
+// Dev-subreddit -> prod-subreddit data transfer. Used for the one-time
+// hackathon launch move (completed 2026-07-15); kept afterward as a standing
+// capability for future re-migrations/backups rather than deleted — see
+// CLAUDE.md. No UI trigger; invoke showMigrationDialog() from the client
+// devtools console (splash.ts), these routes stay mod-gated regardless.
 api.get('/migration/export', async (c) => {
   if (!(await isModerator())) {
     return c.json<ErrorResponse>({ status: 'error', message: 'Moderator access required' }, 403);
@@ -807,6 +811,16 @@ api.delete('/community-track/:id', async (c) => {
   await redis.del(`track:${id}`);
   await redis.zRem('tracks:community', [id]);
 
+  // A deleted track may still be pointed at by one or more Daily schedule
+  // slots (community tracks aren't copied when promoted — the schedule just
+  // stores a trackId pointer into this same record). Clear those too, or
+  // they'd silently orphan: daily-tracks would skip the now-missing record
+  // and the day would look unassigned forever, with no way to reassign it
+  // short of a mod noticing and manually clearing that date.
+  const schedule    = await redis.hGetAll('daily:schedule') as Record<string, string>;
+  const staleDates  = Object.entries(schedule).filter(([, trackId]) => trackId === id).map(([date]) => date);
+  if (staleDates.length > 0) await redis.hDel('daily:schedule', staleDates);
+
   if (postUrl) {
     try {
       const pathParts = new URL(postUrl).pathname.split('/').filter(Boolean);
@@ -818,66 +832,93 @@ api.delete('/community-track/:id', async (c) => {
     } catch { /* post may already be gone */ }
   }
 
-  console.log(`[mod delete] trackId=${id} by ${uname}`);
+  console.log(`[mod delete] trackId=${id} by ${uname}${staleDates.length > 0 ? `, cleared daily slots: ${staleDates.join(',')}` : ''}`);
   return c.json<DeleteCommunityTrackResponse>({ type: 'delete_community_track', trackId: id });
 });
 
-api.patch('/community-track/:id/promote-daily', async (c) => {
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Atomic move/swap/assign for the daily:schedule hash. If toDate is already
+// occupied by a different track and fromDate is given, the occupant is bumped
+// back to fromDate (swap) instead of being silently dropped from the schedule.
+async function reassignDailySchedule(trackId: string, toDate: string, fromDate?: string): Promise<void> {
+  const occupant = await redis.hGet('daily:schedule', toDate);
+  if (occupant && occupant !== trackId) {
+    if (fromDate) await redis.hSet('daily:schedule', { [fromDate]: occupant });
+  } else if (fromDate) {
+    await redis.hDel('daily:schedule', [fromDate]);
+  }
+  await redis.hSet('daily:schedule', { [toDate]: trackId });
+}
+
+api.post('/daily-schedule/reassign', async (c) => {
   const uname = context.username;
   if (!uname) return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+  if (!(await isModerator())) return c.json<ErrorResponse>({ status: 'error', message: 'Moderators only' }, 403);
 
-  let isMod = false;
-  try {
-    const mods = await reddit.getModerators({ subredditName: context.subredditName!, username: uname }).all();
-    isMod = mods.length > 0;
-  } catch { /* treat as not-mod */ }
-  if (!isMod) return c.json<ErrorResponse>({ status: 'error', message: 'Moderators only' }, 403);
-
-  const { id } = c.req.param();
-  const raw = await redis.get(`track:${id}`);
-  if (!raw) return c.json<ErrorResponse>({ status: 'error', message: 'Track not found' }, 404);
-
-  let body: { date?: string };
-  try { body = await c.req.json(); } catch { body = {}; }
-  const { date } = body;
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid date (expected YYYY-MM-DD)' }, 400);
+  let body: DailyScheduleReassignRequest;
+  try { body = await c.req.json(); } catch {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON' }, 400);
+  }
+  const { trackId, toDate, fromDate } = body;
+  if (!trackId) return c.json<ErrorResponse>({ status: 'error', message: 'Missing trackId' }, 400);
+  if (!toDate || !DATE_RE.test(toDate)) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid toDate (expected YYYY-MM-DD)' }, 400);
+  }
+  if (fromDate && !DATE_RE.test(fromDate)) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Invalid fromDate (expected YYYY-MM-DD)' }, 400);
   }
 
-  await redis.hSet('daily:schedule', { [date]: id });
-  return c.json<PromoteDailyResponse>({ type: 'promote_daily', trackId: id, date });
+  const raw = await redis.get(`track:${trackId}`);
+  if (!raw) return c.json<ErrorResponse>({ status: 'error', message: 'Track not found' }, 404);
+
+  await reassignDailySchedule(trackId, toDate, fromDate);
+  return c.json<DailyScheduleReassignResponse>({ type: 'daily_schedule_reassign', trackId, toDate });
 });
 
-// Promote a mod-created draft directly to Daily without adding it to Community.
+api.delete('/daily-schedule/:date', async (c) => {
+  const uname = context.username;
+  if (!uname) return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
+  if (!(await isModerator())) return c.json<ErrorResponse>({ status: 'error', message: 'Moderators only' }, 403);
+
+  const { date } = c.req.param();
+  await redis.hDel('daily:schedule', [date]);
+  return c.json<DailyScheduleRemoveResponse>({ type: 'daily_schedule_remove', date });
+});
+
+// Promote a mod's own verified draft directly to Daily without adding it to Community.
 api.post('/daily-track/direct', async (c) => {
   const uname = context.username;
   if (!uname) return c.json<ErrorResponse>({ status: 'error', message: 'Not logged in' }, 401);
-
-  let isMod = false;
-  try {
-    const mods = await reddit.getModerators({ subredditName: context.subredditName!, username: uname }).all();
-    isMod = mods.length > 0;
-  } catch { /* treat as not-mod */ }
-  if (!isMod) return c.json<ErrorResponse>({ status: 'error', message: 'Moderators only' }, 403);
+  if (!(await isModerator())) return c.json<ErrorResponse>({ status: 'error', message: 'Moderators only' }, 403);
 
   let body: DirectDailyRequest;
   try { body = await c.req.json(); } catch {
     return c.json<ErrorResponse>({ status: 'error', message: 'Invalid JSON' }, 400);
   }
-  const { date, name, data } = body;
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+  const { date, mineId } = body;
+  if (!date || !DATE_RE.test(date)) {
     return c.json<ErrorResponse>({ status: 'error', message: 'Invalid date (expected YYYY-MM-DD)' }, 400);
   }
-  if (!name?.trim() || !data) {
-    return c.json<ErrorResponse>({ status: 'error', message: 'Missing name or data' }, 400);
+  if (!mineId) return c.json<ErrorResponse>({ status: 'error', message: 'Missing mineId' }, 400);
+
+  const raw = await redis.get(`mine-track:${mineId}`);
+  if (!raw) return c.json<ErrorResponse>({ status: 'error', message: 'Draft not found' }, 404);
+  const rec = JSON.parse(raw) as MineTrackRecord;
+  if (rec.author !== uname) return c.json<ErrorResponse>({ status: 'error', message: 'Forbidden' }, 403);
+  if (!rec.verified) {
+    return c.json<ErrorResponse>({
+      status: 'error',
+      message: 'Track must be play-tested or AI-verified before it can go Daily',
+    }, 403);
   }
 
   const uploadedAt = Date.now();
   const id = `daily_${uname}_${uploadedAt}`;
   // Store track data but do NOT add to tracks:community sorted set.
-  const record = JSON.stringify({ id, name: name.trim(), author: uname, uploadedAt, data });
+  const record = JSON.stringify({ id, name: rec.name, author: uname, uploadedAt, data: rec.data });
   await redis.set(`track:${id}`, record);
-  await redis.hSet('daily:schedule', { [date]: id });
+  await reassignDailySchedule(id, date);
 
   return c.json<DirectDailyResponse>({ type: 'direct_daily', trackId: id, date });
 });

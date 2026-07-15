@@ -199,8 +199,9 @@ export type IsModResponse = {
   isMod: boolean;
 };
 
-// One-time dev-subreddit → prod-subreddit data transfer. Remove once the
-// hackathon launch migration is done (see TODO(pre-production) in api.ts).
+// Dev-subreddit → prod-subreddit data transfer. Used for the one-time launch
+// migration (completed 2026-07-15); kept as a standing capability afterward
+// rather than removed — see the note on the /api/migration/* routes in api.ts.
 export type MigrationCommunityTrack = { id: string; name: string; author: string; uploadedAt: number; data: string };
 export type MigrationDraftTrack     = { id: string; name: string; author: string; createdAt: number; verified: boolean; uploadedId?: string; data: string };
 export type MigrationGhost          = { trackId: string; username: string; score: number; ghost: string };
@@ -248,14 +249,9 @@ export type DeleteCommunityTrackResponse = {
   trackId: string;
 };
 
-export type PromoteDailyRequest = {
-  date: string; // YYYY-MM-DD
-};
-
 export type DirectDailyRequest = {
-  date: string; // YYYY-MM-DD
-  name: string;
-  data: string; // TrackPayload JSON
+  date:   string; // YYYY-MM-DD
+  mineId: string; // must belong to the calling mod and be verified
 };
 
 export type DirectDailyResponse = {
@@ -264,9 +260,20 @@ export type DirectDailyResponse = {
   date:    string;
 };
 
-export type PromoteDailyResponse = {
-  type: 'promote_daily';
+export type DailyScheduleReassignRequest = {
+  trackId:   string;
+  toDate:    string; // YYYY-MM-DD
+  fromDate?: string; // YYYY-MM-DD — set when moving an already-scheduled track
+};
+
+export type DailyScheduleReassignResponse = {
+  type:    'daily_schedule_reassign';
   trackId: string;
+  toDate:  string;
+};
+
+export type DailyScheduleRemoveResponse = {
+  type: 'daily_schedule_remove';
   date: string;
 };
 

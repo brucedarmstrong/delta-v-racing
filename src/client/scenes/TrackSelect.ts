@@ -8,9 +8,10 @@ import {
   fetchCommunityTrack, fetchCommunityTracks, seedCommunityTracks,
   fetchMineTrack, fetchMineTracks, deleteMineTrack, saveMineTrack,
   getLocalDrafts, deleteLocalDraft, markLocalDraftVerified, verifyMineTrack,
-  fetchIsMod, deleteCommunityTrack, fetchDailyTracks, promoteToDailyTrack, promoteDraftToDaily,
+  fetchIsMod, deleteCommunityTrack, fetchDailyTracks,
   type TrackPayload,
 } from '../track/TrackUpload';
+import { showDailyCalendarDialog } from '../track/DailyCalendar';
 import { fetchRaceGhosts } from '../track/RaceGhosts';
 import { deserializeGhost, serializeGhost } from '../track/GhostData';
 import { generateAndUploadAiGhosts } from '../track/AiGhost';
@@ -200,6 +201,18 @@ export class TrackSelect extends Scene {
 
   // ── DOM list ──────────────────────────────────────────────────────────────────
 
+  // Mod status is fetched lazily by whichever tab happens to load data first,
+  // then cached — every tab that gates UI on this.isMod (Community, Drafts,
+  // Daily) must pull the check in via these two helpers so the flag isn't
+  // stuck at its false default just because a different tab hasn't run yet.
+  private modPromise(): Promise<boolean> {
+    return this.isModChecked ? Promise.resolve(this.isMod) : fetchIsMod();
+  }
+
+  private commitModCheck(isMod: boolean): void {
+    if (!this.isModChecked) { this.isMod = isMod; this.isModChecked = true; }
+  }
+
   private buildList(): void {
     this.listEl?.remove();
 
@@ -363,16 +376,11 @@ export class TrackSelect extends Scene {
           ? { offset: this.communityPage * PAGE_SIZE, limit: PAGE_SIZE, author: username }
           : { offset: this.communityPage * PAGE_SIZE, limit: PAGE_SIZE, q: this.communityQuery };
 
-        const tracksPromise = fetchCommunityTracks(params);
-        const modPromise = this.isModChecked
-          ? Promise.resolve(this.isMod)
-          : fetchIsMod();
-
-        Promise.all([tracksPromise, modPromise]).then(([{ tracks, total }, isMod]) => {
+        Promise.all([fetchCommunityTracks(params), this.modPromise()]).then(([{ tracks, total }, isMod]) => {
           this.communityTracks = tracks;
           this.communityTotal  = total;
           this.communityLoaded = true;
-          if (!this.isModChecked) { this.isMod = isMod; this.isModChecked = true; }
+          this.commitModCheck(isMod);
           this.buildList();
         }).catch(() => { msg.textContent = 'Failed to load community tracks.'; });
 
@@ -447,8 +455,8 @@ export class TrackSelect extends Scene {
           verified: d.verified ?? false, local: true, data: d.data,
         }));
 
-        fetchMineTracks()
-          .then(tracks => {
+        Promise.all([fetchMineTracks(), this.modPromise()])
+          .then(([tracks, isMod]) => {
             const serverEntries: DraftEntry[] = tracks.map(t => ({
               id: t.id, name: t.name, createdAt: t.createdAt,
               verified: t.verified, local: false, uploadedId: t.uploadedId,
@@ -456,6 +464,7 @@ export class TrackSelect extends Scene {
             this.drafts = [...localEntries, ...serverEntries]
               .sort((a, b) => b.createdAt - a.createdAt);
             this.draftsLoaded = true;
+            this.commitModCheck(isMod);
             this.buildList();
           })
           .catch(() => {
@@ -499,12 +508,27 @@ export class TrackSelect extends Scene {
 
     } else {
       // Daily tab — load schedule from server
+      if (this.isMod) {
+        const manageBtn = document.createElement('button');
+        manageBtn.textContent = '📅 Manage Calendar';
+        manageBtn.style.cssText = [
+          'display:block', 'margin:0 auto 14px', 'padding:8px 16px',
+          'background:#0a1a28', 'color:#aaddff', 'border:1px solid #335566',
+          'border-radius:6px', 'font:bold 13px Arial,sans-serif', 'cursor:pointer',
+        ].join(';');
+        manageBtn.addEventListener('click', () => showDailyCalendarDialog(() => this.buildList()));
+        el.appendChild(manageBtn);
+      }
+
       const loading = document.createElement('div');
       loading.textContent = 'Loading…';
       loading.style.cssText = 'text-align:center;color:#555588;font:16px Arial;margin-top:80px;';
       el.appendChild(loading);
 
-      fetchDailyTracks().then((entries) => {
+      Promise.all([fetchDailyTracks(), this.modPromise()]).then(([entries, isMod]) => {
+        const wasUnchecked = !this.isModChecked;
+        this.commitModCheck(isMod);
+        if (wasUnchecked && this.isMod) { this.buildList(); return; } // re-render so the mod-only button above appears
         loading.remove();
         if (entries.length === 0) {
           const empty = document.createElement('div');
@@ -729,84 +753,6 @@ export class TrackSelect extends Scene {
     document.body.appendChild(overlay);
   }
 
-  private static showPromoteDailyDialog(trackName: string, onConfirm: (date: string) => void): void {
-    const today = new Date().toISOString().slice(0, 10);
-
-    const overlay = document.createElement('div');
-    overlay.style.cssText = [
-      'position:fixed', 'inset:0', 'z-index:1100',
-      'display:flex', 'align-items:center', 'justify-content:center',
-      'background:rgba(0,0,0,0.75)',
-    ].join(';');
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-
-    const card = document.createElement('div');
-    card.style.cssText = [
-      'background:#0d0d1e', 'border:1.5px solid #335566', 'border-radius:10px',
-      'padding:20px 18px', 'width:min(300px,calc(100% - 32px))',
-      'display:flex', 'flex-direction:column', 'gap:12px',
-      'box-shadow:0 8px 32px rgba(0,0,0,0.85)',
-    ].join(';');
-
-    const title = document.createElement('div');
-    title.textContent = 'Promote to Daily';
-    title.style.cssText = 'font:bold 15px "Arial Black",Arial,sans-serif;color:#aaccff;text-align:center;';
-
-    const sub = document.createElement('div');
-    sub.textContent = trackName;
-    sub.style.cssText = 'font:13px Arial,sans-serif;color:#6688aa;text-align:center;margin-top:-6px;';
-
-    const label = document.createElement('label');
-    label.textContent = 'Daily date:';
-    label.style.cssText = 'font:12px Arial,sans-serif;color:#888899;';
-
-    const dateInput = document.createElement('input');
-    dateInput.type  = 'date';
-    dateInput.value = today;
-    dateInput.style.cssText = [
-      'width:100%', 'padding:8px', 'box-sizing:border-box',
-      'background:#1a1a2e', 'border:1px solid #335566',
-      'border-radius:5px', 'color:#ccddff', 'font:14px Arial,sans-serif',
-    ].join(';');
-
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:8px;';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.style.cssText = [
-      'flex:1', 'padding:10px', 'font:14px Arial,sans-serif',
-      'color:#aaaacc', 'background:#1a1a2a', 'border:1px solid #444466',
-      'border-radius:6px', 'cursor:pointer',
-    ].join(';');
-    cancelBtn.addEventListener('click', () => overlay.remove());
-
-    const confirmBtn = document.createElement('button');
-    confirmBtn.textContent = 'Set Daily';
-    confirmBtn.style.cssText = [
-      'flex:1', 'padding:10px', 'font:bold 14px Arial,sans-serif',
-      'color:#aaddff', 'background:#0a1a28', 'border:1px solid #335566',
-      'border-radius:6px', 'cursor:pointer',
-    ].join(';');
-    confirmBtn.addEventListener('click', () => {
-      const date = dateInput.value;
-      if (!date) return;
-      overlay.remove();
-      onConfirm(date);
-    });
-
-    row.appendChild(cancelBtn);
-    row.appendChild(confirmBtn);
-    label.appendChild(dateInput);
-    card.appendChild(title);
-    card.appendChild(sub);
-    card.appendChild(label);
-    card.appendChild(row);
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-    setTimeout(() => dateInput.focus(), 50);
-  }
-
   private static showToast(msg: string, duration = 3000): void {
     const t = document.createElement('div');
     t.textContent = msg;
@@ -999,35 +945,6 @@ export class TrackSelect extends Scene {
     btnRow.appendChild(editBtn);
     btnRow.appendChild(deleteBtn);
     if (aiVerifyBtn) btnRow.appendChild(aiVerifyBtn);
-
-    if (this.isMod) {
-      const dailyBtn = mkBtn('📅 Daily', '#aaddff', '#0a1a28', '#335566');
-      dailyBtn.style.flex = '0 0 auto';
-      dailyBtn.addEventListener('click', () => {
-        TrackSelect.showPromoteDailyDialog(draft.name, async (date) => {
-          dailyBtn.textContent = '…';
-          dailyBtn.disabled = true;
-          try {
-            if (draft.uploadedId) {
-              // Already in Community — just schedule it as Daily.
-              await promoteToDailyTrack(draft.uploadedId, date);
-            } else {
-              // Mod-only draft — save track data directly for Daily without
-              // adding to Community.
-              const { data } = await resolveData();
-              await promoteDraftToDaily(draft.name, data, date);
-            }
-            TrackSelect.showToast(`"${draft.name}" set as Daily for ${date}`);
-          } catch (err) {
-            TrackSelect.showToast(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-          } finally {
-            dailyBtn.textContent = '📅 Daily';
-            dailyBtn.disabled = false;
-          }
-        });
-      });
-      btnRow.appendChild(dailyBtn);
-    }
 
     info.appendChild(nameRow);
     info.appendChild(date);
@@ -1370,34 +1287,6 @@ export class TrackSelect extends Scene {
           lbBtn.disabled = false;
         }
       });
-      const dailyBtn = document.createElement('button');
-      dailyBtn.textContent = '📅';
-      dailyBtn.title = 'Promote to Daily';
-      dailyBtn.style.cssText = [
-        'width:36px', 'height:32px',
-        'background:#0a1a28', 'color:#aaddff',
-        'border:1px solid #335566', 'border-radius:5px',
-        'font:16px Arial,sans-serif', 'cursor:pointer',
-        'text-align:center', 'line-height:32px', 'padding:0',
-        'pointer-events:auto', 'flex-shrink:0',
-      ].join(';');
-      dailyBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        TrackSelect.showPromoteDailyDialog(meta.name, async (date) => {
-          dailyBtn.textContent = '…';
-          dailyBtn.disabled = true;
-          try {
-            await promoteToDailyTrack(meta.id, date);
-            TrackSelect.showToast(`"${meta.name}" set as Daily for ${date}`);
-          } catch (err) {
-            TrackSelect.showToast(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-          } finally {
-            dailyBtn.textContent = '📅';
-            dailyBtn.disabled = false;
-          }
-        });
-      });
       const delBtn = document.createElement('button');
       delBtn.textContent = '✕';
       delBtn.title = 'Remove track';
@@ -1453,7 +1342,6 @@ export class TrackSelect extends Scene {
         }
       });
       modRow.appendChild(lbBtn);
-      modRow.appendChild(dailyBtn);
       modRow.appendChild(delBtn);
       modRow.appendChild(arrow);
       info.appendChild(modRow);
