@@ -18,13 +18,35 @@ const GRID_PERIOD = GRID_CELL * GRID_MAJOR; // 120 px
 const GRID_DX     = -3;   // px/s westward
 const GRID_DY     = -8;   // px/s northward (NNW, ~1:2.7 ratio)
 
-// FTUE "don't show again" is tied to appVersion (not just a bare flag) so a
-// new release surfaces it again for existing players, not just new ones.
+// ── FTUE ("New here?" onboarding overlay) ───────────────────────────────────
+//
+// localStorage['dv-ftue'] is only ever considered "seen" when it equals
+// FTUE_TAG below. Bump FTUE_TAG by hand (e.g. '1' -> '2') when you ship
+// something onboarding-worthy and want it to resurface for existing players
+// too, not just new ones — otherwise leave it alone.
+//
+// Do NOT tie this to `appVersion` (Devvit's own auto-incrementing build
+// number, bumped by every `devvit upload`). We tried that and it meant the
+// overlay reset on every single deploy — effectively "always show" during
+// active development, not the "show once, resurface on request" behavior
+// FTUE is meant to have.
+//
+// There are two overlay variants, both gated by the same flag/tag above:
+//   - Hub post entry (buildMenu, no postData.trackId): showFirstRunOverlay()
+//     with no args -> single "Let's race!" dismiss button.
+//   - Individual track-post entry (postData.trackId set): showFirstRunOverlay
+//     ({ pendingTrackId, onSkip }) -> two buttons, "Take the Tutorial" /
+//     "Jump Right In", since there's a real choice to make in that context.
+//
+// For manual testing: tapping the build-version text 5x within 1.5s (see
+// handleFtueResetTap) clears localStorage['dv-ftue'] outright, independent
+// of FTUE_TAG, so the overlay shows again on next load without a code change.
+const FTUE_TAG = '1';
 function ftueSeenThisVersion(): boolean {
-  return localStorage.getItem('dv-ftue') === appVersion;
+  return localStorage.getItem('dv-ftue') === FTUE_TAG;
 }
 function markFtueSeen(): void {
-  localStorage.setItem('dv-ftue', appVersion);
+  localStorage.setItem('dv-ftue', FTUE_TAG);
 }
 
 export class ModeSelect extends Scene {
