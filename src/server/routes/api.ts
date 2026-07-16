@@ -502,6 +502,27 @@ api.get('/ai-ghost/:trackId/:skill', async (c) => {
   return c.json<AiGhostResponse>({ type: 'ai_ghost', trackId, skill, ghost: raw });
 });
 
+// Mod-only: wipe all cached AI ghosts for a track so they regenerate fresh
+// next time a player visits (e.g. a ghost's recorded path turns out to be
+// invalid under current collision rules — a stale cache entry from before a
+// TrackCollision.ts fix, or a track that was edited after the ghost was cached).
+api.delete('/mod/ai-ghost/:trackId', async (c) => {
+  if (!(await isModerator())) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Moderators only' }, 403);
+  }
+  const { trackId } = c.req.param();
+  const removed: AiSkillLevel[] = [];
+  for (const skill of VALID_SKILLS) {
+    const existed = await redis.get(`ai-ghost:${trackId}:${skill}`);
+    if (existed) {
+      await redis.del(`ai-ghost:${trackId}:${skill}`);
+      removed.push(skill);
+    }
+  }
+  console.log(`[mod] removed AI ghosts for ${trackId}: ${removed.join(', ') || 'none cached'}`);
+  return c.json({ type: 'mod_remove_ai_ghosts', trackId, removed });
+});
+
 // ── Track upload / community ──────────────────────────────────────────────────
 
 api.post('/track', async (c) => {

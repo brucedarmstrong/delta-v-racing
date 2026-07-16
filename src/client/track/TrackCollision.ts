@@ -6,6 +6,17 @@ import type { PlacedPiece, StraightDef, CornerDef } from './TrackLayout';
 const RESTITUTION = 0.15;
 const FRICTION    = 0.88;
 
+// Two independently-placed pieces can end up a couple of px apart at a
+// junction even when they render as one continuous wall (found via a real
+// community track: a diagonal piece's wall ended 2.5px short of the vertical
+// piece's wall it visually butts up against). intersectsBarrier tests each
+// piece's wall as its own finite segment, so a move threading exactly through
+// that sliver crossed neither one. WALL_JOIN_TOLERANCE extends each wall
+// segment/arc very slightly past its authored endpoint to close that gap,
+// regardless of how the two pieces happen to be walled (inner/outer/both) —
+// it's a junction-precision fix, not a wall-configuration one.
+const WALL_JOIN_TOLERANCE = 4; // px
+
 type Hit = { nx: number; ny: number; depth: number };
 
 // ── Coordinate helpers ────────────────────────────────────────────────────────
@@ -108,7 +119,7 @@ function crossesStraightWall(
   if (Math.abs(dLx) < 1e-8) return false; // segment parallel to wall
   const t = (wallLx - lx1) / dLx;
   if (t <= 0 || t >= 1) return false;      // crossing outside segment interior
-  return Math.abs(ly1 + (ly2 - ly1) * t) <= halfLen;
+  return Math.abs(ly1 + (ly2 - ly1) * t) <= halfLen + WALL_JOIN_TOLERANCE;
 }
 
 // Returns true if the line segment from (lx1,ly1)→(lx2,ly2) in local corner-piece
@@ -129,12 +140,16 @@ function crossesArc(
   const disc = b * b - 4 * a * c;
   if (disc < 0) return false;
   const sq = Math.sqrt(disc);
+  // Convert the pixel join-tolerance to an angular one at this arc's radius
+  // (arc length ≈ R × angle), so the tolerance behaves consistently in world
+  // distance regardless of whether R is a tight, big, or huge corner.
+  const angleTolerance = WALL_JOIN_TOLERANCE / R;
   for (const sign of [-1, 1] as const) {
     const t = (-b + sign * sq) / (2 * a);
     if (t <= 0 || t >= 1) continue;  // crossing outside segment interior
     const ix = ax + dx * t, iy = ay + dy * t;
     const angle = Math.atan2(-iy, -ix);
-    if (angle >= 0 && angle <= theta) return true;
+    if (angle >= -angleTolerance && angle <= theta + angleTolerance) return true;
   }
   return false;
 }

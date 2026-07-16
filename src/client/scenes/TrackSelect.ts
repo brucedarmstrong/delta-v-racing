@@ -1169,6 +1169,7 @@ export class TrackSelect extends Scene {
             const communityId = json.id;
 
             // Transfer the maker's validation ghost from mine-track to community ID.
+            let hasGhost = false;
             if (username) {
               try {
                 const gRes = await fetch(`/api/ghost/${encodeURIComponent(serverId)}/${encodeURIComponent(username)}`);
@@ -1182,12 +1183,22 @@ export class TrackSelect extends Scene {
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ trackId: communityId, score: gData.score, ghost: serializeGhost(gData) }),
                     });
+                    hasGhost = true;
                   }
                 }
               } catch { /* ghost transfer is best-effort — don't block publish */ }
             }
 
-            await generateAndUploadAiGhosts({ ...entry, id: communityId }, ['average', 'rookie']);
+            const seeded = await generateAndUploadAiGhosts({ ...entry, id: communityId }, ['average', 'rookie']);
+            hasGhost ||= seeded.length > 0;
+            if (!hasGhost) {
+              // average/rookie use a greedy heuristic that can fail to find a path
+              // even on a solvable track (e.g. a draft that only passed AI-verify,
+              // which proves solvability via the slower exhaustive 'skilled'
+              // solver). Never publish a track with zero ghosts anywhere — fall
+              // back to the same solver AI-verify already trusts.
+              await generateAndUploadAiGhosts({ ...entry, id: communityId }, ['skilled']);
+            }
             await deleteMineTrack(serverId);
 
             navigateTo(json.postUrl);

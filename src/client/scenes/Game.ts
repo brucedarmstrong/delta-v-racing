@@ -8,7 +8,7 @@ import { intersectsBarrier, pointInsideBarrier } from '../track/TrackCollision';
 import { CORRIDOR } from '../track/TrackGeometry';
 import type { TrackMarker } from '../track/convertGmsTrack';
 import { username, isLoggedIn } from '../devvitContext';
-import { fetchOrGenerateAiGhost, generateAndUploadAiGhosts } from '../track/AiGhost';
+import { fetchOrGenerateAiGhost, generateAndUploadAiGhosts, removeAiGhosts } from '../track/AiGhost';
 import { verifyMineTrack, markLocalDraftVerified } from '../track/TrackUpload';
 import { PhaserStarField } from '../starfield';
 import { drawMiniCar } from '../track/CarShape';
@@ -2603,23 +2603,55 @@ export class Game extends Scene {
       }
       // TEMPORARY: Shift+X cleans up fake ghosts for the current track
       if (e.key === 'X' && e.shiftKey) this.cleanupDebugGhosts();
+      // TEMPORARY: Shift+R wipes cached AI ghosts for the current track (mod-gated
+      // server-side — e.g. a ghost's path turns out invalid under current collision
+      // rules) and regenerates them fresh.
+      if (e.key === 'R' && e.shiftKey) {
+        const trackId = this.trackEntry.id;
+        this.showToast('Removing AI ghosts…');
+        removeAiGhosts(trackId)
+          .then((removed) => {
+            console.log(`[ai ghosts] removed for ${trackId}: ${removed.join(', ') || 'none cached'}`);
+            this.showToast('Regenerating AI ghosts…');
+            return generateAndUploadAiGhosts(this.trackEntry, undefined, gridPx);
+          })
+          .then((seeded) => {
+            this.showToast(seeded.length > 0 ? `AI ghosts rebuilt: ${seeded.join(', ')}` : 'No AI ghost could solve this track');
+          })
+          .catch((err: unknown) => {
+            console.error('[ai ghosts remove]', err);
+            this.showToast(err instanceof Error ? err.message : 'Failed to remove AI ghosts');
+          });
+      }
       // TEMPORARY: Shift+G generates and uploads AI ghosts for the current track
       if (e.key === 'G' && e.shiftKey) {
         console.log(`[ai ghosts] generating for ${this.trackEntry.id}…`);
+        this.showToast('Generating AI ghosts…');
         generateAndUploadAiGhosts(this.trackEntry, undefined, gridPx)
-          .then(() => console.log(`[ai ghosts] done for ${this.trackEntry.id}`))
-          .catch((err: unknown) => console.error('[ai ghosts]', err));
+          .then((seeded) => {
+            console.log(`[ai ghosts] done for ${this.trackEntry.id}: ${seeded.join(', ') || 'none'}`);
+            this.showToast(seeded.length > 0 ? `AI ghosts ready: ${seeded.join(', ')}` : 'No AI ghost could solve this track');
+          })
+          .catch((err: unknown) => {
+            console.error('[ai ghosts]', err);
+            this.showToast('AI ghost generation failed — see console');
+          });
       }
       // TEMPORARY: Shift+A generates and uploads AI ghosts for ALL standard tracks
       if (e.key === 'A' && e.shiftKey) {
         console.log(`[ai ghosts] generating for all ${STANDARD_TRACKS.length} standard tracks…`);
+        this.showToast(`Generating AI ghosts for ${STANDARD_TRACKS.length} tracks…`);
         (async () => {
           for (const track of STANDARD_TRACKS) {
             console.log(`[ai ghosts] → ${track.id}`);
             await generateAndUploadAiGhosts(track, undefined, gridPx);
           }
           console.log('[ai ghosts] all standard tracks done');
-        })().catch((err: unknown) => console.error('[ai ghosts all]', err));
+          this.showToast('All standard tracks done');
+        })().catch((err: unknown) => {
+          console.error('[ai ghosts all]', err);
+          this.showToast('AI ghost generation failed — see console');
+        });
       }
     };
     window.addEventListener('keydown', onKey);
